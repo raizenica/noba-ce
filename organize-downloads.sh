@@ -29,8 +29,7 @@ EOF
 }
 
 # Parse command-line arguments
-OPTIONS=$(getopt -o c:dq -l config:,dry-run,quiet,help -- "$@")
-if [ $? -ne 0 ]; then
+if ! OPTIONS=$(getopt -o c:dq -l config:,dry-run,quiet,help -- "$@"); then
     usage
 fi
 eval set -- "$OPTIONS"
@@ -65,6 +64,7 @@ done
 
 # Load config file if exists, otherwise use defaults
 if [ -f "$CONFIG_FILE" ]; then
+# shellcheck source=/dev/null
     source "$CONFIG_FILE"
 else
     # Default categories
@@ -127,7 +127,7 @@ log "=== Starting download organization ==="
 
 find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -path '*/\.*' | while read -r file; do
     # Skip files newer than MIN_AGE_MINUTES
-    if [ $(find "$file" -mmin -$MIN_AGE_MINUTES -print) ]; then
+    if [ "$(find "$file" -mmin -"$MIN_AGE_MINUTES" -print)" ]; then
         log "Skipping $file (modified within last $MIN_AGE_MINUTES minutes)"
         continue
     fi
@@ -146,7 +146,7 @@ find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -path '*/\.*' | while read -r file
     # Find category
     dest_folder="$DOWNLOAD_DIR/Others"
     for cat in "${!CATEGORIES[@]}"; do
-        if [[ " ${CATEGORIES[$cat]} " =~ " $ext_lower " ]]; then
+        if [[ " ${CATEGORIES[$cat]} " == *" $ext_lower "* ]]; then
             dest_folder="$DOWNLOAD_DIR/$cat"
             break
         fi

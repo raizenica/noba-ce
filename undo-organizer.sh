@@ -27,5 +27,5 @@ tac "$UNDO_LOG" | while IFS='|' read -r src dest; do
 done
 
 # Clear undo log
-> "$UNDO_LOG"
+: > "$UNDO_LOG"
 echo "Undo complete."

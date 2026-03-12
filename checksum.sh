@@ -32,6 +32,10 @@ FILES=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         -a|--algo)
+            if [[ -z $2 ]]; then
+                echo "Error: --algo requires an argument"
+                exit 1
+            fi
             ALGO="$2"
             shift 2
             ;;
@@ -44,6 +48,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -o|--output)
+            if [[ -z $2 ]]; then
+                echo "Error: --output requires an argument"
+                exit 1
+            fi
+            # shellcheck disable=SC2034  # Reserved for future use
             OUTPUT="$2"
             shift 2
             ;;
@@ -54,9 +63,13 @@ while [[ $# -gt 0 ]]; do
         --help)
             usage
             ;;
+        --)
+            shift
+            break
+            ;;
         -*)
             echo "Unknown option: $1"
-            usage
+            exit 1
             ;;
         *)
             FILES+=("$1")
