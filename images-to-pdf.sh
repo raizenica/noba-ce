@@ -50,15 +50,8 @@ EOF
 
 # Check required commands
 check_deps() {
-    local missing=()
-    for cmd in convert; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing+=("$cmd")
-        fi
-    done
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "ERROR: Missing required commands: ${missing[*]}" >&2
-        echo "Please install ImageMagick." >&2
+    if ! command -v convert &>/dev/null; then
+        echo "ERROR: ImageMagick 'convert' not found. Please install ImageMagick." >&2
         exit 1
     fi
 }
