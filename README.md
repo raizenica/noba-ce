@@ -1,5 +1,7 @@
 # Nobara Automation Scripts
 
+![Test](https://github.com/raizenica/noba/actions/workflows/test.yml/badge.svg)
+
 Personal collection of automation scripts for my Nobara Linux system.
 
 ## Scripts
