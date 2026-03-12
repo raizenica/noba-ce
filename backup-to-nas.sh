@@ -5,6 +5,7 @@ set -u
 set -o pipefail
 
 # Source central config if available
+# shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
 fi
@@ -104,8 +105,7 @@ check_space() {
 }
 
 # Parse command-line arguments
-OPTIONS=$(getopt -o '' -l source:,dest:,email:,dry-run,help,version -- "$@")
-if [ $? -ne 0 ]; then
+if ! OPTIONS=$(getopt -o '' -l source:,dest:,email:,dry-run,help,version -- "$@"); then
     usage
 fi
 eval set -- "$OPTIONS"
@@ -214,9 +214,9 @@ echo "Destination: $BACKUP_PATH"
 echo "Sources: ${SOURCES[*]}"
 
 # Perform rsync for each source
-RSYNC_OPTS="-av --delete"
+RSYNC_OPTS=(-av --delete)
 if [ "$DRY_RUN" = true ]; then
-    RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+    RSYNC_OPTS+=(--dry-run)
 fi
 
 ERROR_OCCURRED=false
@@ -226,14 +226,14 @@ for src in "${SOURCES[@]}"; do
     if [ "$base" = ".config" ]; then
         dest_path="$BACKUP_PATH/config/"
         # Exclude common problematic files in .config and skip symlinks
-        EXTRA_OPTS="--exclude='*cache*' --exclude='*thumbnails*' --exclude='*Trash*' --exclude='*session*' --exclude='*/sockets/' --exclude='*/lock' --exclude='*.tmp' --no-links"
+        EXTRA_OPTS=(--exclude='*cache*' --exclude='*thumbnails*' --exclude='*Trash*' --exclude='*session*' --exclude='*/sockets/' --exclude='*/lock' --exclude='*.tmp' --no-links)
     else
         dest_path="$BACKUP_PATH/"
-        EXTRA_OPTS=""
+        EXTRA_OPTS=()
     fi
 
     echo "Syncing $src -> $dest_path"
-    if ! rsync $RSYNC_OPTS $EXTRA_OPTS "$src" "$dest_path"; then
+    if ! rsync "${RSYNC_OPTS[@]}" "${EXTRA_OPTS[@]}" "$src" "$dest_path"; then
         echo "WARNING: rsync for $src encountered errors (see log)"
         ERROR_OCCURRED=true
     fi

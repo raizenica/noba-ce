@@ -10,9 +10,24 @@ GAME_NAME="Hogwarts Legacy"
 TRAINER_EXE="Hogwarts Legacy v1.0-v1614419 Plus 33 Trainer.exe"
 GAME_DIR=""          # Will be auto-detected if empty
 
+# Function to show version
+show_version() {
+    if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null; then
+        version=$(git describe --tags --always --dirty 2>/dev/null)
+        echo "$(basename "$0") version $version"
+    else
+        echo "$(basename "$0") version unknown (not in git repo)"
+    fi
+    exit 0
+}
+
+# Check for --version flag
+if [ "$1" = "--version" ]; then
+    show_version
+fi
+
 # Function to find game directory
 find_game_dir() {
-    local appid="$1"
     local common_paths=(
         "$HOME/.steam/steam/steamapps/common"
         "$HOME/.local/share/Steam/steamapps/common"
@@ -33,13 +48,6 @@ find_game_dir() {
 # Function to find Proton path for given appid
 find_proton_path() {
     local appid="$1"
-    # Common Proton installation locations
-    local proton_paths=(
-        "$HOME/.steam/root/compatibilitytools.d"
-        "$HOME/.steam/steam/steamapps/common"
-        "$HOME/.local/share/Steam/steamapps/common"
-    )
-    # First, look for the specific appid's compatdata
     local compatdata_paths=(
         "$HOME/.steam/steam/steamapps/compatdata/$appid"
         "$HOME/.local/share/Steam/steamapps/compatdata/$appid"
@@ -47,21 +55,19 @@ find_proton_path() {
         "/media/SSD/SteamLibrary/steamapps/compatdata/$appid"
         "/mnt/games/SteamLibrary/steamapps/compatdata/$appid"
     )
+    local compat
     for compat in "${compatdata_paths[@]}"; do
         if [ -d "$compat/pfx" ]; then
-            # Found prefix, now find the Proton version used
-            # Try to find the Proton binary by looking at the Steam library's common/Proton* folders
-            # We'll search for a 'files/bin/wine' inside any Proton folder in the same library root
-            local library_root=$(dirname "$(dirname "$compat")")
-            local proton_found=$(find "$library_root/common" -maxdepth 2 -type f -path "*/files/bin/wine" 2>/dev/null | head -1)
+            local library_root
+            library_root=$(dirname "$(dirname "$compat")")
+            local proton_found
+            proton_found=$(find "$library_root/common" -maxdepth 2 -type f -path "*/files/bin/wine" 2>/dev/null | head -1)
             if [ -n "$proton_found" ]; then
-                # Use that wine binary
                 echo "$(dirname "$proton_found")/wine"
                 return 0
             fi
         fi
     done
-    # Fallback: use system wine (not recommended)
     if command -v wine &>/dev/null; then
         echo "wine"
         return 0

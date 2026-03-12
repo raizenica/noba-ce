@@ -5,6 +5,7 @@ set -u
 set -o pipefail
 
 # Source central config if available
+# shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
 fi
@@ -60,8 +61,7 @@ EOF
 }
 
 # Parse command-line arguments
-OPTIONS=$(getopt -o c:dq -l config:,dry-run,quiet,dated,help,version -- "$@")
-if [ $? -ne 0 ]; then
+if ! OPTIONS=$(getopt -o c:dq -l config:,dry-run,quiet,dated,help,version -- "$@"); then
     usage
 fi
 eval set -- "$OPTIONS"
@@ -156,6 +156,7 @@ load_config() {
             local temp_config
             temp_config=$(mktemp)
             yq eval -o=json "$config_file" | jq -r 'to_entries | .[] | "CATEGORIES[\"" + .key + "\"]=\"" + (.value | join(" ")) + "\""' > "$temp_config"
+            # shellcheck source=/dev/null
             source "$temp_config"
             rm -f "$temp_config"
             return 0
@@ -167,6 +168,7 @@ load_config() {
         local temp_config
         temp_config=$(mktemp)
         jq -r 'to_entries | .[] | "CATEGORIES[\"" + .key + "\"]=\"" + (.value | join(" ")) + "\""' "$config_file" > "$temp_config"
+        # shellcheck source=/dev/null
         source "$temp_config"
         rm -f "$temp_config"
         return 0
@@ -177,6 +179,7 @@ load_config() {
 }
 
 # Try to load config; if fails, use defaults
+# shellcheck source=/dev/null
 if ! load_config "$CONFIG_FILE"; then
     # Fallback defaults
     declare -A CATEGORIES=(

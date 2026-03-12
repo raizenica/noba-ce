@@ -4,7 +4,8 @@
 set -u
 set -o pipefail
 
-# Source central config if available (optional, can be used for future settings)
+# Source central config if available
+# shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
 fi
@@ -13,10 +14,10 @@ fi
 ALGO="sha256"
 VERIFY=false
 RECURSIVE=false
-OUTPUT="plain"  # plain, csv, json (not fully implemented yet)
+OUTPUT="plain"
 COPY=false
-MANIFEST=false  # generate a single manifest file for all processed files
-PROGRESS=false  # show progress (requires `pv` or simple counter)
+MANIFEST=false
+PROGRESS=false
 QUIET=false
 
 # Function to show version
@@ -282,10 +283,9 @@ for item in "${FILES[@]}"; do
                     CURRENT_FILE=$((CURRENT_FILE + 1))
                     show_progress "$CURRENT_FILE" "$TOTAL_FILES" "Processing files"
                 fi
-                generate_one "$file" "$CMD" | while read -r line; do
+                if ! generate_one "$file" "$CMD" | while read -r line; do
                     output_hash "$line"
-                done
-                if [ $? -ne 0 ]; then
+                done; then
                     ERROR_OCCURRED=true
                 fi
             done
@@ -296,10 +296,9 @@ for item in "${FILES[@]}"; do
                     CURRENT_FILE=$((CURRENT_FILE + 1))
                     show_progress "$CURRENT_FILE" "$TOTAL_FILES" "Processing files"
                 fi
-                generate_one "$file" "$CMD" | while read -r line; do
+                if ! generate_one "$file" "$CMD" | while read -r line; do
                     output_hash "$line"
-                done
-                if [ $? -ne 0 ]; then
+                done; then
                     ERROR_OCCURRED=true
                 fi
             done

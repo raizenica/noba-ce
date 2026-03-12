@@ -14,6 +14,17 @@ QUIET=false
 USE_GUI=false
 PROGRESS=false
 
+# Function to show version
+show_version() {
+    if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null; then
+        version=$(git describe --tags --always --dirty 2>/dev/null)
+        echo "$(basename "$0") version $version"
+    else
+        echo "$(basename "$0") version unknown (not in git repo)"
+    fi
+    exit 0
+}
+
 # Function to show usage
 usage() {
     cat <<EOF
@@ -26,7 +37,8 @@ Options:
   -q, --quality PERCENT JPEG compression quality (1-100, default: 92)
   -m, --metadata STR    Add PDF metadata (e.g., "title=My PDF,author=Me")
   -p, --progress        Show progress for many images (requires ImageMagick 7+)
-  -h, --help            Show this help
+  --help                Show this help
+  --version             Show version information
 
 If no options are given and kdialog is available, runs in GUI mode with option dialogs.
 EOF
@@ -44,8 +56,7 @@ if [ $# -eq 0 ]; then
     fi
 else
     # Parse options
-    OPTIONS=$(getopt -o o:s:r:q:m:ph -l output:,paper-size:,orientation:,quality:,metadata:,progress,help -- "$@")
-    if [ $? -ne 0 ]; then
+    if ! OPTIONS=$(getopt -o o:s:r:q:m:ph -l output:,paper-size:,orientation:,quality:,metadata:,progress,help,version -- "$@"); then
         usage
     fi
     eval set -- "$OPTIONS"
@@ -76,8 +87,11 @@ else
                 PROGRESS=true
                 shift
                 ;;
-            -h|--help)
+            --help)
                 usage
+                ;;
+            --version)
+                show_version
                 ;;
             --)
                 shift
@@ -111,7 +125,7 @@ fi
 # GUI mode
 if $USE_GUI; then
     # Ask for images using file picker (multiple selection)
-    IMAGES=($(kdialog --multiple --getopenfilename ~/ "Image Files (*.png *.jpg *.jpeg *.gif *.bmp *.tiff *.webp)" 2>/dev/null))
+    readarray -t IMAGES < <(kdialog --multiple --getopenfilename ~/ "Image Files (*.png *.jpg *.jpeg *.gif *.bmp *.tiff *.webp)" 2>/dev/null)
     if [ ${#IMAGES[@]} -eq 0 ]; then
         exit 1
     fi
@@ -146,15 +160,11 @@ fi
 CONVERT_OPTS=()
 
 # Set page size and orientation
+CONVERT_OPTS+=("-page" "$PAPER_SIZE")
 if [ "$ORIENTATION" = "landscape" ]; then
-    # For landscape, we need to set page size with landscape flag or swap dimensions
-    # ImageMagick uses -page <size> and you can append 'landscape' after size? Actually, better to use -page and let it handle.
-    # We'll just set -page with size and rely on convert to rotate images? Not perfect.
-    # Simpler: use -page and later -rotate if needed.
-    CONVERT_OPTS+=("-page" "$PAPER_SIZE")
-    # For landscape, we might want to rotate images if they are portrait? Too complex.
-else
-    CONVERT_OPTS+=("-page" "$PAPER_SIZE")
+    # We could add landscape handling, but convert may auto-orient based on images
+    # For simplicity, just set page size; actual orientation depends on images.
+    :
 fi
 
 # Set quality if specified
@@ -171,19 +181,9 @@ if [ -n "$METADATA" ]; then
     done
 fi
 
-# Show progress if more than 5 images and PROGRESS enabled
+# Show progress if many images (simple message)
 if [ "$PROGRESS" = true ] && [ ${#IMAGES[@]} -gt 5 ] && [ "$QUIET" = false ]; then
-    echo "Converting ${#IMAGES[@]} images to PDF with progress..."
-    # Use convert's -monitor option? Not standard. We'll just print a dot for each image.
-    # Alternatively, use a loop with individual conversions? That would be slower.
-    # Simpler: just show a message.
-    # We'll add a simple counter using a temporary file.
-    temp_counter=$(mktemp)
-    echo 0 > "$temp_counter"
-    # Use convert's -progress option? Not available in all versions.
-    # We'll use a custom loop with identify to get total pages? Too complex.
-    # For now, just a simple message.
-    echo "Progress not fully implemented – you'll see ImageMagick's output if any."
+    echo "Converting ${#IMAGES[@]} images to PDF..."
 fi
 
 # Run convert

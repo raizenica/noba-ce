@@ -5,6 +5,7 @@ set -u
 set -o pipefail
 
 # Source central config if available
+# shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
 fi
@@ -65,7 +66,7 @@ log "=== Disk Space Check ==="
 
 for target in "${TARGETS[@]}"; do
     # Get usage percentage and mount point
-    read -r usage mount <<< $(df -h "$target" | awk 'NR==2 {print $5" "$6}')
+    read -r usage mount <<< "$(df -h "$target" | awk 'NR==2 {print $5" "$6}')"
     usage=${usage%\%}  # remove %
     log "$mount: ${usage}% used"
 
@@ -91,6 +92,7 @@ for target in "${TARGETS[@]}"; do
             # Clean package manager caches
             if command -v dnf &>/dev/null; then
                 log "Cleaning DNF cache..."
+                # shellcheck disable=SC2024
                 sudo dnf clean all >> "$LOG_FILE" 2>&1
             fi
 
@@ -100,11 +102,13 @@ for target in "${TARGETS[@]}"; do
 
             # Clean system temp (old files)
             log "Cleaning /tmp (old files)..."
+            # shellcheck disable=SC2024
             sudo find /tmp -type f -atime +1 -delete >> "$LOG_FILE" 2>&1
 
             # Vacuum journals older than 3 days
             if command -v journalctl &>/dev/null; then
                 log "Vacuuming systemd journals..."
+                # shellcheck disable=SC2024
                 sudo journalctl --vacuum-time=3d >> "$LOG_FILE" 2>&1
             fi
 
