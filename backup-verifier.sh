@@ -4,23 +4,31 @@
 set -u
 set -o pipefail
 
-# Source central config
+# -------------------------------------------------------------------
+# Configuration and defaults
+# -------------------------------------------------------------------
+
+# Source central config if available
 # shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
 fi
 
-# Defaults
+# Defaults (can be overridden by config or command line)
 BACKUP_ROOT="${BACKUP_DEST:-/mnt/vnnas/backups/raizen}"
-TEMP_DIR="/tmp/backup-verify"
 NUM_FILES=5
 EMAIL="${EMAIL:-strikerke@gmail.com}"
 DRY_RUN=false
 QUIET=false
 VERBOSE=false
 COMPARE_ORIGINAL=false
+CHECKSUM_CMD="md5sum"      # can be overridden with --checksum-cmd
+TEMP_DIR_BASE="${TMPDIR:-/tmp}"
 
-# Function to show version
+# -------------------------------------------------------------------
+# Helper functions
+# -------------------------------------------------------------------
+
 show_version() {
     if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null; then
         version=$(git describe --tags --always --dirty 2>/dev/null)
@@ -31,7 +39,6 @@ show_version() {
     exit 0
 }
 
-# Function to show usage
 usage() {
     cat <<EOF
 Usage: $0 [options]
@@ -39,9 +46,11 @@ Usage: $0 [options]
 Options:
   -b, --backup-dir DIR   Root directory containing timestamped backups (default: $BACKUP_ROOT)
   -n, --num-files N      Number of random files to verify (default: $NUM_FILES)
+  -c, --compare-original Compare with original files (if they exist in home)
+  --checksum-cmd CMD     Checksum command to use (default: $CHECKSUM_CMD)
+  --temp-dir DIR         Base directory for temporary files (default: $TEMP_DIR_BASE)
   -v, --verbose          Print detailed progress
   -q, --quiet            Suppress non‑error output
-  -c, --compare-original Compare with original files (if they exist in home)
   --dry-run              Simulate without actually copying
   --help                 Show this help
   --version              Show version information
@@ -49,7 +58,95 @@ EOF
     exit 0
 }
 
-# Parse arguments
+# Check that all required commands are available
+check_dependencies() {
+    local required=("find" "sort" "tail" "cp" "rm" "mkdir" "dirname" "mktemp" "shuf" "wc" "cut")
+    local optional=("$CHECKSUM_CMD" "numfmt" "msmtp")
+    local missing=()
+
+    for cmd in "${required[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    # Checksum command might be missing; we'll handle that later
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "ERROR: Missing required commands: ${missing[*]}" >&2
+        echo "Please install them and try again." >&2
+        exit 1
+    fi
+
+    # Verify that the chosen checksum command exists
+    if ! command -v "$CHECKSUM_CMD" &>/dev/null; then
+        echo "ERROR: Checksum command '$CHECKSUM_CMD' not found." >&2
+        exit 1
+    fi
+}
+
+# Logging function (respects quiet)
+log() {
+    if [ "$QUIET" = false ]; then
+        echo "$@"
+    fi
+}
+
+# Verbose logging
+vlog() {
+    if [ "$VERBOSE" = true ] && [ "$QUIET" = false ]; then
+        echo "[VERBOSE]" "$@"
+    fi
+}
+
+# Convert bytes to human-readable (fallback if numfmt missing)
+bytes_to_human() {
+    local bytes=$1
+    if command -v numfmt &>/dev/null; then
+        numfmt --to=iec "$bytes"
+    else
+        echo "$bytes bytes"
+    fi
+}
+
+# Get file size in bytes (portable)
+get_size() {
+    local file="$1"
+    # Try GNU stat
+    if stat -c %s "$file" 2>/dev/null; then
+        return
+    # Try BSD stat
+    elif stat -f %z "$file" 2>/dev/null; then
+        return
+    # Fallback to wc -c
+    else
+        wc -c < "$file" 2>/dev/null | tr -d ' '
+    fi
+}
+
+# Generate a random selection of indices using either shuf or bash's RANDOM
+random_indices() {
+    local total=$1
+    local count=$2
+    if command -v shuf &>/dev/null; then
+        shuf -i 0-$((total-1)) -n "$count"
+    else
+        # Fallback: use bash's RANDOM (not perfectly uniform but good enough)
+        local -a indices=()
+        local i
+        while [ ${#indices[@]} -lt "$count" ]; do
+            i=$((RANDOM % total))
+            # Check for duplicates (simple linear search, ok for small counts)
+            if [[ ! " ${indices[*]} " =~ " $i " ]]; then
+                indices+=("$i")
+            fi
+        done
+        printf '%s\n' "${indices[@]}"
+    fi
+}
+
+# -------------------------------------------------------------------
+# Parse command-line arguments
+# -------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case $1 in
         -b|--backup-dir)
@@ -60,16 +157,24 @@ while [[ $# -gt 0 ]]; do
             NUM_FILES="$2"
             shift 2
             ;;
+        -c|--compare-original)
+            COMPARE_ORIGINAL=true
+            shift
+            ;;
+        --checksum-cmd)
+            CHECKSUM_CMD="$2"
+            shift 2
+            ;;
+        --temp-dir)
+            TEMP_DIR_BASE="$2"
+            shift 2
+            ;;
         -v|--verbose)
             VERBOSE=true
             shift
             ;;
         -q|--quiet)
             QUIET=true
-            shift
-            ;;
-        -c|--compare-original)
-            COMPARE_ORIGINAL=true
             shift
             ;;
         --dry-run)
@@ -93,30 +198,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Logging function (respects quiet)
-log() {
-    if [ "$QUIET" = false ]; then
-        echo "$@"
-    fi
-}
+# -------------------------------------------------------------------
+# Pre-flight checks
+# -------------------------------------------------------------------
+check_dependencies
 
-# Verbose logging
-vlog() {
-    if [ "$VERBOSE" = true ] && [ "$QUIET" = false ]; then
-        echo "[VERBOSE]" "$@"
-    fi
-}
+# Ensure NUM_FILES is a positive integer
+if ! [[ "$NUM_FILES" =~ ^[0-9]+$ ]] || [ "$NUM_FILES" -le 0 ]; then
+    echo "ERROR: --num-files must be a positive integer." >&2
+    exit 1
+fi
 
 # Find the most recent backup folder (by timestamp)
-LATEST_BACKUP=$(find "$BACKUP_ROOT" -maxdepth 1 -type d -name "????????-??????" | sort | tail -1)
+LATEST_BACKUP=$(find "$BACKUP_ROOT" -maxdepth 1 -type d -name "????????-??????" -print0 | sort -z | tail -zn1 | tr -d '\0')
 if [ -z "$LATEST_BACKUP" ]; then
     echo "ERROR: No timestamped backup folders found in $BACKUP_ROOT" >&2
     exit 1
 fi
 log "Latest backup: $LATEST_BACKUP"
 
-# Collect all files in that backup
-mapfile -t FILES < <(find "$LATEST_BACKUP" -type f 2>/dev/null)
+# Collect all files in that backup (handle spaces safely)
+mapfile -t FILES < <(find "$LATEST_BACKUP" -type f -print0 2>/dev/null | xargs -0 -I {} printf "%s\n" "{}")
 TOTAL_FILES=${#FILES[@]}
 if [ "$TOTAL_FILES" -eq 0 ]; then
     echo "ERROR: No files found in backup $LATEST_BACKUP" >&2
@@ -129,23 +231,31 @@ SELECTED=()
 if [ "$TOTAL_FILES" -le "$NUM_FILES" ]; then
     SELECTED=("${FILES[@]}")
 else
-    # Use shuf to pick random indices
-    for idx in $(shuf -i 0-$((TOTAL_FILES-1)) -n "$NUM_FILES"); do
+    # Get random indices
+    while IFS= read -r idx; do
         SELECTED+=("${FILES[$idx]}")
-    done
+    done < <(random_indices "$TOTAL_FILES" "$NUM_FILES")
 fi
 vlog "Selected ${#SELECTED[@]} files for verification"
 
-# Prepare report
+# -------------------------------------------------------------------
+# Prepare temporary directory
+# -------------------------------------------------------------------
+TEMP_DIR=$(mktemp -d "$TEMP_DIR_BASE/backup-verify.XXXXXXXXXX")
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+# -------------------------------------------------------------------
+# Verification loop
+# -------------------------------------------------------------------
 REPORT="Backup Verification Report
 ===========================
 Date: $(date)
 Backup folder: $LATEST_BACKUP
+Checksum command: $CHECKSUM_CMD
 Files checked: ${#SELECTED[@]}
 
 "
 
-mkdir -p "$TEMP_DIR"
 FAILED=0
 WARNINGS=0
 
@@ -162,15 +272,15 @@ for file in "${SELECTED[@]}"; do
         continue
     fi
 
-    # Get file size
-    size=$(stat -c %s "$file" 2>/dev/null || echo "unknown")
-    size_hr=$(numfmt --to=iec "$size" 2>/dev/null || echo "$size bytes")
+    # Get file size (portable)
+    size=$(get_size "$file")
+    size_hr=$(bytes_to_human "$size")
 
     # Copy file to temp
     if cp "$file" "$dest" 2>/dev/null; then
-        # Compare checksum
-        orig_hash=$(md5sum "$file" | cut -d' ' -f1)
-        copy_hash=$(md5sum "$dest" | cut -d' ' -f1)
+        # Compute checksums
+        orig_hash=$($CHECKSUM_CMD "$file" | cut -d' ' -f1)
+        copy_hash=$($CHECKSUM_CMD "$dest" | cut -d' ' -f1)
         if [ "$orig_hash" = "$copy_hash" ]; then
             result="✅ OK"
             REPORT+="$result $rel_path (size: $size_hr, checksum match)\n"
@@ -184,31 +294,36 @@ for file in "${SELECTED[@]}"; do
 
         # If compare-original is enabled, try to find the original file
         if [ "$COMPARE_ORIGINAL" = true ]; then
-            # Guess original path: if rel_path starts with config/.config/, map to $HOME/.config/...
-            # Also handle Documents, Pictures, etc.
+            # Guess original path: map based on known patterns
+            # You can extend this by providing a mapping file with --original-map
             original=""
             case "$rel_path" in
                 config/.config/*)
                     original="$HOME/${rel_path#config/.config/}"
                     ;;
-                Documents/*)
+                Documents/* | Pictures/* | Downloads/* | Videos/* | Music/*)
                     original="$HOME/$rel_path"
                     ;;
-                Pictures/*)
-                    original="$HOME/$rel_path"
-                    ;;
-                # Add more mappings as needed
+                # Add more mappings as needed, or use a configurable prefix map
                 *)
-                    original=""
+                    # Try a generic fallback: assume the backup root contains a home-like structure
+                    if [[ "$rel_path" =~ ^[^/]+/(.*) ]]; then
+                        # e.g., "hostname/home/user/file" -> strip first component
+                        candidate="$HOME/${rel_path#*/}"
+                        if [ -f "$candidate" ]; then
+                            original="$candidate"
+                        fi
+                    fi
                     ;;
             esac
+
             if [ -n "$original" ] && [ -f "$original" ]; then
-                orig_hash_original=$(md5sum "$original" | cut -d' ' -f1)
+                orig_hash_original=$($CHECKSUM_CMD "$original" | cut -d' ' -f1)
                 if [ "$orig_hash" = "$orig_hash_original" ]; then
                     REPORT+="  (matches original on disk)\n"
                     vlog "  Original file matches"
                 else
-                    REPORT+="  ⚠️  ORIGINAL FILE DIFFERS from backup\n"
+                    REPORT+="  ⚠  ORIGINAL FILE DIFFERS from backup\n"
                     ((WARNINGS++))
                     vlog "  WARNING: original file differs"
                 fi
@@ -225,24 +340,34 @@ for file in "${SELECTED[@]}"; do
     fi
 done
 
-# Cleanup temp
-rm -rf "$TEMP_DIR"
-
 # Summary
 REPORT+="\nSummary: ${#SELECTED[@]} files checked, $FAILED failures, $WARNINGS warnings (if compare-original).\n"
 
+# Output summary to console
 if [ "$FAILED" -gt 0 ]; then
-    log "⚠️  Verification completed with $FAILED errors."
+    log "⚠  Verification completed with $FAILED errors."
 elif [ "$WARNINGS" -gt 0 ]; then
-    log "⚠️  Verification completed with $WARNINGS warnings (original files differ)."
+    log "⚠  Verification completed with $WARNINGS warnings (original files differ)."
 else
     log "✅ All verified files are intact."
 fi
 
-# Email report if not dry run and email configured
+# -------------------------------------------------------------------
+# Email report (if configured and not dry run)
+# -------------------------------------------------------------------
 if [ "$DRY_RUN" = false ] && [ -n "$EMAIL" ]; then
-    echo -e "Subject: Backup Verification Report - $(date +%Y-%m-%d)\n\n$REPORT" | msmtp "$EMAIL"
-    log "Report emailed to $EMAIL"
+    if command -v msmtp &>/dev/null; then
+        # Use printf for better portability than echo -e
+        printf "Subject: Backup Verification Report - %s\n\n%s\n" "$(date +%Y-%m-%d)" "$REPORT" | msmtp "$EMAIL"
+        log "Report emailed to $EMAIL"
+    else
+        echo "WARNING: msmtp not installed; cannot email report." >&2
+    fi
 fi
 
-exit $FAILED
+# Exit with number of failures (max 127 to stay within valid exit codes)
+if [ "$FAILED" -gt 127 ]; then
+    exit 127
+else
+    exit "$FAILED"
+fi
