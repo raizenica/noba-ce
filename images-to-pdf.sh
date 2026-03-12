@@ -258,14 +258,13 @@ fi
 
 # Metadata (if any) – use -define pdf:... for standard PDF metadata
 if [ -n "$METADATA" ]; then
-    declare -a KV
+    # Split METADATA into an array
     IFS=',' read -ra KV <<< "$METADATA"
-    # shellcheck disable=SC2043  # KV is correctly handled as an array
-    for pair in "${KV[@]}"; do
+    # Use indexed loop to make array explicit
+    for (( idx=0; idx<${#KV[@]}; idx++ )); do
+        pair="${KV[$idx]}"
         key="${pair%%=*}"
         value="${pair#*=}"
-        # For PDF, common metadata: Title, Author, Subject, Keywords
-        # Use -define pdf:key=value
         CONVERT_OPTS+=("-define" "pdf:${key}=${value}")
     done
 fi
