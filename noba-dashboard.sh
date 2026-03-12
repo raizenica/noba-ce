@@ -39,7 +39,10 @@ disk_usage() {
     df -h | grep -E '^/dev/' | while read -r line; do
         # Use underscore for fields we don't need
         read -r _ size used _ use_percent mount <<< "$line"
-        # Color based on usage
+        # Skip snap mounts (they are squashfs, not /dev/)
+        if [[ "$mount" == /var/lib/snapd/snap/* ]]; then
+            continue
+        fi
         percent=${use_percent%\%}
         if [ "$percent" -ge 90 ]; then
             color="$RED"
