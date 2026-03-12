@@ -64,7 +64,7 @@ EOF
 # Check required commands
 check_deps() {
     local missing=()
-    for cmd in df awk du sort head date mkdir; do
+    for cmd in df awk du sort head date mkdir mktemp; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi
@@ -103,7 +103,7 @@ send_email() {
     log "Email sent to $EMAIL"
 }
 
-# Run a command with sudo, but only if dry-run is false
+# Run a command with sudo, capturing output to log (no direct redirection)
 run_sudo() {
     local cmd_desc="$1"
     shift
@@ -114,10 +114,10 @@ run_sudo() {
     log "Running: $cmd_desc"
     # Check if user can sudo without password for this command
     if sudo -n true 2>/dev/null; then
-        # Use a temporary file to capture output, then append to log
+        # Use a temporary file to capture output
         local temp_output
         temp_output=$(mktemp)
-        # Run command with sudo, redirect both stdout and stderr to temp file
+        # Run command with sudo, capture both stdout and stderr
         if sudo "$@" > "$temp_output" 2>&1; then
             cat "$temp_output" >> "$LOG_FILE"
             rm -f "$temp_output"
@@ -225,7 +225,7 @@ for target in "${TARGETS[@]}"; do
         if [ "$CLEANUP" = true ] && [ "$DRY_RUN" = false ]; then
             log "Starting cleanup on $mount..."
 
-            # Clean package manager caches
+            # Clean package manager caches (using run_sudo)
             if command -v dnf &>/dev/null; then
                 run_sudo "cleaning DNF cache" dnf clean all
             elif command -v apt-get &>/dev/null; then
@@ -234,7 +234,7 @@ for target in "${TARGETS[@]}"; do
                 run_sudo "cleaning pacman cache" pacman -Sc --noconfirm
             fi
 
-            # Clean user cache
+            # Clean user cache – no sudo needed
             log "Cleaning ~/.cache..."
             if [ "$DRY_RUN" = false ]; then
                 rm -rf "$HOME/.cache/"* >> "$LOG_FILE" 2>&1
@@ -242,11 +242,10 @@ for target in "${TARGETS[@]}"; do
                 log "[DRY RUN] Would clean ~/.cache"
             fi
 
-            # Clean system temp (old files)
-            log "Cleaning /tmp (files older than 1 day)..."
-            run_sudo "cleaning /tmp" find /tmp -type f -atime +1 -delete
+            # Clean system temp (old files) – requires sudo
+            run_sudo "cleaning /tmp (files older than 1 day)" find /tmp -type f -atime +1 -delete
 
-            # Vacuum journals older than 3 days
+            # Vacuum journals older than 3 days – requires sudo
             if command -v journalctl &>/dev/null; then
                 run_sudo "vacuuming systemd journals" journalctl --vacuum-time=3d
             fi
