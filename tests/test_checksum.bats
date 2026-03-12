@@ -19,8 +19,8 @@ teardown() {
 @test "checksum generates md5 for a file" {
     run ../checksum.sh -a md5 testfile.txt
     [ "$status" -eq 0 ]
-    # Check that the expected output file exists
+    # The script creates filename.algorithm.txt
     [ -f "testfile.txt.md5.txt" ]
-    # Optionally verify content
+    # Verify content contains the filename
     grep -q "testfile.txt" "testfile.txt.md5.txt"
 }
