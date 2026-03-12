@@ -43,7 +43,7 @@ algo_to_cmd() {
         sha256|SHA256)  echo "sha256sum" ;;
         sha512|SHA512)  echo "sha512sum" ;;
         blake2b|BLAKE2) echo "b2sum" ;;
-        crc32|CRC32)    echo "cksum" ;;   # crc32 is not standard; cksum gives CRC-32 but different output format
+        crc32|CRC32)    echo "cksum" ;;
         *)              echo "unsupported" ;;
     esac
 }
@@ -67,7 +67,6 @@ verify_one() {
         echo "Warning: '$file' not found, skipping." >&2
         return 1
     fi
-    # Check if file is a valid checksum file
     if [[ "$file" == *.md5 || "$file" == *.sha1 || "$file" == *.sha256 || "$file" == *.sha512 || "$file" == *.b2 || "$file" == *.crc ]]; then
         "$cmd" -c "$file"
     else
@@ -76,15 +75,20 @@ verify_one() {
     fi
 }
 
-# Generate a manifest (all checksums in one file)
-generate_manifest() {
-    local manifest="$1"
-    shift
-    local files=("$@")
-    local cmd="$2"  # need to restructure; better to pass cmd separately
-    # This is a placeholder; actual implementation will use find or loops
-    echo "Manifest generation not fully implemented yet." >&2
-    return 1
+# Progress display function
+show_progress() {
+    local current="$1"
+    local total="$2"
+    local msg="$3"
+    if $PROGRESS && [ "$QUIET" = false ]; then
+        if command -v pv &>/dev/null && [ "$total" -gt 0 ]; then
+            # pv would be used in a pipeline, not here. Instead we'll use a simple percentage.
+            printf "\r%s: %d/%d (%d%%)" "$msg" "$current" "$total" $((current * 100 / total)) >&2
+        else
+            # Simple counter
+            printf "\r%s: %d/%d" "$msg" "$current" "$total" >&2
+        fi
+    fi
 }
 
 # Parse arguments
@@ -181,17 +185,10 @@ if $USE_GUI; then
     esac
     # Get selected files from Dolphin (passed as arguments)
     FILES=("$@")
-    # If still no files, error
     if [ ${#FILES[@]} -eq 0 ]; then
         kdialog --error "No files selected."
         exit 1
     fi
-fi
-
-# Check for required tools for certain features
-if $PROGRESS && ! command -v pv &>/dev/null; then
-    echo "Warning: pv not installed; progress will be estimated with simple counter." >&2
-    PROGRESS=false  # fallback to simple counter
 fi
 
 # If verifying, ensure we have files
@@ -204,11 +201,9 @@ fi
 ERROR_OCCURRED=false
 MANIFEST_FILE=""
 if $MANIFEST && [ ${#FILES[@]} -gt 1 ]; then
-    # For manifest, we need an output file name. Use first file's name with appropriate extension.
     base="${FILES[0]%.*}"
     MANIFEST_FILE="${base}.${ALGO}.txt"
     echo "Generating manifest: $MANIFEST_FILE"
-    # Overwrite or append? We'll overwrite.
     : > "$MANIFEST_FILE"
 fi
 
@@ -218,8 +213,6 @@ output_hash() {
     if $MANIFEST && [ -n "$MANIFEST_FILE" ]; then
         echo "$hash_line" >> "$MANIFEST_FILE"
     else
-        # In non-manifest mode, hash_line includes filename, but we need to redirect to individual file.
-        # The line is like "hash  filename". We'll extract filename and write to that file with .algo.txt.
         local hash_file
         hash_file=$(echo "$hash_line" | awk '{print $2}')
         echo "$hash_line" >> "${hash_file}.${ALGO}.txt"
@@ -227,6 +220,19 @@ output_hash() {
 }
 
 # Process each file or directory
+TOTAL_FILES=0
+if $PROGRESS && ! $VERIFY; then
+    # Count total files for progress (if recursive and directories)
+    for item in "${FILES[@]}"; do
+        if [ -d "$item" ] && $RECURSIVE; then
+            TOTAL_FILES=$((TOTAL_FILES + $(find "$item" -type f | wc -l)))
+        elif [ -f "$item" ]; then
+            TOTAL_FILES=$((TOTAL_FILES + 1))
+        fi
+    done
+fi
+
+CURRENT_FILE=0
 for item in "${FILES[@]}"; do
     if [ -f "$item" ]; then
         if $VERIFY; then
@@ -236,24 +242,12 @@ for item in "${FILES[@]}"; do
         else
             # Generate
             if $PROGRESS; then
-                # Use pv to show progress for the file (if it's large)
-                if command -v pv &>/dev/null; then
-                    pv "$item" | "$CMD" | while read -r line; do
-                        output_hash "$line"
-                    done
-                else
-                    # fallback: simple counter (not very useful)
-                    echo "Processing $item..." >&2
-                    generate_one "$item" "$CMD" | while read -r line; do
-                        output_hash "$line"
-                    done
-                fi
-            else
-                generate_one "$item" "$CMD" | while read -r line; do
-                    output_hash "$line"
-                done
+                CURRENT_FILE=$((CURRENT_FILE + 1))
+                show_progress "$CURRENT_FILE" "$TOTAL_FILES" "Processing files"
             fi
-            if [ $? -ne 0 ]; then
+            if ! generate_one "$item" "$CMD" | while read -r line; do
+                output_hash "$line"
+            done; then
                 ERROR_OCCURRED=true
             fi
         fi
@@ -263,11 +257,14 @@ for item in "${FILES[@]}"; do
             ERROR_OCCURRED=true
             continue
         fi
-        # Generate checksums for all files in directory recursively
+        # Find all files recursively
         if $MANIFEST; then
-            # If manifest, we'll collect all output in one file
-            echo "Processing directory $item recursively..." >&2
+            # Collect in manifest
             find "$item" -type f -print0 | while IFS= read -r -d '' file; do
+                if $PROGRESS; then
+                    CURRENT_FILE=$((CURRENT_FILE + 1))
+                    show_progress "$CURRENT_FILE" "$TOTAL_FILES" "Processing files"
+                fi
                 generate_one "$file" "$CMD" | while read -r line; do
                     output_hash "$line"
                 done
@@ -276,9 +273,12 @@ for item in "${FILES[@]}"; do
                 fi
             done
         else
-            # Generate individual .algo.txt files for each file in the directory
-            echo "Processing directory $item recursively (individual files)..." >&2
+            # Individual files
             find "$item" -type f -print0 | while IFS= read -r -d '' file; do
+                if $PROGRESS; then
+                    CURRENT_FILE=$((CURRENT_FILE + 1))
+                    show_progress "$CURRENT_FILE" "$TOTAL_FILES" "Processing files"
+                fi
                 generate_one "$file" "$CMD" | while read -r line; do
                     output_hash "$line"
                 done
@@ -292,6 +292,11 @@ for item in "${FILES[@]}"; do
     fi
 done
 
+# Newline after progress output
+if $PROGRESS && ! $VERIFY && [ "$QUIET" = false ]; then
+    echo >&2
+fi
+
 # If manifest mode, print the manifest filename
 if $MANIFEST && [ -n "$MANIFEST_FILE" ]; then
     echo "Manifest saved to: $MANIFEST_FILE"
@@ -299,7 +304,6 @@ fi
 
 # Copy to clipboard if requested and exactly one hash generated (non-verify)
 if $COPY && ! $VERIFY && [ ${#FILES[@]} -eq 1 ]; then
-    # Get the last generated hash (simplistic: read from the output file)
     if $MANIFEST && [ -n "$MANIFEST_FILE" ]; then
         hash=$(tail -1 "$MANIFEST_FILE" | cut -d' ' -f1)
     else
