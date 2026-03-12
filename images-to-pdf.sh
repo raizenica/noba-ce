@@ -258,7 +258,7 @@ fi
 
 # Metadata (if any) – use -define pdf:... for standard PDF metadata
 if [ -n "$METADATA" ]; then
-    # Parse comma-separated key=value pairs
+    declare -a KV
     IFS=',' read -ra KV <<< "$METADATA"
     for pair in "${KV[@]}"; do
         key="${pair%%=*}"
