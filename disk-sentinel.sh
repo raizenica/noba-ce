@@ -114,12 +114,21 @@ run_sudo() {
     log "Running: $cmd_desc"
     # Check if user can sudo without password for this command
     if sudo -n true 2>/dev/null; then
-        sudo "$@" >> "$LOG_FILE" 2>&1
-        local status=$?
-        if [ $status -ne 0 ]; then
+        # Use a temporary file to capture output, then append to log
+        local temp_output
+        temp_output=$(mktemp)
+        # Run command with sudo, redirect both stdout and stderr to temp file
+        if sudo "$@" > "$temp_output" 2>&1; then
+            cat "$temp_output" >> "$LOG_FILE"
+            rm -f "$temp_output"
+            return 0
+        else
+            local status=$?
+            cat "$temp_output" >> "$LOG_FILE"
+            rm -f "$temp_output"
             log "WARNING: Command failed (exit $status): $*"
+            return $status
         fi
-        return $status
     else
         log "WARNING: sudo not available or requires password; skipping $cmd_desc"
         return 1
