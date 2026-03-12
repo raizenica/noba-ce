@@ -46,6 +46,13 @@ done
 check_cmd() {
     if command -v "$1" &>/dev/null; then
         echo -e "  ${GREEN}✓${NC} $1"
+        if [ "$VERBOSE" = true ]; then
+            # Show version info if available
+            version=$("$1" --version 2>/dev/null | head -1)
+            if [ -n "$version" ]; then
+                echo "      $version"
+            fi
+        fi
         return 0
     else
         echo -e "  ${RED}✗${NC} $1 (not found)"
@@ -62,10 +69,12 @@ if [ -f "$CONFIG_FILE" ]; then
     echo -e "  ${GREEN}✓ File exists${NC}"
     if [ -r "$CONFIG_FILE" ]; then
         echo -e "  ${GREEN}✓ File is readable${NC}"
-        # Source it safely to check variables
-        # We'll just grep for common variables
         echo "  Variables defined:"
         grep -E '^[A-Za-z_]+=' "$CONFIG_FILE" | sed 's/^/    /' || echo "    (none)"
+        if [ "$VERBOSE" = true ]; then
+            echo "  File contents (with comments stripped):"
+            grep -v '^[[:space:]]*#' "$CONFIG_FILE" | grep -v '^[[:space:]]*$' | sed 's/^/    /'
+        fi
     else
         echo -e "  ${RED}✗ File not readable${NC}"
     fi
@@ -110,7 +119,9 @@ echo "    checksum.sh:"
 check_cmd find
 check_cmd jq
 check_cmd yq
-check_cmd wl-copy || check_cmd xclip
+if ! check_cmd wl-copy; then
+    check_cmd xclip
+fi
 
 # disk-sentinel.sh
 echo "    disk-sentinel.sh:"
@@ -157,6 +168,10 @@ for log in "$HOME/.local/share/backup-to-nas.log" \
     dir=$(dirname "$log")
     if [ -d "$dir" ]; then
         echo -e "  ${GREEN}✓${NC} $dir exists"
+        if [ "$VERBOSE" = true ] && [ -f "$log" ]; then
+            echo "      Last 2 lines of $(basename "$log"):"
+            tail -2 "$log" 2>/dev/null | sed 's/^/      /'
+        fi
     else
         echo -e "  ${YELLOW}⚠ $dir does not exist (will be created by scripts)${NC}"
     fi
