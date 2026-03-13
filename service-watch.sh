@@ -1,5 +1,6 @@
 #!/bin/bash
-# service-watch.sh – Check and restart failed system services
+# service-watch.sh – Check, report, and restart failed system services
+# Version: 2.2.0
 
 set -euo pipefail
 
@@ -10,31 +11,33 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
-SERVICES=("sshd" "docker" "NetworkManager")
+SERVICES=()
+DEFAULT_SERVICES=("sshd" "docker" "NetworkManager")
 USER_MODE=false
 DRY_RUN=false
 NOTIFY=true
 
 # -------------------------------------------------------------------
-# Load user configuration (if any)
+# Load user configuration
 # -------------------------------------------------------------------
-load_config || true
-if [ "$CONFIG_LOADED" = true ]; then
-    # Read services array from config
+if command -v get_config &>/dev/null; then
     services_from_config=$(get_config_array ".services.monitor")
     if [ -n "$services_from_config" ]; then
         mapfile -t SERVICES <<< "$services_from_config"
     fi
-    # Optional: read notify setting from config
     NOTIFY="$(get_config ".services.notify" "$NOTIFY")"
     [[ "$NOTIFY" == "false" ]] && NOTIFY=false
+fi
+
+if [ ${#SERVICES[@]} -eq 0 ]; then
+    SERVICES=("${DEFAULT_SERVICES[@]}")
 fi
 
 # -------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "service-watch.sh version 1.0"
+    echo "service-watch.sh version 2.2.0"
     exit 0
 }
 
@@ -42,7 +45,7 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Monitor system services and restart any that are in a failed state.
+Monitor system services, report their status, and restart any in a failed state.
 
 Options:
   -s, --service NAME   Add a service to monitor (can be repeated)
@@ -55,18 +58,19 @@ EOF
     exit 0
 }
 
-# Send desktop notification (if enabled and not dry run)
 send_notify() {
     local urgency="$1"
     local summary="$2"
     local body="$3"
+
     if [ "$NOTIFY" = false ] || [ "$DRY_RUN" = true ]; then
         return
     fi
+
     if command -v notify-send &>/dev/null && [ -n "${DISPLAY:-}" ]; then
-        notify-send -u "$urgency" "$summary" "$body"
+        notify-send -u "$urgency" "$summary" "$body" || true
     else
-        log_debug "notify-send not available – skipping notification."
+        log_debug "notify-send not available or no DISPLAY – skipping notification." >&2
     fi
 }
 
@@ -95,47 +99,58 @@ done
 # Pre-flight checks
 # -------------------------------------------------------------------
 if ! command -v systemctl &>/dev/null; then
-    log_error "systemctl not found – is systemd installed?"
-    exit 1
+    die "systemctl not found – is systemd installed?"
 fi
 
-SYSTEMCTL_CMD="systemctl"
+SYS_CMD=("systemctl")
 if [ "$USER_MODE" = true ]; then
-    SYSTEMCTL_CMD="systemctl --user"
-    # Ensure user service manager is available
-    if ! systemctl --user is-system-running &>/dev/null; then
-        log_warn "User service manager not available – continuing anyway."
+    SYS_CMD+=("--user")
+    if ! "${SYS_CMD[@]}" is-system-running &>/dev/null; then
+        log_warn "User service manager not fully running – continuing anyway." >&2
     fi
 fi
 
-log_info "Starting service watch (user mode: $USER_MODE, dry run: $DRY_RUN)"
-log_debug "Monitoring services: ${SERVICES[*]}"
+log_info "Starting service watch (user mode: $USER_MODE, dry run: $DRY_RUN)" >&2
 
 # -------------------------------------------------------------------
 # Main loop
 # -------------------------------------------------------------------
 for svc in "${SERVICES[@]}"; do
-    log_debug "Checking service: $svc"
-    # Check if service is in failed state
-    if $SYSTEMCTL_CMD is-failed "$svc" &>/dev/null; then
-        log_warn "Service $svc is failed – restarting..."
+    # Ensure .service extension for exact matching
+    [[ "$svc" != *.service ]] && svc_name="${svc}.service" || svc_name="$svc"
+
+    # Query exact status
+    state=$("${SYS_CMD[@]}" show -p ActiveState --value "$svc_name" 2>/dev/null || echo "unknown")
+
+    if [[ "$state" == "failed" ]]; then
+        log_warn "Service $svc_name is failed – attempting restart..." >&2
 
         if [ "$DRY_RUN" = true ]; then
-            log_info "[DRY RUN] Would restart $svc"
-            send_notify "normal" "[DRY RUN] Would restart $svc" "Service was failed"
+            log_info "[DRY RUN] Would restart $svc_name" >&2
+            send_notify "normal" "[DRY RUN] Would restart $svc_name" "Service was failed"
+            echo "$svc_name: failed (dry-run restart)"
         else
-            # Attempt restart
-            if $SYSTEMCTL_CMD restart "$svc"; then
-                log_info "Successfully restarted $svc"
-                send_notify "critical" "Service restarted" "$svc was down and has been restarted"
+            # Build restart command, injecting sudo -n for system services if not root
+            restart_cmd=("${SYS_CMD[@]}" restart "$svc_name")
+            if [ "$USER_MODE" = false ] && [ "$EUID" -ne 0 ]; then
+                restart_cmd=("sudo" "-n" "${restart_cmd[@]}")
+            fi
+
+            if "${restart_cmd[@]}" >/dev/null 2>&1; then
+                log_success "Successfully restarted $svc_name" >&2
+                send_notify "critical" "Service restarted" "$svc_name was down and has been restarted"
+                echo "$svc_name: restarted (auto-healed)"
             else
-                log_error "Failed to restart $svc"
-                send_notify "critical" "Failed to restart $svc" "Manual intervention required"
+                log_error "Failed to restart $svc_name" >&2
+                send_notify "critical" "Failed to restart $svc_name" "Manual intervention required"
+                echo "$svc_name: failed (restart blocked)"
             fi
         fi
     else
-        log_debug "Service $svc is OK"
+        log_debug "Service $svc_name is $state" >&2
+        # Print clean status to stdout for the web dashboard parser
+        echo "$svc_name: $state"
     fi
 done
 
-log_info "Service watch completed."
+log_info "Service watch completed." >&2
