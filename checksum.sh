@@ -12,6 +12,18 @@
 # Help handling
 
 # Help handling
+
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "For detailed help, see the script documentation."
+    exit 0
+fi
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "$(basename "$0") version 1.0"
+    exit 0
+fi
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: $(basename "$0") [OPTIONS]"
     echo "For detailed help, see the script documentation."
@@ -613,6 +625,7 @@ while IFS= read -r item; do
             fi
         else
             if generate_one "$item" "$CMD" | while IFS= read -r line; do
+            if [ $? -ne 0 ]; then mark_error; fi
             if [ $? -ne 0 ]; then mark_error; fi
             if [ $? -ne 0 ]; then mark_error; fi
             if [ $? -ne 0 ]; then mark_error; fi

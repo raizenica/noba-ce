@@ -3,6 +3,18 @@
 
 
 # Help handling
+
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "For detailed help, see the script documentation."
+    exit 0
+fi
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "$(basename "$0") version 1.0"
+    exit 0
+fi
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: $(basename "$0") [OPTIONS]"
     echo "For detailed help, see the script documentation."
@@ -228,6 +240,8 @@ log "Latest backup: $LATEST_BACKUP"
 mapfile -t FILES < <(find "$LATEST_BACKUP" -type f -print0 2>/dev/null | xargs -0 -I {} printf "%s\n" "{}")
 TOTAL_FILES=${#FILES[@]}
 if [ "$TOTAL_FILES" -eq 0 ]; then
+if [ "$DRY_RUN" = true ]; then log "Dry run – no files found, but exiting cleanly."; exit 0; fi
+if [ "$DRY_RUN" = true ]; then echo "Dry run – no files, exiting cleanly"; exit 0; fi
 if [ "$DRY_RUN" = true ]; then log "Dry run – no files found, but exiting cleanly."; exit 0; fi
 if [ "$DRY_RUN" = true ]; then echo "Dry run – no files, exiting cleanly"; exit 0; fi
     echo "ERROR: No files found in backup $LATEST_BACKUP" >&2

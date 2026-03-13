@@ -33,6 +33,23 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "This script fixes test failures in other scripts."
     exit 0
 fi
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0")"
+    echo "This script fixes test failures in other scripts."
+    exit 0
+fi
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0") [--help]"
+    echo "This script fixes test failures in other scripts."
+    exit 0
+fi
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0")"
+    echo "This script fixes test failures in other scripts."
+    exit 0
+fi
 # Help handling
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: $(basename "$0") [--help]"

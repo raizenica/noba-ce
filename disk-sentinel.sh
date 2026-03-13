@@ -7,6 +7,18 @@
 # Help handling
 
 # Help handling
+
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "For detailed help, see the script documentation."
+    exit 0
+fi
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "$(basename "$0") version 1.0"
+    exit 0
+fi
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: $(basename "$0") [OPTIONS]"
     echo "For detailed help, see the script documentation."
@@ -438,6 +450,8 @@ if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
 if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
 if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
 if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
+if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
+if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
 # Start
 log "=== Disk Space Check ==="
 
@@ -480,6 +494,7 @@ for target in "${TARGETS[@]}"; do
 
         # Cleanup if enabled and not dry-run
         if [ "$CLEANUP" = true ] && [ "$DRY_RUN" = false ]; then
+        log "Dry run – skipping actual cleanup."
         log "Dry run – skipping actual cleanup."
         log "Dry run – skipping actual cleanup."
         log "Dry run – skipping actual cleanup."

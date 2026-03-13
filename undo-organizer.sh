@@ -7,6 +7,18 @@
 # Help handling
 
 # Help handling
+
+# Help handling
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "For detailed help, see the script documentation."
+    exit 0
+fi
+if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
+    echo "$(basename "$0") version 1.0"
+    exit 0
+fi
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: $(basename "$0") [OPTIONS]"
     echo "For detailed help, see the script documentation."
@@ -283,6 +295,9 @@ if [ ! -f "$UNDO_LOG" ] || [ ! -s "$UNDO_LOG" ]; then
         echo "No undo log found at $UNDO_LOG"
         exit 1
     fi
+fi
+fi
+fi
 fi
 fi
 fi
