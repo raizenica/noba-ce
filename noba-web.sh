@@ -2,6 +2,7 @@
 # noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, service resource usage,
 # and integrated disk‑sentinel, temperature‑alert, system‑report, service‑watch,
 # backup‑verifier, and cloud‑backup – all beautifully displayed!
+# Version: 3.1.0
 
 set -euo pipefail
 
@@ -10,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
-# Default configuration
+# Default configuration (can be overridden by config file)
 # -------------------------------------------------------------------
 START_PORT="${START_PORT:-8080}"
 MAX_PORT="${MAX_PORT:-8090}"
@@ -18,22 +19,18 @@ HTML_DIR="${HTML_DIR:-/tmp/noba-web}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
 LOG_FILE="${LOG_FILE:-/tmp/noba-web.log}"
 KILL_ONLY=false
-
+HOST="${HOST:-0.0.0.0}"          # Bind to all interfaces by default
 DEFAULT_SERVICES="backup-to-nas.service organize-downloads.service noba-web.service syncthing.service"
 
 # -------------------------------------------------------------------
-# Load user configuration (if any)
+# Load user configuration (using stateless get_config)
 # -------------------------------------------------------------------
-load_config || true
-if [ "$CONFIG_LOADED" = true ]; then
-    START_PORT="$(get_config ".web.start_port" "$START_PORT")"
-    MAX_PORT="$(get_config ".web.max_port" "$MAX_PORT")"
-    SERVICES_LIST=$(get_config_array ".web.service_list" | tr '\n' ',' | sed 's/,$//')
-    if [ -n "$SERVICES_LIST" ]; then
-        export NOBA_WEB_SERVICES="$SERVICES_LIST"
-    else
-        export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
-    fi
+START_PORT="$(get_config ".web.start_port" "$START_PORT")"
+MAX_PORT="$(get_config ".web.max_port" "$MAX_PORT")"
+HOST="$(get_config ".web.host" "$HOST")"
+SERVICES_LIST=$(get_config_array ".web.service_list" | tr '\n' ',' | sed 's/,$//')
+if [ -n "$SERVICES_LIST" ]; then
+    export NOBA_WEB_SERVICES="$SERVICES_LIST"
 else
     export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
 fi
@@ -42,7 +39,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-web.sh version 3.0 (integrated scripts)"
+    echo "noba-web.sh version 3.1.0 (noba-lib version $NOBA_LIB_VERSION)"
     exit 0
 }
 
@@ -55,6 +52,7 @@ Launch an interactive web dashboard for Nobara automation.
 Options:
   -p, --port PORT   Start searching from PORT (default: $START_PORT)
   -m, --max PORT    Maximum port to try (default: $MAX_PORT)
+  --host HOST       Bind to specific host/IP (default: $HOST)
   -k, --kill        Kill any running noba-web server and exit
   --help            Show this help message
   --version         Show version information
@@ -82,19 +80,32 @@ find_free_port() {
     local start="$1"
     local max="$2"
     local port
-    for port in $(seq "$start" "$max"); do
-        if ! ss -tuln 2>/dev/null | grep -q ":$port "; then
-            echo "$port"
-            return 0
-        fi
-    done
+
+    if command -v ss &>/dev/null; then
+        for port in $(seq "$start" "$max"); do
+            if ! ss -tuln 2>/dev/null | grep -q ":$port "; then
+                echo "$port"
+                return 0
+            fi
+        done
+    elif command -v lsof &>/dev/null; then
+        for port in $(seq "$start" "$max"); do
+            if ! lsof -i:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -q .; then
+                echo "$port"
+                return 0
+            fi
+        done
+    else
+        log_error "Neither 'ss' nor 'lsof' found – cannot check port availability."
+        exit 1
+    fi
     return 1
 }
 
 # -------------------------------------------------------------------
 # Parse arguments
 # -------------------------------------------------------------------
-if ! PARSED_ARGS=$(getopt -o p:m:k -l port:,max:,kill,help,version -- "$@"); then
+if ! PARSED_ARGS=$(getopt -o p:m:k -l port:,max:,host:,kill,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -103,6 +114,7 @@ while true; do
     case "$1" in
         -p|--port)    START_PORT="$2"; shift 2 ;;
         -m|--max)     MAX_PORT="$2"; shift 2 ;;
+        --host)       HOST="$2"; shift 2 ;;
         -k|--kill)    KILL_ONLY=true; shift ;;
         --help)       show_help ;;
         --version)    show_version ;;
@@ -117,24 +129,24 @@ if [ "$KILL_ONLY" = true ]; then
     exit 0
 fi
 
-check_deps python3 ss
-if ! command -v ss &>/dev/null; then
-    log_warn "ss not found – using lsof as fallback."
-    check_deps lsof
-fi
-
-PORT=$(find_free_port "$START_PORT" "$MAX_PORT")
-if [ -z "$PORT" ]; then
-    log_error "No free port found between $START_PORT and $MAX_PORT."
+check_deps python3
+if ! command -v ss &>/dev/null && ! command -v lsof &>/dev/null; then
+    log_error "Need either 'ss' or 'lsof' to check port availability."
     exit 1
 fi
+
+PORT=$(find_free_port "$START_PORT" "$MAX_PORT") || {
+    log_error "No free port found between $START_PORT and $MAX_PORT."
+    exit 1
+}
 log_info "Using port $PORT"
 
+# Create clean HTML directory
 mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Modernized HTML file (with glassmorphism, smooth animations, Chart.js)
+# Embedded HTML (index.html) – full version with all cards
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -362,7 +374,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             break-inside: avoid;
         }
 
-        /* Collapsible */
         .collapsible {
             cursor: pointer;
             user-select: none;
@@ -379,7 +390,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             transition: max-height 0.3s ease-out;
         }
         .collapsible-content.open {
-            max-height: 500px; /* adjust as needed */
+            max-height: 500px;
         }
 
         @media (max-width: 640px) {
@@ -419,7 +430,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" x-text="gpuLoad"></span></div>
         </div>
 
-        <!-- Backup Card (existing) -->
+        <!-- Backup Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-database"></i> Backup</div>
             <div class="stat-row"><span class="stat-label">Last backup</span><span class="stat-value" :class="backupClass" x-text="backupStatus"></span></div>
@@ -507,8 +518,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </template>
         </div>
 
-        <!-- ========== NEW INTEGRATED CARDS ========== -->
-
         <!-- Disk Sentinel with Sparkline -->
         <div class="card">
             <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
@@ -594,7 +603,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <script>
         function dashboard() {
             return {
-                // existing properties
+                // System
                 diskChart: null,
                 tempChart: null,
                 timestamp: '', uptime: '', loadavg: '', memory: '', cpuTemp: '',
@@ -607,7 +616,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 gpuTemp: '', gpuLoad: '', dockerContainers: [],
                 battery: {}, zfs: { pools: [] }, diskio: [],
 
-                // new integrated data
+                // Integrated scripts
                 diskSentinel: { output: '' },
                 diskSentinelHistory: [],
                 temperatureAlert: { output: '' },
@@ -617,7 +626,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 backupVerifier: { result: '', output: '' },
                 cloudBackup: { status: '', lastSync: '', size: '', output: '' },
 
-                // computed classes
+                // Computed classes
                 get cpuTempClass() {
                     const t = parseInt(this.cpuTemp) || 0;
                     return t > 80 ? 'danger' : t > 60 ? 'warning' : '';
@@ -644,7 +653,8 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         const response = await fetch('/api/stats');
                         if (!response.ok) return;
                         const data = await response.json();
-                        // existing updates
+
+                        // Existing
                         this.timestamp = data.timestamp;
                         this.uptime = data.uptime;
                         this.loadavg = data.loadavg;
@@ -672,7 +682,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.zfs = data.zfs || { pools: [] };
                         this.diskio = data.diskio || [];
 
-                        // new integrated data
+                        // New integrated
                         this.diskSentinel = data.diskSentinel || { output: '' };
                         this.diskSentinelHistory = data.diskSentinelHistory || [];
                         this.temperatureAlert = data.temperatureAlert || { output: '' };
@@ -682,7 +692,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.backupVerifier = data.backupVerifier || { result: '', output: '' };
                         this.cloudBackup = data.cloudBackup || { status: '', lastSync: '', size: '', output: '' };
 
-                        // Draw sparklines after data update
                         this.$nextTick(() => this.drawCharts());
                     } catch (e) {
                         console.error('Stats fetch failed', e);
@@ -692,11 +701,9 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 },
 
                 drawCharts() {
-                    // Destroy existing charts if they exist
                     if (this.diskChart) this.diskChart.destroy();
                     if (this.tempChart) this.tempChart.destroy();
 
-                    // Disk Sentinel sparkline
                     if (this.$refs.diskChart && this.diskSentinelHistory.length) {
                         this.diskChart = new Chart(this.$refs.diskChart, {
                             type: 'line',
@@ -719,7 +726,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         });
                     }
 
-                    // Temperature sparkline
                     if (this.$refs.tempChart && this.tempHistory.length) {
                         this.tempChart = new Chart(this.$refs.tempChart, {
                             type: 'line',
@@ -780,6 +786,7 @@ cat > "$HTML_DIR/server.py" <<'EOF'
 #!/usr/bin/env python3
 """
 Nobara Dashboard Server - Full version with integrated scripts.
+Listens on HOST:PORT and serves the dashboard with real‑time stats.
 """
 
 import http.server
@@ -795,10 +802,11 @@ from datetime import datetime, timedelta
 
 # -------------------- Configuration --------------------
 PORT = int(os.environ.get('PORT', 8080))
+HOST = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR = os.path.expanduser("~/.local/bin")
 LOG_DIR = os.path.expanduser("~/.local/share")
 CACHE_TTL = 30  # seconds for expensive commands (updates)
-HOST = "0.0.0.0"  # Listen on all network interfaces
+PID_FILE = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
 
 logging.basicConfig(
     filename=os.path.join(LOG_DIR, 'noba-web-server.log'),
@@ -987,7 +995,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     name = parts[2]
                     if name.startswith(('loop', 'ram', 'sr')):
                         continue
-                    # Allow partitions
                     reads = int(parts[5])   # sectors read
                     writes = int(parts[9])  # sectors written
                     read_bytes = reads * 512
@@ -1037,7 +1044,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: Disk Sentinel ----------
     def get_disk_sentinel(self):
-        """Run disk-sentinel.sh and capture output + history for sparkline."""
         result = {'output': '', 'history': []}
         script = os.path.join(SCRIPT_DIR, 'disk-sentinel.sh')
         if os.path.exists(script):
@@ -1056,7 +1062,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: Temperature Alert ----------
     def get_temperature_alert(self):
-        """Run temperature-alert.sh and capture output + history."""
         result = {'output': '', 'history': []}
         script = os.path.join(SCRIPT_DIR, 'temperature-alert.sh')
         if os.path.exists(script):
@@ -1074,7 +1079,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: System Report ----------
     def get_system_report(self):
-        """Run system-report.sh and capture full output."""
         result = {'output': ''}
         script = os.path.join(SCRIPT_DIR, 'system-report.sh')
         if os.path.exists(script):
@@ -1090,14 +1094,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: Service Watch ----------
     def get_service_watch(self):
-        """Run service-watch.sh and parse its output into structured data."""
         services = []
         script = os.path.join(SCRIPT_DIR, 'service-watch.sh')
         if os.path.exists(script):
             try:
                 proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
                 for line in proc.stdout.splitlines():
-                    # Assume format: "service-name: status (response)"
                     parts = line.split(':', 1)
                     if len(parts) == 2:
                         name = parts[0].strip()
@@ -1113,7 +1115,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: Backup Verifier ----------
     def get_backup_verifier(self):
-        """Run backup-verifier.sh and capture result."""
         result = {'result': 'N/A', 'output': ''}
         script = os.path.join(SCRIPT_DIR, 'backup-verifier.sh')
         if os.path.exists(script):
@@ -1136,7 +1137,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- NEW: Cloud Backup ----------
     def get_cloud_backup(self):
-        """Run cloud-backup.sh and parse status."""
         result = {'status': 'N/A', 'lastSync': 'N/A', 'size': 'N/A', 'output': ''}
         script = os.path.join(SCRIPT_DIR, 'cloud-backup.sh')
         if os.path.exists(script):
@@ -1173,7 +1173,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             logging.error(f"GET error: {e}")
 
-    # ---------- POST /api/run (extended for new scripts) ----------
+    # ---------- POST /api/run ----------
     def do_POST(self):
         if self.path == '/api/run':
             try:
@@ -1189,7 +1189,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     'diskcheck': 'disk-sentinel.sh',
                     'speedtest': 'speedtest-cli',
                     'cloudbackup': 'cloud-backup.sh',
-                    # add more as needed
                 }
 
                 if script == 'speedtest':
@@ -1355,7 +1354,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             stats['lastMove'] = ''
             stats['organizerLog'] = ''
 
-        # Disk alerts (from disk-sentinel.log, but we'll also have a separate card)
+        # Disk alerts (from disk-sentinel.log)
         disk_log = os.path.join(LOG_DIR, 'disk-sentinel.log')
         if os.path.exists(disk_log):
             with open(disk_log) as f:
@@ -1454,7 +1453,7 @@ def run_server():
     handler = Handler
     with socketserver.TCPServer((HOST, PORT), handler) as httpd:
         httpd.allow_reuse_address = True
-        logging.info(f"Serving dashboard at http://{HOST}:{PORT} (accessible from network)")
+        logging.info(f"Serving dashboard at http://{HOST}:{PORT}")
         print(f"Serving dashboard at http://{HOST}:{PORT}")
         try:
             httpd.serve_forever()
@@ -1463,23 +1462,33 @@ def run_server():
             httpd.shutdown()
 
 if __name__ == '__main__':
-    with open(os.environ.get('PID_FILE', '/tmp/noba-web-server.pid'), 'w') as f:
+    with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
     run_server()
 EOF
 
 # -------------------------------------------------------------------
-# Clean up and start
+# Start the server
 # -------------------------------------------------------------------
 kill_server
 
 export PORT
+export HOST
 export PID_FILE="$SERVER_PID_FILE"
 cd "$HTML_DIR"
+
+# Start server in background with nohup
 nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > "$SERVER_PID_FILE"
 
-log_info "Web dashboard started on http://0.0.0.0:$PORT (accessible from network)"
-log_info "Log file: $LOG_FILE"
-log_info "Use '$0 --kill' to stop the server."
+# Wait a moment to ensure server started
+sleep 1
+if kill -0 "$SERVER_PID" 2>/dev/null; then
+    log_success "Web dashboard started on http://$HOST:$PORT"
+    log_info "Log file: $LOG_FILE"
+    log_info "Use '$0 --kill' to stop the server."
+else
+    log_error "Server failed to start. Check log: $LOG_FILE"
+    exit 1
+fi
