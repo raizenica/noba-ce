@@ -297,7 +297,9 @@ if [ "$GUI" = true ]; then
             kdialog --error "No files selected."
 # shellcheck disable=SC2317
             exit 1
+# shellcheck disable=SC2317
         fi
+# shellcheck disable=SC2317
     fi
 fi
 

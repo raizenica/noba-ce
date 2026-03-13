@@ -68,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+# shellcheck source=/dev/null
 
 # Load config if exists
 # shellcheck source=/dev/null
@@ -76,8 +77,10 @@ done
 if ! command -v rclone &>/dev/null; then
     log_error "rclone not installed."
     exit 1
+# shellcheck disable=SC2086
 fi
 
+# shellcheck disable=SC2086
 log_info "Syncing $LOCAL_BACKUP_DIR → $REMOTE_PATH"
 # shellcheck disable=SC2086
 rclone sync "$LOCAL_BACKUP_DIR" "$REMOTE_PATH" $RCLONE_OPTS $DRY_RUN

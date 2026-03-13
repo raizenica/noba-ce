@@ -50,6 +50,7 @@ set -o pipefail
 # shellcheck source=/dev/null
 if [ -f "$HOME/.config/automation.conf" ]; then
     source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
 fi
 
 # Defaults (can be overridden by config file)
@@ -210,6 +211,7 @@ done
 
 # -------------------------------------------------------------------
 # Pre-flight checks and setup
+# shellcheck disable=SC2119
 # shellcheck disable=SC2119
 # -------------------------------------------------------------------
 check_deps

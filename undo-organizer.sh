@@ -66,6 +66,7 @@ fi
 
 # Count entries
 count=$(wc -l < "$UNDO_LOG")
+# shellcheck disable=SC2034
 echo "This will undo the last download organizer run, moving $count file(s) back."
 
 if [ "$FORCE" = false ]; then
