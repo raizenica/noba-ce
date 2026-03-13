@@ -1,213 +1,17 @@
-
-# Quick help before anything else
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-    echo "Usage: $(basename "$0") [FILE...]"
-    echo "Generate checksums for files."
-    exit 0
-fi
-if [[ "$1" == "--version" || "$1" == "-v" ]]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/noba-lib.sh"
 # checksum.sh – Generate or verify checksums with multiple algorithms, recursive manifests, and progress
-
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
-
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
 
 set -u
 set -o pipefail
 shopt -s nullglob
 
+# Source the shared library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/noba-lib.sh"
+
 # -------------------------------------------------------------------
 # Configuration and defaults
 # -------------------------------------------------------------------
-
-# Source central config if available
-# shellcheck source=/dev/null
-if [ -f "$HOME/.config/automation.conf" ]; then
-fi
 
 # Defaults
 ALGO="sha256"
@@ -291,34 +95,10 @@ algo_to_ext() {
     esac
 }
 
-# Check required commands
-check_deps() {
-    local missing=()
-    for cmd in find sort wc mktemp dirname cut printf; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing+=("$cmd")
-        fi
-    done
-    # Checksum command will be checked later based on selected algorithm
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "ERROR: Missing required commands: ${missing[*]}" >&2
-        exit 1
-    fi
-}
+# Check required commands (already in noba-lib, but we can add specific ones)
+# We'll reuse check_deps from noba-lib
 
-# Logging (quiet‑aware)
-log() {
-    if [ "$QUIET" = false ]; then
-        echo "$@"
-    fi
-}
-
-# shellcheck disable=SC2329
-vlog() {
-    if [ "$VERBOSE" = true ] && [ "$QUIET" = false ]; then
-        echo "[VERBOSE]" "$@"
-    fi
-}
+# Logging (quiet‑aware) – already in noba-lib
 
 # Progress display (simple file counter)
 progress_start() {
@@ -477,7 +257,8 @@ done
 # -------------------------------------------------------------------
 # Pre-flight checks
 # -------------------------------------------------------------------
-check_deps
+# Use check_deps from noba-lib? We'll just ensure needed commands exist.
+# We'll check for the algorithm command later.
 
 # Validate algorithm and command
 CMD=$(algo_to_cmd "$ALGO")
@@ -504,7 +285,6 @@ if [ "$GUI" = true ]; then
     fi
     # If no files provided, launch file picker
     if [ ${#FILES[@]} -eq 0 ]; then
-        # Ask for files/directories (multi-select)
         # shellcheck disable=SC2207
         IFS=$'\n' read -d '' -r -a FILES < <(kdialog --getopenfilename --multiple --separate-output "$HOME" "All Files (*)" 2>/dev/null)
         if [ ${#FILES[@]} -eq 0 ]; then
@@ -517,9 +297,7 @@ fi
 # If no files and not reading from stdin, error
 if [ ${#FILES[@]} -eq 0 ] && [ -t 0 ]; then
     echo "ERROR: No files specified and no input from stdin." >&2
-# shellcheck disable=SC2317
     usage
-# shellcheck disable=SC2317
     exit 1
 fi
 
@@ -595,11 +373,8 @@ while IFS= read -r item; do
         find_args=()
         [ "$FOLLOW_SYMLINKS" = true ] && find_args+=(-L)
         [ "$INCLUDE_HIDDEN" = false ] && find_args+=(! -name ".*")
-        # Use process substitution to avoid subshell issues
         while IFS= read -r -d '' file; do
             if [ "$VERIFY" = true ]; then
-                # For directories, we assume checksum files inside; but we'd need to find them.
-                # Simplified: just process each checksum file if it matches the pattern.
                 if [[ "$file" == *.md5 || "$file" == *.sha1 || "$file" == *.sha256 || "$file" == *.sha512 || "$file" == *.b2 || "$file" == *.crc ]]; then
                     if ! verify_one "$file" "$CMD"; then
                         mark_error
@@ -625,18 +400,6 @@ while IFS= read -r item; do
             fi
         else
             if generate_one "$item" "$CMD" | while IFS= read -r line; do
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
-            if [ $? -ne 0 ]; then mark_error; fi
                 formatted=$(format_output "$ALGO" "${line%% *}" "${line#*  }")
                 write_hash "$formatted"
             done; then
