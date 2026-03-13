@@ -9,12 +9,10 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # Load configuration (once is enough)
 load_config
 if [ "$CONFIG_LOADED" = true ]; then
-    # Override defaults with config values (script-specific)
-    # You can add dashboard‑specific configs here later
     :
 fi
 
-# Colors (already in noba-lib.sh, but redefined here for convenience)
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -53,7 +51,6 @@ disk_usage() {
     section "Disk Usage"
     df -h | grep -E '^/dev/' | while read -r line; do
         read -r _ size used _ use_percent mount <<< "$line"
-        # Skip snap mounts
         if [[ "$mount" == /var/lib/snapd/snap/* ]]; then
             continue
         fi
@@ -69,7 +66,7 @@ disk_usage() {
     done
 }
 
-# Last backup status – clean, with timestamp and stripped ANSI codes
+# Last backup status
 backup_status() {
     section "Backup"
     if [ ! -f "$BACKUP_LOG" ]; then
@@ -77,10 +74,8 @@ backup_status() {
         return
     fi
 
-    # Find the most recent line indicating a real backup completion
-    last_complete=$(grep -E "Backup finished" "$BACKUP_LOG" | tail -1)
+    last_complete=$(grep -E "Backup finished" "$BACKUP_LOG" 2>/dev/null | tail -1 || true)
     if [ -n "$last_complete" ]; then
-        # Extract timestamp (format: "========== Backup finished at YYYY-MM-DD HH:MM:SS ==========")
         timestamp=$(echo "$last_complete" | sed -n 's/.*at \(.*\) =.*/\1/p')
         if [ -n "$timestamp" ]; then
             echo "  Last backup: ${GREEN}${timestamp}${NC}"
@@ -90,7 +85,6 @@ backup_status() {
         status="${GREEN}✓ OK${NC}"
         echo "  Status      : $status"
     else
-        # No completed backup; show last log line (stripped) if log exists and is non-empty
         if [ -s "$BACKUP_LOG" ]; then
             last_line=$(strip_ansi "$(tail -1 "$BACKUP_LOG" 2>/dev/null || true)")
         else
@@ -118,7 +112,7 @@ organizer_status() {
     section "Download Organizer"
     if [ -f "$ORGANIZER_LOG" ]; then
         moved=$(grep -c "Moved:" "$ORGANIZER_LOG" 2>/dev/null || echo 0)
-        last_move=$(grep "Moved:" "$ORGANIZER_LOG" | tail -1 | sed 's/.*Moved: //')
+        last_move=$(grep "Moved:" "$ORGANIZER_LOG" 2>/dev/null | tail -1 | sed 's/.*Moved: //' || true)
         echo "  Files moved: $moved"
         if [ -n "$last_move" ]; then
             echo "  Last move  : $last_move"
@@ -136,7 +130,7 @@ organizer_status() {
 disk_alerts() {
     section "Disk Sentinel"
     if [ -f "$DISK_LOG" ]; then
-        warnings=$(grep -E "WARNING|exceeded" "$DISK_LOG" | tail -3)
+        warnings=$(grep -E "WARNING|exceeded" "$DISK_LOG" 2>/dev/null | tail -3 || true)
         if [ -n "$warnings" ]; then
             echo "  Recent alerts:"
             echo "$warnings" | while read -r line; do
@@ -168,13 +162,12 @@ pending_downloads() {
     fi
 }
 
-# Updates – safely handle dnf's non‑zero exit code
+# Updates
 updates_status() {
     section "Updates"
     dnf_updates=0
     flatpak_updates=0
     if command -v dnf &>/dev/null; then
-        # dnf check-update may exit with 100 when updates exist, so we ignore exit status
         dnf_output=$(dnf check-update -q 2>/dev/null || true)
         dnf_updates=$(echo "$dnf_output" | wc -l)
         echo "  DNF updates : $dnf_updates"
@@ -188,7 +181,7 @@ updates_status() {
     fi
 }
 
-# Main – clear only if stdout is a terminal
+# Main
 if [ -t 1 ]; then
     clear 2>/dev/null || true
 fi

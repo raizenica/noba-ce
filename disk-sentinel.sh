@@ -58,6 +58,8 @@ show_version() {
     source "$HOME/.config/automation.conf"
     source "$HOME/.config/automation.conf"
     source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
 
 show_help() {
     cat <<EOF
@@ -209,7 +211,9 @@ for target in "${TARGETS[@]}"; do
             elif command -v pacman &>/dev/null; then
                 run_sudo "cleaning pacman cache" pacman -Sc --noconfirm
             fi
+# shellcheck disable=SC2119
 
+# shellcheck disable=SC2119
             # User cache (no sudo)
 # shellcheck disable=SC2119
             log_info "Cleaning ~/.cache..."
