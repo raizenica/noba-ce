@@ -1,34 +1,122 @@
 #!/bin/bash
 # noba – Central command for Nobara automation suite
+# Version: 2.2.0
 
-set -u
-set -o pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/noba-lib.sh"
+
+# Source library for logging and config parsing
+if [ -f "$SCRIPT_DIR/noba-lib.sh" ]; then
+    source "$SCRIPT_DIR/noba-lib.sh"
+else
+    echo -e "\033[0;31m[ERROR]\033[0m Cannot find noba-lib.sh in $SCRIPT_DIR" >&2
+    exit 1
+fi
+
+# -------------------------------------------------------------------
+# Alias Mapping
+# -------------------------------------------------------------------
+# Map short, easy-to-type commands to their actual script filenames
+declare -A ALIASES=(
+    ["backup"]="backup-to-nas.sh"
+    ["verify"]="backup-verifier.sh"
+    ["cloud"]="cloud-backup.sh"
+    ["checksum"]="checksum.sh"
+    ["disk"]="disk-sentinel.sh"
+    ["organize"]="organize-downloads.sh"
+    ["undo"]="undo-organizer.sh"
+    ["web"]="noba-web.sh"
+    ["report"]="system-report.sh"
+    ["digest"]="noba-daily-digest.sh"
+    ["watch"]="service-watch.sh"
+    ["tui"]="noba-tui.sh"
+    ["update"]="noba-update.sh"
+    ["motd"]="motd-generator.sh"
+    ["cron"]="noba-cron-setup.sh"
+    ["doctor"]="config-check.sh"
+)
+
+# -------------------------------------------------------------------
+# Core Functions
+# -------------------------------------------------------------------
+show_version() {
+    echo "Nobara Automation Suite (noba) version 2.2.0"
+    exit 0
+}
 
 show_help() {
     cat <<EOF
 Usage: noba <command> [options]
 
-Commands:
-  setup         Run the setup script (check dependencies, install packages, create config, set up timers)
+Core Commands:
+  setup         Run the initial setup and dependency checks
   config        View or edit the unified configuration
-  list          List all available scripts
-  doctor        Run system diagnostics (config-check.sh)
-  run <script>  Directly run a script (e.g., noba run backup)
-  help          Show this help
+  list          List all available automation scripts and aliases
+  doctor        Run system diagnostics and configuration checks
+  help          Show this help message
   version       Show version information
 
-For script-specific help, use noba run <script> --help.
+Script Execution:
+  You can run scripts directly via their alias or filename:
+  noba backup --dry-run
+  noba web --port 8080
+  noba disk-sentinel.sh --verbose
+
+For script-specific help, use: noba <command> --help
 EOF
 }
 
-show_version() {
-    echo "Nobara Automation Suite version 1.0"
-    exit 0
+cmd_list() {
+    echo "Available commands and aliases:"
+    echo "-------------------------------"
+    printf " %-15s | %s\n" "ALIAS" "SCRIPT"
+    printf " %-15s | %s\n" "---------------" "------------------------"
+
+    # Sort and print aliases
+    for alias in $(echo "${!ALIASES[@]}" | tr ' ' '\n' | sort); do
+        printf " %-15s | %s\n" "$alias" "${ALIASES[$alias]}"
+    done
+
+    echo ""
+    echo "Other scripts in directory (can be run directly via 'noba <script.sh>'):"
+    for script in "$SCRIPT_DIR"/*.sh; do
+        base_name=$(basename "$script")
+        # Ignore core/library scripts and scripts already in the alias list
+        if [[ "$base_name" != "noba-lib.sh" ]] && \
+           [[ "$base_name" != "noba-setup.sh" ]] && \
+           [[ "$base_name" != "noba-completion.sh" ]] && \
+           ! printf "%s\n" "${ALIASES[@]}" | grep -qx "$base_name"; then
+            echo " - $base_name"
+        fi
+    done
 }
 
+cmd_config() {
+    local conf_file="$HOME/.config/noba/config.yaml"
+    if [ ! -f "$conf_file" ]; then
+        log_warn "Config file not found. Run 'noba setup' to create a default."
+        exit 1
+    fi
+
+    if [ $# -eq 0 ]; then
+        # Show config
+        log_info "Displaying current configuration ($conf_file):"
+        echo "---------------------------------------------------"
+        cat "$conf_file"
+    elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
+        # Edit with default editor
+        ${EDITOR:-nano} "$conf_file"
+    else
+        log_error "Unknown option: $1"
+        echo "Usage: noba config [--edit]"
+        exit 1
+    fi
+}
+
+# -------------------------------------------------------------------
+# Main Router
+# -------------------------------------------------------------------
 if [ $# -eq 0 ]; then
     show_help
     exit 1
@@ -37,64 +125,19 @@ fi
 cmd="$1"
 shift
 
+# Route Core Commands
 case "$cmd" in
     setup)
-        "$SCRIPT_DIR/noba-setup.sh" "$@"
+        exec "$SCRIPT_DIR/setup-automation-timers.sh" "$@"
         ;;
     config)
-        if [ ! -f "$HOME/.config/noba/config.yaml" ]; then
-            log_warn "Config file not found. Run 'noba setup' to create a default."
-            exit 1
-        fi
-        if [ $# -eq 0 ]; then
-            # Show config
-            cat "$HOME/.config/noba/config.yaml"
-        elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
-            # Edit with default editor
-            ${EDITOR:-nano} "$HOME/.config/noba/config.yaml"
-        else
-            log_error "Unknown option: $1"
-            echo "Usage: noba config [--edit]"
-        fi
+        cmd_config "$@"
         ;;
     list)
-        echo "Available scripts in $SCRIPT_DIR:"
-        for script in "$SCRIPT_DIR"/*.sh; do
-            if [[ "$script" != *"noba-lib.sh" ]] && [[ "$script" != *"noba-setup.sh" ]]; then
-                basename "$script" .sh
-            fi
-        done
+        cmd_list
         ;;
     doctor)
-        "$SCRIPT_DIR/config-check.sh" "$@"
-        ;;
-    run)
-        if [ $# -eq 0 ]; then
-            log_error "No script specified. Usage: noba run <script>"
-            exit 1
-        fi
-        script="$1"
-        shift
-        # Map common names to actual script names
-        case "$script" in
-            backup)      script_file="backup-to-nas.sh" ;;
-            verify)      script_file="backup-verifier.sh" ;;
-            checksum)    script_file="checksum.sh" ;;
-            disk)        script_file="disk-sentinel.sh" ;;
-            images2pdf)  script_file="images-to-pdf.sh" ;;
-            organize)    script_file="organize-downloads.sh" ;;
-            undo)        script_file="undo-organizer.sh" ;;
-            motd)        script_file="motd-generator.sh" ;;
-            dashboard)   script_file="noba-dashboard.sh" ;;
-            web)         script_file="noba-web.sh" ;;
-            *)           script_file="$script" ;;
-        esac
-        full_path="$SCRIPT_DIR/$script_file"
-        if [ ! -x "$full_path" ]; then
-            log_error "Script '$script_file' not found or not executable."
-            exit 1
-        fi
-        exec "$full_path" "$@"
+        exec "$SCRIPT_DIR/config-check.sh" "$@"
         ;;
     help|--help|-h)
         show_help
@@ -102,9 +145,42 @@ case "$cmd" in
     version|--version|-v)
         show_version
         ;;
-    *)
-        log_error "Unknown command: $cmd"
-        show_help
-        exit 1
+    run)
+        # Legacy catch for if you accidentally type `noba run backup`
+        if [ $# -eq 0 ]; then
+            log_error "No script specified. Usage: noba <script>"
+            exit 1
+        fi
+        cmd="$1"
+        shift
         ;;
 esac
+
+# Route Script Execution (Implicit Run)
+script_target=""
+
+# Check if it's a known alias
+if [[ -n "${ALIASES[$cmd]:-}" ]]; then
+    script_target="${ALIASES[$cmd]}"
+# Check if they typed the exact .sh file name
+elif [ -f "$SCRIPT_DIR/$cmd" ] && [[ "$cmd" == *.sh ]]; then
+    script_target="$cmd"
+# Check if they typed the name without .sh
+elif [ -f "$SCRIPT_DIR/$cmd.sh" ]; then
+    script_target="$cmd.sh"
+else
+    log_error "Unknown command or script: $cmd"
+    echo "Use 'noba list' to see available commands."
+    exit 1
+fi
+
+# Execute the target script
+full_path="$SCRIPT_DIR/$script_target"
+
+if [ ! -x "$full_path" ]; then
+    log_warn "Script '$script_target' is not executable. Fixing permissions..."
+    chmod +x "$full_path" || die "Failed to make '$script_target' executable."
+fi
+
+# Replace the wrapper process entirely with the target script
+exec "$full_path" "$@"
