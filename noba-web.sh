@@ -1,113 +1,48 @@
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/noba-lib.sh"
-# noba-web.sh – Modern dashboard with instant startup and background updates
+# noba-web.sh – Interactive web dashboard (Python required)
 
 set -u
 set -o pipefail
 
 PORT="${1:-8080}"
 HTML_DIR="/tmp/noba-web"
-HTML_FILE="$HTML_DIR/index.html"
 PID_FILE="/tmp/noba-web.pid"
 LOG_FILE="/tmp/noba-web.log"
 
-mkdir -p "$HTML_DIR" || { echo "Failed to create $HTML_DIR"; exit 1; }
+mkdir -p "$HTML_DIR"
+
+# Check if port is already in use
+if ss -tuln | grep -q ":$PORT "; then
+    echo "Port $PORT is already in use. Attempting to kill the process..."
+    # Find the PID using the port (requires root for some ports, but 8080 is user)
+    pid=$(lsof -ti :$PORT 2>/dev/null)
+    if [ -n "$pid" ]; then
+        kill "$pid" && echo "Killed process $pid"
+        sleep 1
+    else
+        echo "Could not find process. Please free port $PORT manually."
+        exit 1
+    fi
+fi
 
 # Stop previous instance
 if [ -f "$PID_FILE" ]; then
-    old_pid=$(cat "$PID_FILE")
-    if kill -0 "$old_pid" 2>/dev/null; then
-        echo "Stopping old server (PID $old_pid)..."
-        kill "$old_pid" && sleep 1
-    fi
+    kill "$(cat "$PID_FILE")" 2>/dev/null && echo "Stopped old server."
     rm -f "$PID_FILE"
 fi
 
-# Create a minimal placeholder page (so server has something to serve)
-cat > "$HTML_FILE" <<EOF
-<!DOCTYPE html>
-<html>
-<head><title>Loading Nobara Dashboard...</title></head>
-<body><h1>Dashboard is loading...</h1></body>
-</html>
-EOF
-
-# Start the HTTP server in background and detach
-cd "$HTML_DIR" || exit 1
-nohup python3 -m http.server "$PORT" >> "$LOG_FILE" 2>&1 &
-SERVER_PID=$!
-disown $SERVER_PID
-echo $SERVER_PID > "$PID_FILE"
-
-# Start the background updater (with timeouts for slow commands)
-(
-    # Helper functions (copied inside for nohup)
-    get_dnf_updates()    { timeout 5 dnf check-update -q 2>/dev/null | wc -l; }
-    get_flatpak_updates() { timeout 5 flatpak remote-ls --updates 2>/dev/null | wc -l; }
-    get_cpu_temp() {
-        if command -v sensors &>/dev/null; then
-            sensors 2>/dev/null | grep -E "Package id 0|Core" | awk '{print $3}' | sed 's/+//;s/°C//' | sort -nr | head -1
-        else
-            echo "N/A"
-        fi
-    }
-    get_memory_usage() {
-        free -h | awk '/^Mem:/ {printf "%s/%s (%.0f%%)", $3, $2, $3/$2*100}'
-    }
-    get_uptime() {
-        uptime -p | sed 's/up //'
-    }
-    get_loadavg() {
-        uptime | awk -F'load average:' '{print $2}'
-    }
-
-    while true; do
-        # Generate full page with data
-        dnf_updates=$(get_dnf_updates)
-        flatpak_updates=$(get_flatpak_updates)
-        cpu_temp=$(get_cpu_temp)
-        mem_usage=$(get_memory_usage)
-        uptime=$(get_uptime)
-        loadavg=$(get_loadavg)
-
-        disk_usage=$(df -h | grep '^/dev/' | grep -v snap | grep -v loop)
-
-        backup_log="$HOME/.local/share/backup-to-nas.log"
-        if [ -f "$backup_log" ]; then
-            last_backup=$(tail -5 "$backup_log" | grep -E "Backup finished|ERROR" | tail -1)
-            if echo "$last_backup" | grep -q "ERROR"; then
-                backup_status="❌ Failed"
-            elif echo "$last_backup" | grep -q "Backup finished"; then
-                backup_status="✅ OK"
-            else
-                backup_status="❓ Unknown"
-            fi
-            backup_time=$(tail -1 "$backup_log" | cut -d' ' -f1-2)
-        else
-            backup_status="No log"
-            backup_time=""
-        fi
-
-        organizer_log="$HOME/.local/share/download-organizer.log"
-        if [ -f "$organizer_log" ]; then
-            moved_files=$(grep -c "Moved:" "$organizer_log" 2>/dev/null || echo 0)
-            last_move=$(grep "Moved:" "$organizer_log" | tail -1 | sed 's/.*Moved: //')
-        else
-            moved_files=0
-            last_move="Never"
-        fi
-
-        # Build the HTML
-        cat > "$HTML_FILE" <<EOF
+# Generate the main HTML page
+cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Nobara Dashboard</title>
+    <title>Nobara Interactive Dashboard</title>
     <meta http-equiv="refresh" content="60">
+    <!-- Font Awesome & Alpine.js for reactivity -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <style>
         :root {
             --bg: #1a1e24;
@@ -212,92 +147,441 @@ echo $SERVER_PID > "$PID_FILE"
             color: var(--text-muted);
             font-size: 0.9rem;
         }
+        .button-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .btn {
+            background: #2e3843;
+            border: none;
+            color: var(--text);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #3a4452; }
+        .btn-primary { background: var(--accent); }
+        .btn-primary:hover { background: #2563eb; }
+        .modal {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: var(--card);
+            padding: 2rem;
+            border-radius: 1rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .modal-close {
+            cursor: pointer;
+            font-size: 1.5rem;
+        }
+        .loading {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid var(--text-muted);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-<div class="container">
-    <h1><i class="fas fa-chart-line"></i> Nobara System Dashboard</h1>
-    <div class="timestamp"><i class="far fa-clock"></i> Last updated: $(date)</div>
+<div class="container" x-data="dashboard()" x-init="init()">
+    <h1><i class="fas fa-chart-line"></i> Nobara Interactive Dashboard</h1>
+    <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
 
     <div class="grid">
+        <!-- System Health Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
-            <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value">$uptime</span></div>
-            <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value">$loadavg</span></div>
-            <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value">$mem_usage</span></div>
+            <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
+            <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
+            <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
             <div class="stat-row"><span class="stat-label">CPU Temp</span>
-                <span class="stat-value $(awk -v t="$cpu_temp" 't>80 {print "danger"} t>60 {print "warning"}')">${cpu_temp}°C</span>
+                <span class="stat-value" :class="tempClass" x-text="cpuTemp + '°C'"></span>
             </div>
         </div>
 
+        <!-- Backup Status Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-database"></i> Backup</div>
             <div class="stat-row"><span class="stat-label">Last backup</span>
-                <span class="stat-value $( [ "$backup_status" = "✅ OK" ] && echo "success" )">$backup_status</span>
+                <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
             </div>
-            <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value">$backup_time</span></div>
-            <pre>$(tail -3 "$backup_log" 2>/dev/null || echo "No log")</pre>
+            <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
+            <pre x-text="backupLog"></pre>
+            <div class="button-grid">
+                <button class="btn btn-primary" @click="runScript('backup')"><i class="fas fa-play"></i> Run Backup</button>
+                <button class="btn" @click="runScript('verify')"><i class="fas fa-check"></i> Verify</button>
+            </div>
         </div>
 
+        <!-- Updates Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
-            <div class="stat-row"><span class="stat-label">DNF</span>
-                <span class="stat-value $( [ "$dnf_updates" -gt 0 ] && echo "warning" )">$dnf_updates available</span>
-            </div>
-            <div class="stat-row"><span class="stat-label">Flatpak</span>
-                <span class="stat-value $( [ "$flatpak_updates" -gt 0 ] && echo "warning" )">$flatpak_updates available</span>
-            </div>
-            <div class="stat-row"><span class="stat-label">Total</span>
-                <span class="stat-value">$((dnf_updates + flatpak_updates)) pending</span>
-            </div>
+            <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
+            <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
+            <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
         </div>
 
+        <!-- Disk Usage Card -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
-            $(echo "$disk_usage" | while read -r line; do
-                if [ -n "$line" ]; then
-                    percent=$(echo "$line" | awk '{print $5}' | sed 's/%//')
-                    mount=$(echo "$line" | awk '{print $6}')
-                    if [ "$percent" -ge 90 ]; then bar_class="danger"
-                    elif [ "$percent" -ge 75 ]; then bar_class="warning"
-                    else bar_class="success"
-                    fi
-                    echo '<div class="disk-item">'
-                    echo "  <span style=\"min-width:80px;\">${mount}</span>"
-                    echo '  <div class="disk-bar"><div class="disk-bar-fill" style="width:'"$percent"'; background: var(--'"$bar_class"');"></div></div>'
-                    echo "  <span class=\"disk-percent\">${percent}%</span>"
-                    echo '</div>'
-                fi
-            done)
+            <template x-for="disk in disks" :key="disk.mount">
+                <div class="disk-item">
+                    <span style="min-width:80px;" x-text="disk.mount"></span>
+                    <div class="disk-bar">
+                        <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
+                    </div>
+                    <span class="disk-percent" x-text="disk.percent+'%'"></span>
+                </div>
+            </template>
         </div>
 
+        <!-- Download Organizer Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
-            <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value">$moved_files</span></div>
-            <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value">$(echo "$last_move" | cut -c1-50)…</span></div>
-            <pre>$(tail -3 "$organizer_log" 2>/dev/null || echo "No log")</pre>
+            <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
+            <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
+            <pre x-text="organizerLog"></pre>
+            <div class="button-grid">
+                <button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button>
+            </div>
         </div>
 
+        <!-- Disk Sentinel Card -->
         <div class="card">
-            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Recent Alerts</div>
-            <pre>$(grep -E "WARNING|ERROR" "$HOME/.local/share/disk-sentinel.log" 2>/dev/null | tail -5 || echo "No recent alerts")</pre>
+            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
+            <pre x-text="diskAlerts"></pre>
+            <div class="button-grid">
+                <button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for script output -->
+    <div x-show="showModal" class="modal" @click.self="showModal=false">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 x-text="modalTitle"></h2>
+                <span class="modal-close" @click="showModal=false">&times;</span>
+            </div>
+            <pre x-text="modalOutput" style="white-space: pre-wrap;"></pre>
+            <div class="button-grid" style="justify-content: flex-end;">
+                <button class="btn" @click="showModal=false">Close</button>
+            </div>
         </div>
     </div>
 
     <div class="footer">
-        <i class="fas fa-sync-alt"></i> Auto‑refreshes every minute • noba-web.sh
+        <i class="fas fa-sync-alt"></i> Auto‑refreshes every minute • <button class="btn" @click="refreshStats"><i class="fas fa-redo"></i> Refresh Now</button>
     </div>
 </div>
+
+<script>
+function dashboard() {
+    return {
+        timestamp: '',
+        uptime: '',
+        loadavg: '',
+        memory: '',
+        cpuTemp: '',
+        tempClass: '',
+        backupStatus: '',
+        backupClass: '',
+        backupTime: '',
+        backupLog: '',
+        dnfUpdates: 0,
+        flatpakUpdates: 0,
+        disks: [],
+        movedFiles: 0,
+        lastMove: '',
+        organizerLog: '',
+        diskAlerts: '',
+        showModal: false,
+        modalTitle: '',
+        modalOutput: '',
+        runningScript: false,
+
+        async init() {
+            await this.refreshStats();
+            setInterval(() => this.refreshStats(), 60000);
+        },
+
+        async refreshStats() {
+            const response = await fetch('/api/stats');
+            const data = await response.json();
+            this.timestamp = data.timestamp;
+            this.uptime = data.uptime;
+            this.loadavg = data.loadavg;
+            this.memory = data.memory;
+            this.cpuTemp = data.cpuTemp;
+            this.tempClass = data.cpuTemp > 80 ? 'danger' : data.cpuTemp > 60 ? 'warning' : '';
+            this.backupStatus = data.backupStatus;
+            this.backupClass = data.backupStatus.includes('OK') ? 'success' : data.backupStatus.includes('Failed') ? 'danger' : '';
+            this.backupTime = data.backupTime;
+            this.backupLog = data.backupLog;
+            this.dnfUpdates = data.dnfUpdates;
+            this.flatpakUpdates = data.flatpakUpdates;
+            this.disks = data.disks;
+            this.movedFiles = data.movedFiles;
+            this.lastMove = data.lastMove;
+            this.organizerLog = data.organizerLog;
+            this.diskAlerts = data.diskAlerts;
+        },
+
+        async runScript(script) {
+            if (this.runningScript) return;
+            this.runningScript = true;
+            this.modalTitle = `Running ${script}...`;
+            this.modalOutput = 'Starting...';
+            this.showModal = true;
+
+            const response = await fetch('/api/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ script: script })
+            });
+            const result = await response.json();
+            this.modalOutput = result.output;
+            this.modalTitle = result.success ? '✅ Success' : '❌ Failed';
+            this.runningScript = false;
+            await this.refreshStats();  // update stats after script finishes
+        }
+    }
+}
+</script>
 </body>
 </html>
 EOF
-        echo "Page updated at $(date)" >> "$LOG_FILE"
-        sleep 60
-    done
-) >> "$LOG_FILE" 2>&1 &
-UPDATER_PID=$!
-disown $UPDATER_PID
 
-echo "✅ Server started on http://localhost:$PORT (PID $SERVER_PID)"
-echo "Dashboard is live. Use 'kill $SERVER_PID' to stop."
-exit 0
+# Generate the initial stats JSON (will be overwritten by the server)
+cat > "$HTML_DIR/stats.json" <<EOF
+{"timestamp":"$(date)","uptime":"loading...","loadavg":"","memory":"","cpuTemp":"","backupStatus":"","backupTime":"","backupLog":"","dnfUpdates":0,"flatpakUpdates":0,"disks":[],"movedFiles":0,"lastMove":"","organizerLog":"","diskAlerts":""}
+EOF
+
+# Start the Python HTTP server with custom handler
+cd "$HTML_DIR" || exit 1
+cat > server.py <<'EOF'
+import http.server
+import socketserver
+import json
+import subprocess
+import os
+from urllib.parse import urlparse
+import time
+
+PORT = int(os.environ.get('PORT', 8080))
+SCRIPT_DIR = os.path.expanduser("~/.local/bin")
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/api/stats':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            stats = self.get_stats()
+            self.wfile.write(json.dumps(stats).encode())
+        else:
+            super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/api/run':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data)
+                script = data.get('script')
+                allowed = ['backup', 'verify', 'organize', 'diskcheck']
+                if script not in allowed:
+                    raise ValueError('Invalid script')
+                # Map to actual script names
+                script_map = {
+                    'backup': 'backup-to-nas.sh',
+                    'verify': 'backup-verifier.sh',
+                    'organize': 'organize-downloads.sh',
+                    'diskcheck': 'disk-sentinel.sh'
+                }
+                script_file = os.path.join(SCRIPT_DIR, script_map[script])
+                # Run the script with timeout and capture output
+                proc = subprocess.run(
+                    [script_file, '--verbose'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    cwd=SCRIPT_DIR
+                )
+                output = proc.stdout + proc.stderr
+                success = proc.returncode == 0
+            except subprocess.TimeoutExpired:
+                output = "Script timed out after 120 seconds."
+                success = False
+            except Exception as e:
+                output = f"Error: {str(e)}"
+                success = False
+            result = {'success': success, 'output': output}
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def get_stats(self):
+        # Collect system stats
+        stats = {}
+        stats['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            # Uptime
+            with open('/proc/uptime') as f:
+                uptime_seconds = float(f.read().split()[0])
+                hours = int(uptime_seconds // 3600)
+                minutes = int((uptime_seconds % 3600) // 60)
+                stats['uptime'] = f"{hours}h {minutes}m"
+        except:
+            stats['uptime'] = 'N/A'
+
+        # Load average
+        try:
+            with open('/proc/loadavg') as f:
+                stats['loadavg'] = f.read().split()[0]
+        except:
+            stats['loadavg'] = 'N/A'
+
+        # Memory
+        try:
+            mem = subprocess.check_output(['free', '-h'], text=True).split('\n')[1].split()
+            stats['memory'] = f"{mem[2]}/{mem[1]}"
+        except:
+            stats['memory'] = 'N/A'
+
+        # CPU temp
+        try:
+            temp = subprocess.check_output(['sensors'], text=True)
+            import re
+            match = re.search(r'Package id 0:\s+\+([0-9.]+)°C', temp)
+            if match:
+                stats['cpuTemp'] = float(match.group(1))
+            else:
+                stats['cpuTemp'] = 0
+        except:
+            stats['cpuTemp'] = 0
+
+        # Backup status
+        backup_log = os.path.expanduser('~/.local/share/backup-to-nas.log')
+        try:
+            with open(backup_log) as f:
+                lines = f.readlines()
+                last_line = lines[-1] if lines else ''
+                if 'ERROR' in last_line:
+                    stats['backupStatus'] = '❌ Failed'
+                elif 'Backup finished' in last_line:
+                    stats['backupStatus'] = '✅ OK'
+                else:
+                    stats['backupStatus'] = '❓ Unknown'
+                stats['backupTime'] = last_line[:16] if last_line else ''
+                stats['backupLog'] = ''.join(lines[-3:])
+        except:
+            stats['backupStatus'] = 'No log'
+            stats['backupTime'] = ''
+            stats['backupLog'] = 'No backup log'
+
+        # Updates
+        try:
+            dnf = subprocess.run(['dnf', 'check-update', '-q'], capture_output=True, text=True, timeout=10)
+            stats['dnfUpdates'] = len(dnf.stdout.strip().split('\n')) if dnf.stdout.strip() else 0
+        except:
+            stats['dnfUpdates'] = 0
+        try:
+            flatpak = subprocess.run(['flatpak', 'remote-ls', '--updates'], capture_output=True, text=True, timeout=10)
+            stats['flatpakUpdates'] = len(flatpak.stdout.strip().split('\n')) if flatpak.stdout.strip() else 0
+        except:
+            stats['flatpakUpdates'] = 0
+
+        # Disk usage
+        disks = []
+        try:
+            df = subprocess.check_output(['df', '-h'], text=True).split('\n')
+            for line in df[1:]:
+                if line.startswith('/dev/'):
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        mount = parts[5]
+                        if 'snap' in mount or 'loop' in mount:
+                            continue
+                        percent = parts[4].replace('%', '')
+                        try:
+                            percent = int(percent)
+                        except:
+                            continue
+                        barClass = 'success' if percent < 75 else 'warning' if percent < 90 else 'danger'
+                        disks.append({'mount': mount, 'percent': percent, 'barClass': barClass})
+        except:
+            pass
+        stats['disks'] = disks
+
+        # Download organizer
+        org_log = os.path.expanduser('~/.local/share/download-organizer.log')
+        try:
+            with open(org_log) as f:
+                lines = f.readlines()
+                moved = sum(1 for l in lines if 'Moved:' in l)
+                stats['movedFiles'] = moved
+                last_move_line = next((l for l in reversed(lines) if 'Moved:' in l), '')
+                stats['lastMove'] = last_move_line[:50] + '...' if last_move_line else 'Never'
+                stats['organizerLog'] = ''.join(lines[-3:])
+        except:
+            stats['movedFiles'] = 0
+            stats['lastMove'] = 'Never'
+            stats['organizerLog'] = 'No log'
+
+        # Disk alerts
+        disk_log = os.path.expanduser('~/.local/share/disk-sentinel.log')
+        try:
+            with open(disk_log) as f:
+                lines = f.readlines()
+                alerts = [l for l in lines if 'WARNING' in l or 'ERROR' in l]
+                stats['diskAlerts'] = ''.join(alerts[-5:]) if alerts else 'No recent alerts'
+        except:
+            stats['diskAlerts'] = 'No log'
+
+        return stats
+
+if __name__ == '__main__':
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        print(f"Serving at http://localhost:{PORT}")
+        httpd.serve_forever()
+EOF
+
+# Start the server in background
+nohup python3 server.py > "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+echo $SERVER_PID > "$PID_FILE"
+
+echo "✅ Interactive dashboard started on http://localhost:$PORT (PID $SERVER_PID)"
+echo "Use 'kill $SERVER_PID' to stop."
