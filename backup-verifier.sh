@@ -118,6 +118,7 @@ while true; do
         --checksum-cmd)       CHECKSUM_CMD="$2"; shift 2 ;;
         --temp-dir)           TEMP_DIR_BASE="$2"; shift 2 ;;
         -v|--verbose)         VERBOSE=true; shift ;;
+        # shellcheck disable=SC2034
         -q|--quiet)           QUIET=true; shift ;;
         -D|--dry-run)         DRY_RUN=true; shift ;;
         --help)               show_help ;;

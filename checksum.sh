@@ -287,13 +287,6 @@ if [ "$GUI" = true ]; then
     fi
 fi
 
-# If no files and not reading from stdin, error
-if [ ${#FILES[@]} -eq 0 ] && [ -t 0 ]; then
-    echo "ERROR: No files specified and no input from stdin." >&2
-    usage
-    exit 1
-fi
-
 # -------------------------------------------------------------------
 # Main processing
 # -------------------------------------------------------------------
