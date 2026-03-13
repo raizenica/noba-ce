@@ -202,11 +202,21 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         <!-- System Health Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
-            <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
-            <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
-            <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
-            <div class="stat-row"><span class="stat-label">CPU Temp</span>
-                <span class="stat-value" :class="tempClass" x-text="cpuTemp + '°C'"></span>
+            <div class="stat-row">
+                <span class="stat-label">Uptime</span>
+                <span class="stat-value" style="color: lime; font-weight: bold; font-size: 1.2rem;" x-text="uptime"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Load Average</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="loadavg"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Memory</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="memory"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">CPU Temp</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="cpuTemp + '°C'"></span>
             </div>
         </div>
 
@@ -215,18 +225,22 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="card-header"><i class="fas fa-microchip"></i> GPU Temperature</div>
             <div class="stat-row">
                 <span class="stat-label">GPU Temp</span>
-                <span class="stat-value" x-text="gpuTemp"></span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="gpuTemp"></span>
             </div>
         </div>
 
         <!-- Backup Status Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-database"></i> Backup</div>
-            <div class="stat-row"><span class="stat-label">Last backup</span>
-                <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
+            <div class="stat-row">
+                <span class="stat-label">Last backup</span>
+                <span class="stat-value" :class="backupClass" style="color: lime; font-weight: bold;" x-text="backupStatus"></span>
             </div>
-            <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
-            <pre x-text="backupLog"></pre>
+            <div class="stat-row">
+                <span class="stat-label">Time</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="backupTime"></span>
+            </div>
+            <pre style="color: lime; background: black;" x-text="backupLog"></pre>
             <div class="button-grid">
                 <button class="btn btn-primary" @click="runScript('backup')"><i class="fas fa-play"></i> Run Backup</button>
                 <button class="btn" @click="runScript('verify')"><i class="fas fa-check"></i> Verify</button>
@@ -236,9 +250,18 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         <!-- Updates Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
-            <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
+            <div class="stat-row">
+                <span class="stat-label">DNF</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="dnfUpdates"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Flatpak</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="flatpakUpdates"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Total</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="totalUpdates"></span>
+            </div>
         </div>
 
         <!-- Disk Usage Card -->
@@ -246,11 +269,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
             <template x-for="disk in disks" :key="disk.mount">
                 <div class="disk-item">
-                    <span style="min-width:80px;" x-text="disk.mount"></span>
+                    <span style="min-width:80px; color: lime;" x-text="disk.mount"></span>
                     <div class="disk-bar">
                         <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
                     </div>
-                    <span class="disk-percent" x-text="disk.percent+'%'"></span>
+                    <span class="disk-percent" style="color: lime;" x-text="disk.percent+'%'"></span>
                 </div>
             </template>
         </div>
@@ -258,9 +281,15 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         <!-- Download Organizer Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
-            <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
-            <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
-            <pre x-text="organizerLog"></pre>
+            <div class="stat-row">
+                <span class="stat-label">Files moved</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="movedFiles"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Last move</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="lastMove"></span>
+            </div>
+            <pre style="color: lime; background: black;" x-text="organizerLog"></pre>
             <div class="button-grid">
                 <button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button>
             </div>
@@ -269,7 +298,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         <!-- Disk Sentinel Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
-            <pre x-text="diskAlerts"></pre>
+            <pre style="color: lime; background: black;" x-text="diskAlerts"></pre>
             <div class="button-grid">
                 <button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button>
             </div>
@@ -278,11 +307,14 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         <!-- Network Stats Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
-            <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
+            <div class="stat-row">
+                <span class="stat-label">Default IP</span>
+                <span class="stat-value" style="color: lime; font-weight: bold;" x-text="defaultIp"></span>
+            </div>
             <template x-for="iface in interfaces" :key="iface.name">
                 <div class="stat-row">
                     <span class="stat-label" x-text="iface.name"></span>
-                    <span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span>
+                    <span class="stat-value" style="color: lime;" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span>
                 </div>
             </template>
             <template x-if="interfaces.length === 0">
@@ -300,7 +332,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         'success': svc.status === 'active',
                         'warning': svc.status === 'inactive',
                         'danger': svc.status === 'failed'
-                    }" x-text="svc.status"></span>
+                    }" style="color: lime;" x-text="svc.status"></span>
                 </div>
             </template>
         </div>
@@ -314,9 +346,18 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <template x-for="container in dockerContainers" :key="container">
                 <div class="stat-row">
                     <span class="stat-label" x-text="container.split('(')[0]"></span>
-                    <span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span>
+                    <span class="stat-value success" style="color: lime;" x-text="container.split('(')[1].replace(')','')"></span>
                 </div>
             </template>
+        </div>
+
+        <!-- DEBUG SECTION: Remove this later -->
+        <div style="grid-column: 1/-1; background: black; color: lime; padding: 1rem; margin-top: 1rem;">
+            <h3>Debug</h3>
+            <div>uptime = <span x-text="uptime"></span></div>
+            <div>loadavg = <span x-text="loadavg"></span></div>
+            <div>memory = <span x-text="memory"></span></div>
+            <div>cpuTemp = <span x-text="cpuTemp"></span></div>
         </div>
     </div>
 
