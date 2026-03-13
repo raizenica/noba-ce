@@ -1,5 +1,6 @@
 #!/bin/bash
 # backup-to-nas.sh – Backup important directories to NAS with retention, space check, and email report
+# Revised version with fixes and improvements
 
 set -euo pipefail
 
@@ -51,7 +52,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "backup-to-nas.sh version 2.0"
+    echo "backup-to-nas.sh version 2.1"
     exit 0
 }
 
@@ -142,8 +143,7 @@ send_email_report() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o '' -l source:,dest:,email:,dry-run,verbose,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o '' -l source:,dest:,email:,dry-run,verbose,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -171,7 +171,7 @@ if [ "$DRY_RUN" = true ] && [ ! -d "$DEST" ]; then
 fi
 
 # -------------------------------------------------------------------
-# Validate required arguments
+# Validate required arguments and dependencies
 # -------------------------------------------------------------------
 if [ ${#SOURCES[@]} -eq 0 ]; then
     log_error "At least one --source must be specified."
@@ -181,6 +181,8 @@ if [ -z "$DEST" ]; then
     log_error "Destination (--dest) is required."
     show_help
 fi
+
+check_deps rsync
 
 # Derive mount point from DEST
 MOUNT_POINT=$(df -P "$DEST" 2>/dev/null | tail -1 | awk '{print $6}')
@@ -307,6 +309,8 @@ fi
 
 # Generate email report
 EMAIL_BODY=$(mktemp)
+trap 'rm -f "$EMAIL_BODY"' EXIT
+
 if [ "$ERROR_OCCURRED" = true ]; then
     subject_prefix="❌ BACKUP FAILED"
     status_class="error"
