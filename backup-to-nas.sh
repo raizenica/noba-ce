@@ -30,10 +30,10 @@ load_config
 if [ "$CONFIG_LOADED" = true ]; then
     # Read sources array from config (if defined)
     sources_from_config=$(get_config_array ".backup.sources")
-    echo "[DEBUG] Raw sources from config: '$sources_from_config'" >&2
+log_debug "Raw sources from config: '$sources_from_config'"
     if [ -n "$sources_from_config" ]; then
         mapfile -t SOURCES <<< "$sources_from_config"
-        echo "[DEBUG] SOURCES array after mapfile: ${SOURCES[*]}" >&2
+log_debug "SOURCES array after mapfile: ${SOURCES[*]}"
     else
         echo "[DEBUG] get_config_array returned empty – no sources in config." >&2
     fi
