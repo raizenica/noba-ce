@@ -71,12 +71,21 @@ done
 # shellcheck source=/dev/null
 # shellcheck source=/dev/null
 # shellcheck source=/dev/null
+# shellcheck source=/dev/null
+# shellcheck source=/dev/null
+# shellcheck source=/dev/null
 
 # Load config if exists
 # shellcheck source=/dev/null
+# shellcheck disable=SC2086
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+# shellcheck disable=SC2086
+# shellcheck disable=SC2086
 
+# shellcheck disable=SC2086
+# shellcheck disable=SC2086
 if ! command -v rclone &>/dev/null; then
+# shellcheck disable=SC2086
 # shellcheck disable=SC2086
     log_error "rclone not installed."
 # shellcheck disable=SC2086

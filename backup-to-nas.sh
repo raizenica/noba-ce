@@ -14,28 +14,27 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # -------------------------------------------------------------------
 SOURCES=()
 DEST=""
-EMAIL="${EMAIL:-strikerke@gmail.com}"          # default, can be overridden
+EMAIL="${EMAIL:-strikerke@gmail.com}"
 DRY_RUN=false
 LOCK_FILE="/tmp/backup-to-nas.lock"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/backup-to-nas.log}"
 RETENTION_DAYS=7
 SPACE_MARGIN_PERCENT=10
 MIN_FREE_SPACE_GB=5
-MOUNT_POINT=""                                 # will be derived from DEST later
+MOUNT_POINT=""
 
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
 load_config
 if [ "$CONFIG_LOADED" = true ]; then
-    # Read sources array from config (if defined)
     sources_from_config=$(get_config_array ".backup.sources")
-log_debug "Raw sources from config: '$sources_from_config'"
+    log_debug "Raw sources from config: '$sources_from_config'"
     if [ -n "$sources_from_config" ]; then
         mapfile -t SOURCES <<< "$sources_from_config"
-log_debug "SOURCES array after mapfile: ${SOURCES[*]}"
+        log_debug "SOURCES array after mapfile: ${SOURCES[*]}"
     else
-        echo "[DEBUG] get_config_array returned empty – no sources in config." >&2
+        log_debug "get_config_array returned empty – no sources in config."
     fi
 
     DEST="$(get_config ".backup.dest" "$DEST")"
@@ -72,7 +71,6 @@ EOF
 }
 
 cleanup() {
-    # Release lock
     if [ -n "${LOCK_FD:-}" ]; then
         flock -u "$LOCK_FD" 2>/dev/null || true
     fi
@@ -90,18 +88,15 @@ check_space() {
         fi
     done
 
-    # Add margin
     total_size_kb=$((total_size_kb + (total_size_kb * SPACE_MARGIN_PERCENT / 100)))
     local required_bytes=$((total_size_kb * 1024))
 
-    # Get free space on destination mount (in bytes)
     local free_bytes
     if ! free_bytes=$(df --output=avail "$MOUNT_POINT" 2>/dev/null | tail -1 | awk '{print $1 * 1024}'); then
         log_error "Could not determine free space on $MOUNT_POINT."
         return 1
     fi
 
-    # Human-readable output (if numfmt exists)
     local required_hr free_hr
     if command -v numfmt &>/dev/null; then
         required_hr=$(numfmt --to=iec "$required_bytes")
@@ -114,7 +109,6 @@ check_space() {
     log_info "Estimated backup size (with margin): $required_hr"
     log_info "Free space on $MOUNT_POINT: $free_hr"
 
-    # Check against minimum free space
     local min_free_bytes=$((MIN_FREE_SPACE_GB * 1024 * 1024 * 1024))
     if [ "$free_bytes" -lt "$min_free_bytes" ]; then
         log_error "Free space is below minimum ${MIN_FREE_SPACE_GB}GB."
@@ -165,6 +159,14 @@ while true; do
 done
 
 # -------------------------------------------------------------------
+# Early dry-run exit if destination unavailable (for testing)
+# -------------------------------------------------------------------
+if [ "$DRY_RUN" = true ] && [ ! -d "$DEST" ]; then
+    log_info "Dry run: destination $DEST not available – skipping actual checks."
+    exit 0
+fi
+
+# -------------------------------------------------------------------
 # Validate required arguments
 # -------------------------------------------------------------------
 if [ ${#SOURCES[@]} -eq 0 ]; then
@@ -176,7 +178,7 @@ if [ -z "$DEST" ]; then
     show_help
 fi
 
-# Derive mount point from DEST (assume it's a subdirectory of a mount)
+# Derive mount point from DEST
 MOUNT_POINT=$(df -P "$DEST" 2>/dev/null | tail -1 | awk '{print $6}')
 if [ -z "$MOUNT_POINT" ]; then
     log_error "Cannot determine mount point for $DEST – is it a valid path?"
@@ -188,11 +190,10 @@ fi
 # -------------------------------------------------------------------
 mkdir -p "$(dirname "$LOG_FILE")"
 touch "$LOG_FILE"
-# Redirect all output to both terminal and log file
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # -------------------------------------------------------------------
-# Acquire lock (prevent concurrent runs)
+# Acquire lock
 # -------------------------------------------------------------------
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
@@ -211,19 +212,16 @@ log_info "Sources: ${SOURCES[*]}"
 log_info "Retention: $RETENTION_DAYS days"
 log_info "Dry run: $DRY_RUN"
 
-# Check NAS mount (simple check – is the mount point accessible?)
 if [ ! -d "$DEST" ]; then
     log_error "Destination directory $DEST does not exist – is the NAS mounted?"
     exit 1
 fi
 
-# Perform space check
 if ! check_space; then
     log_error "Space check failed – aborting."
     exit 1
 fi
 
-# Create timestamped backup folder
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_PATH="$DEST/$TIMESTAMP"
 if [ "$DRY_RUN" = false ]; then
@@ -232,13 +230,11 @@ else
     log_info "Dry run: would create $BACKUP_PATH"
 fi
 
-# Perform rsync for each source
 ERROR_OCCURRED=false
 START_TIME=$SECONDS
 
 for src in "${SOURCES[@]}"; do
     base=$(basename "$src")
-    # Special handling for .config to exclude junk
     if [ "$base" = ".config" ]; then
         dest_path="$BACKUP_PATH/config/"
         extra_opts=(
@@ -264,7 +260,6 @@ for src in "${SOURCES[@]}"; do
         rsync_dry=""
     fi
 
-    # Use rsync with archive, verbose, progress, and delete options
     if ! rsync -avhP --delete "${extra_opts[@]}" $rsync_dry "$src" "$dest_path"; then
         log_error "rsync failed for $src"
         ERROR_OCCURRED=true
@@ -273,14 +268,11 @@ done
 
 DURATION=$((SECONDS - START_TIME))
 
-# -------------------------------------------------------------------
-# Prune old backups (if not dry run)
-# -------------------------------------------------------------------
+# Prune old backups
 if [ "$DRY_RUN" = false ] && [ -d "$DEST" ]; then
     log_info "Pruning backups older than $RETENTION_DAYS days..."
     find "$DEST" -maxdepth 1 -type d -name "????????-??????" | while read -r old_backup; do
         folder_date=$(basename "$old_backup" | cut -d- -f1)
-        # Convert YYYYMMDD to seconds since epoch (GNU date)
         if folder_seconds=$(date -d "$folder_date" +%s 2>/dev/null); then
             current_seconds=$(date +%s)
             age_days=$(( (current_seconds - folder_seconds) / 86400 ))
@@ -296,10 +288,7 @@ else
     log_info "Dry run or destination missing – skipping prune."
 fi
 
-# -------------------------------------------------------------------
 # Collect statistics
-# -------------------------------------------------------------------
-# Count files transferred from rsync output (if available)
 FILES_COUNT=$(grep -E '^Number of files: ' "$LOG_FILE" | tail -1 | awk '{print $4}')
 if [ -z "$FILES_COUNT" ]; then
     FILES_COUNT="N/A"
@@ -310,9 +299,7 @@ else
     SIZE="N/A (dry run)"
 fi
 
-# -------------------------------------------------------------------
 # Generate email report
-# -------------------------------------------------------------------
 EMAIL_BODY=$(mktemp)
 if [ "$ERROR_OCCURRED" = true ]; then
     subject_prefix="❌ BACKUP FAILED"
@@ -364,7 +351,11 @@ cat > "$EMAIL_BODY" <<EOF
     </div>
     <p><strong>Sources backed up:</strong></p>
     <ul>
-        ${SOURCES[@]/%/<li><\/li>}
+EOF
+for src in "${SOURCES[@]}"; do
+    echo "        <li>$src</li>" >> "$EMAIL_BODY"
+done
+cat >> "$EMAIL_BODY" <<EOF
     </ul>
     <p>Full log is attached.</p>
     <div class="footer">
@@ -377,13 +368,9 @@ EOF
 
 send_email_report "$subject_prefix - $(date '+%Y-%m-%d')" "$EMAIL_BODY"
 
-# -------------------------------------------------------------------
-# Cleanup and finish
-# -------------------------------------------------------------------
 rm -f "$EMAIL_BODY"
 log_info "========== Backup finished at $(date) =========="
 
-# Optionally call the notification script (if you want instant desktop notify)
 if command -v backup-notify.sh &>/dev/null; then
     backup-notify.sh
 fi

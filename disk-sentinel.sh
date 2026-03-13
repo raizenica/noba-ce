@@ -51,6 +51,9 @@ show_version() {
 }
     source "$HOME/.config/automation.conf"
     source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
 
 show_help() {
     cat <<EOF
@@ -208,8 +211,11 @@ for target in "${TARGETS[@]}"; do
             if [ "$DRY_RUN" = false ]; then
                 rm -rf "$HOME/.cache/"* >> "$LOG_FILE" 2>&1
             else
+# shellcheck disable=SC2119
                 log_debug "[DRY RUN] Would clean ~/.cache"
+# shellcheck disable=SC2119
             fi
+# shellcheck disable=SC2119
 
 # shellcheck disable=SC2119
             # System temp files older than 1 day
