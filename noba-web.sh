@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-web.sh – Interactive web dashboard with battery, ZFS, and service details
+# noba-web.sh – Interactive web dashboard with battery, ZFS, and on‑demand speed test
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Helper functions (same as before)
+# Helper functions
 # -------------------------------------------------------------------
 show_version() {
     echo "noba-web.sh version 1.0"
@@ -90,7 +90,7 @@ find_free_port() {
 }
 
 # -------------------------------------------------------------------
-# Parse arguments (unchanged)
+# Parse arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o p:m:k -l port:,max:,kill,help,version -- "$@"); then
     show_help
@@ -132,7 +132,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# HTML file (static layout with new cards)
+# HTML file (static layout with new cards and speed test button)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -287,7 +287,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Network Stats Card -->
+        <!-- Network Stats Card with Speed Test button -->
         <div class="card">
             <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
             <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
@@ -300,6 +300,9 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <template x-if="interfaces.length === 0">
                 <div class="stat-row"><span class="stat-label">No data</span></div>
             </template>
+            <div class="button-grid" style="margin-top: 1rem;">
+                <button class="btn" @click="runScript('speedtest')"><i class="fas fa-tachometer-alt"></i> Speed Test</button>
+            </div>
         </div>
 
         <!-- Services Status Card (expanded) -->
@@ -437,7 +440,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Python server with battery, ZFS, and expanded services
+# Python server with battery, ZFS, and speed test handling
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 import http.server
@@ -520,7 +523,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         return pools
 
-    # ---------- GPU (unchanged) ----------
+    # ---------- GPU ----------
     def get_gpu_temp(self):
         try:
             result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
@@ -544,7 +547,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         return "N/A"
 
-    # ---------- Docker (unchanged) ----------
+    # ---------- Docker ----------
     def get_docker_containers(self):
         containers = []
         try:
@@ -558,7 +561,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         return containers
 
-    # ---------- Standard HTTP methods ----------
+    # ---------- GET ----------
     def do_GET(self):
         try:
             if self.path == '/api/stats':
@@ -574,6 +577,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             print(f"GET error: {e}", file=sys.stderr)
 
+    # ---------- POST (with speed test) ----------
     def do_POST(self):
         if self.path == '/api/run':
             try:
@@ -581,38 +585,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 post_data = self.rfile.read(content_len)
                 data = json.loads(post_data)
                 script = data.get('script', '')
-                script_map = {
-                    'backup': 'backup-to-nas.sh',
-                    'verify': 'backup-verifier.sh',
-                    'organize': 'organize-downloads.sh',
-                    'diskcheck': 'disk-sentinel.sh'
-                }
-                script_file = os.path.join(SCRIPT_DIR, script_map.get(script, ''))
-                if not os.path.exists(script_file):
-                    output = f"Script {script} not found"
-                    success = False
+
+                # Special case: speed test
+                if script == 'speedtest':
+                    try:
+                        proc = subprocess.run(['speedtest-cli', '--simple'],
+                                              capture_output=True, text=True, timeout=60)
+                        output = proc.stdout + proc.stderr
+                        success = proc.returncode == 0
+                    except Exception as e:
+                        output = f"Speed test failed: {str(e)}"
+                        success = False
                 else:
-                    proc = subprocess.run(
-                        [script_file, '--verbose'],
-                        capture_output=True,
-                        text=True,
-                        timeout=120,
-                        cwd=SCRIPT_DIR
-                    )
-                    output = proc.stdout + proc.stderr
-                    success = proc.returncode == 0
+                    script_map = {
+                        'backup': 'backup-to-nas.sh',
+                        'verify': 'backup-verifier.sh',
+                        'organize': 'organize-downloads.sh',
+                        'diskcheck': 'disk-sentinel.sh'
+                    }
+                    script_file = os.path.join(SCRIPT_DIR, script_map.get(script, ''))
+                    if not os.path.exists(script_file):
+                        output = f"Script {script} not found"
+                        success = False
+                    else:
+                        proc = subprocess.run(
+                            [script_file, '--verbose'],
+                            capture_output=True, text=True,
+                            timeout=120, cwd=SCRIPT_DIR
+                        )
+                        output = proc.stdout + proc.stderr
+                        success = proc.returncode == 0
+
+                result = {'success': success, 'output': output}
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
             except subprocess.TimeoutExpired:
-                output = "Script timed out after 120 seconds."
-                success = False
+                output = "Script timed out after 60 seconds."
+                result = {'success': False, 'output': output}
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
             except Exception as e:
                 output = f"Error: {str(e)}"
-                success = False
-
-            result = {'success': success, 'output': output}
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
+                result = {'success': False, 'output': output}
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -780,7 +802,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except:
             stats['interfaces'] = []
 
-        # Services (expanded – already includes status)
+        # Services
         service_list = os.environ.get('NOBA_WEB_SERVICES', 'backup-to-nas.service,organize-downloads.service,noba-web.service,syncthing.service').split(',')
         services_status = []
         for svc in service_list:
