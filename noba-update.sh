@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-update.sh – Pull latest scripts from git repository
+# noba-update.sh – Pull latest scripts from git repository, optionally update system packages
 
 set -euo pipefail
 
@@ -13,15 +13,19 @@ source "$SCRIPT_DIR/noba-lib.sh"
 REPO_DIR="${REPO_DIR:-$HOME/.local/bin}"
 REMOTE="origin"
 BRANCH="main"
+UPDATE_SYSTEM=false
+AUTO_YES=false
 
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
-load_config
+load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     REPO_DIR="$(get_config ".update.repo_dir" "$REPO_DIR")"
     REMOTE="$(get_config ".update.remote" "$REMOTE")"
     BRANCH="$(get_config ".update.branch" "$BRANCH")"
+    UPDATE_SYSTEM="$(get_config ".update.system.enabled" "$UPDATE_SYSTEM")"
+    AUTO_YES="$(get_config ".update.system.auto_confirm" "$AUTO_YES")"
 fi
 
 # -------------------------------------------------------------------
@@ -37,11 +41,14 @@ show_help() {
 Usage: $0 [OPTIONS]
 
 Pull the latest version of all noba scripts from the git repository.
+Optionally also run system package updates (dnf, flatpak).
 
 Options:
   --repo DIR        Repository directory (default: $REPO_DIR)
   --remote NAME     Git remote name (default: $REMOTE)
   --branch NAME     Git branch name (default: $BRANCH)
+  --system          Also run system updates (dnf and flatpak)
+  --auto-yes        Auto‑confirm package updates (for non‑interactive use)
   --help            Show this help message
   --version         Show version information
 EOF
@@ -51,21 +58,22 @@ EOF
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o '' -l repo:,remote:,branch:,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o '' -l repo:,remote:,branch:,system,auto-yes,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        --repo)     REPO_DIR="$2"; shift 2 ;;
-        --remote)   REMOTE="$2"; shift 2 ;;
-        --branch)   BRANCH="$2"; shift 2 ;;
-        --help)     show_help ;;
-        --version)  show_version ;;
-        --)         shift; break ;;
-        *)          break ;;
+        --repo)      REPO_DIR="$2"; shift 2 ;;
+        --remote)    REMOTE="$2"; shift 2 ;;
+        --branch)    BRANCH="$2"; shift 2 ;;
+        --system)    UPDATE_SYSTEM=true; shift ;;
+        --auto-yes)  AUTO_YES=true; shift ;;
+        --help)      show_help ;;
+        --version)   show_version ;;
+        --)          shift; break ;;
+        *)           break ;;
     esac
 done
 
@@ -101,7 +109,36 @@ if ! git pull "$REMOTE" "$BRANCH"; then
     exit 1
 fi
 
+# -------------------------------------------------------------------
+# System updates (if requested)
+# -------------------------------------------------------------------
+if [ "$UPDATE_SYSTEM" = true ]; then
+    log_info "Checking for system updates..."
+
+    # DNF updates
+    if command -v dnf &>/dev/null; then
+        log_info "Running dnf update..."
+        if [ "$AUTO_YES" = true ]; then
+            sudo dnf update -y
+        else
+            sudo dnf update
+        fi
+    fi
+
+    # Flatpak updates
+    if command -v flatpak &>/dev/null; then
+        log_info "Running flatpak update..."
+        if [ "$AUTO_YES" = true ]; then
+            flatpak update -y
+        else
+            flatpak update
+        fi
+    fi
+fi
+
+# -------------------------------------------------------------------
 # Make all scripts executable
+# -------------------------------------------------------------------
 log_info "Making scripts executable..."
 find "$REPO_DIR" -maxdepth 1 -name "*.sh" -exec chmod +x {} \;
 
