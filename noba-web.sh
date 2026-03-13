@@ -205,7 +205,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <h1><i class="fas fa-chart-line"></i> Nobara Interactive Dashboard</h1>
     <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
 
-     <div class="grid">
+    <div class="grid">
         <!-- System Health Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
