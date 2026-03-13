@@ -111,21 +111,21 @@ fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
-    case "$1" in
-        -b|--backup-dir)      BACKUP_ROOT="$2"; shift 2 ;;
-        -n|--num-files)       NUM_FILES="$2"; shift 2 ;;
-        -c|--compare-original) COMPARE_ORIGINAL=true; shift ;;
-        --checksum-cmd)       CHECKSUM_CMD="$2"; shift 2 ;;
-        --temp-dir)           TEMP_DIR_BASE="$2"; shift 2 ;;
-        -v|--verbose)         VERBOSE=true; shift ;;
-        # shellcheck disable=SC2034
-        -q|--quiet)           QUIET=true; shift ;;
-        -D|--dry-run)         DRY_RUN=true; shift ;;
-        --help)               show_help ;;
-        --version)            show_version ;;
-        --)                   shift; break ;;
-        *)                    break ;;
-    esac
+# shellcheck disable=SC2034
+case "$1" in
+    -b|--backup-dir)      BACKUP_ROOT="$2"; shift 2 ;;
+    -n|--num-files)       NUM_FILES="$2"; shift 2 ;;
+    -c|--compare-original) COMPARE_ORIGINAL=true; shift ;;
+    --checksum-cmd)       CHECKSUM_CMD="$2"; shift 2 ;;
+    --temp-dir)           TEMP_DIR_BASE="$2"; shift 2 ;;
+    -v|--verbose)         VERBOSE=true; shift ;;
+    -q|--quiet)           QUIET=true; shift ;;
+    -D|--dry-run)         DRY_RUN=true; shift ;;
+    --help)               show_help ;;
+    --version)            show_version ;;
+    --)                   shift; break ;;
+    *)                    break ;;
+esac
 done
 
 # -------------------------------------------------------------------
