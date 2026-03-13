@@ -38,6 +38,7 @@ if [ "$CONFIG_LOADED" = true ]; then
     LAYOUT_LIST=$(get_config_array ".web.layout" | tr '\n' ',' | sed 's/,$//')
     if [ -n "$LAYOUT_LIST" ]; then
         export NOBA_WEB_LAYOUT="$LAYOUT_LIST"
+        echo "DEBUG: LAYOUT_LIST='$LAYOUT_LIST'" >&2
     fi
 else
     export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
@@ -749,6 +750,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # --- Layout from environment (if any) ---
         layout_str = os.environ.get('NOBA_WEB_LAYOUT', '')
+        print(f"DEBUG: NOBA_WEB_LAYOUT='{layout_str}'", file=sys.stderr)
         if layout_str:
             stats['layout'] = layout_str.split(',')
         else:
