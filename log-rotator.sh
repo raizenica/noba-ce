@@ -1,6 +1,6 @@
 #!/bin/bash
-# log-rotator.sh – Compress logs older than specified days
-# Improved version with correct counter and getopt handling
+# log-rotator.sh – Compress old logs and purge ancient archives
+# Version: 2.2.0
 
 set -euo pipefail
 
@@ -12,27 +12,25 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # Default configuration
 # -------------------------------------------------------------------
 LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
-DAYS=30
+COMPRESS_DAYS=30
+DELETE_DAYS=90
 DRY_RUN=false
 
 # -------------------------------------------------------------------
-# Load user configuration (if any)
+# Load user configuration
 # -------------------------------------------------------------------
-load_config || true
-if [ "$CONFIG_LOADED" = true ]; then
-    # Override log directory from logs.dir in config
-    logs_dir="$(get_config ".logs.dir" "$LOG_DIR")"
-    # Expand tilde if present
-    logs_dir="${logs_dir/#\~/$HOME}"
-    LOG_DIR="$logs_dir"
-    DAYS="$(get_config ".log_rotation.days" "$DAYS")"
+if command -v get_config &>/dev/null; then
+    config_log_dir="$(get_config ".logs.dir" "$LOG_DIR")"
+    LOG_DIR="${config_log_dir/#\~/$HOME}"
+    COMPRESS_DAYS="$(get_config ".log_rotation.compress_days" "$COMPRESS_DAYS")"
+    DELETE_DAYS="$(get_config ".log_rotation.delete_days" "$DELETE_DAYS")"
 fi
 
 # -------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "log-rotator.sh version 2.0"
+    echo "log-rotator.sh version 2.2.0"
     exit 0
 }
 
@@ -40,35 +38,50 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Compress log files older than a specified number of days.
+Compress log files older than a specified number of days, and delete ancient archives.
 
 Options:
-  -d, --days DAYS      Number of days (default: $DAYS)
-  -l, --log-dir DIR    Directory containing logs (default: $LOG_DIR)
-  -n, --dry-run        Show what would be compressed without doing it
-  --help               Show this help message
-  --version            Show version information
+  -c, --compress-days DAYS  Days before compressing .log to .log.gz (default: $COMPRESS_DAYS)
+  -x, --delete-days DAYS    Days before deleting .log.gz entirely (default: $DELETE_DAYS)
+  -l, --log-dir DIR         Directory containing logs (default: $LOG_DIR)
+  -n, --dry-run             Show what would be compressed/deleted without doing it
+  --help                    Show this help message
+  --version                 Show version information
 EOF
     exit 0
+}
+
+is_file_open() {
+    local file="$1"
+    if command -v fuser &>/dev/null; then
+        fuser -s "$file"
+        return $?
+    elif command -v lsof &>/dev/null; then
+        lsof "$file" >/dev/null 2>&1
+        return $?
+    else
+        return 1 # Cannot check safely, assume closed
+    fi
 }
 
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-if ! PARSED_ARGS=$(getopt -o d:l:n -l days:,log-dir:,dry-run,help,version -- "$@"); then
+if ! PARSED_ARGS=$(getopt -o c:x:l:n -l compress-days:,delete-days:,log-dir:,dry-run,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        -d|--days)      DAYS="$2"; shift 2 ;;
-        -l|--log-dir)   LOG_DIR="$2"; shift 2 ;;
-        -n|--dry-run)   DRY_RUN=true; shift ;;
-        --help)         show_help ;;
-        --version)      show_version ;;
-        --)             shift; break ;;
-        *)              break ;;
+        -c|--compress-days) COMPRESS_DAYS="$2"; shift 2 ;;
+        -x|--delete-days)   DELETE_DAYS="$2"; shift 2 ;;
+        -l|--log-dir)       LOG_DIR="$2"; shift 2 ;;
+        -n|--dry-run)       DRY_RUN=true; shift ;;
+        --help)             show_help ;;
+        --version)          show_version ;;
+        --)                 shift; break ;;
+        *)                  break ;;
     esac
 done
 
@@ -77,42 +90,70 @@ done
 # -------------------------------------------------------------------
 check_deps find gzip
 
-# Validate DAYS is a positive integer
-if ! [[ "$DAYS" =~ ^[0-9]+$ ]] || [ "$DAYS" -lt 1 ]; then
-    log_error "DAYS must be a positive integer (got: $DAYS)"
-    exit 1
+if ! [[ "$COMPRESS_DAYS" =~ ^[0-9]+$ ]] || [ "$COMPRESS_DAYS" -lt 1 ]; then
+    die "COMPRESS_DAYS must be a positive integer (got: $COMPRESS_DAYS)"
+fi
+
+if ! [[ "$DELETE_DAYS" =~ ^[0-9]+$ ]] || [ "$DELETE_DAYS" -lt "$COMPRESS_DAYS" ]; then
+    die "DELETE_DAYS ($DELETE_DAYS) must be an integer strictly greater than COMPRESS_DAYS ($COMPRESS_DAYS)."
 fi
 
 if [ ! -d "$LOG_DIR" ]; then
-    log_error "Log directory does not exist: $LOG_DIR"
-    exit 1
+    die "Log directory does not exist: $LOG_DIR"
 fi
 
-log_info "Starting log rotation (dry run: $DRY_RUN)"
+log_info "========== Log Rotation Started =========="
 log_info "Log directory: $LOG_DIR"
-log_info "Compressing files older than $DAYS days"
+log_info "Compression threshold: $COMPRESS_DAYS days"
+log_info "Deletion threshold: $DELETE_DAYS days"
+[ "$DRY_RUN" = true ] && log_info "Mode: DRY RUN"
 
 # -------------------------------------------------------------------
-# Main
+# Phase 1: Compress old logs
 # -------------------------------------------------------------------
-count=0
+compress_count=0
 
-# Use process substitution to preserve the counter
 while IFS= read -r -d '' log; do
+    if is_file_open "$log"; then
+        log_warn "Skipping: $log is currently actively open/being written to."
+        continue
+    fi
+
     if [ "$DRY_RUN" = true ]; then
         log_info "[DRY RUN] Would compress: $log"
     else
         if gzip "$log"; then
             log_info "Compressed: $log"
-            ((count++))
+            ((compress_count++))
         else
-            log_warn "Failed to compress: $log"
+            log_error "Failed to compress: $log"
         fi
     fi
-done < <(find "$LOG_DIR" -type f -name "*.log" -mtime +"$DAYS" -print0)
+done < <(find "$LOG_DIR" -type f -name "*.log" -mtime +"$COMPRESS_DAYS" -print0)
 
+# -------------------------------------------------------------------
+# Phase 2: Delete ancient archives
+# -------------------------------------------------------------------
+delete_count=0
+
+while IFS= read -r -d '' gz_log; do
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would delete archive: $gz_log"
+    else
+        if rm -f "$gz_log"; then
+            log_info "Deleted ancient archive: $gz_log"
+            ((delete_count++))
+        else
+            log_error "Failed to delete: $gz_log"
+        fi
+    fi
+done < <(find "$LOG_DIR" -type f -name "*.log.gz" -mtime +"$DELETE_DAYS" -print0)
+
+# -------------------------------------------------------------------
+# Summary
+# -------------------------------------------------------------------
 if [ "$DRY_RUN" = true ]; then
-    log_info "Dry run complete. No files were actually compressed."
+    log_info "Dry run complete. No files were modified."
 else
-    log_info "Rotation complete. Compressed $count file(s)."
+    log_info "Rotation complete. Compressed $compress_count file(s), deleted $delete_count archive(s)."
 fi
