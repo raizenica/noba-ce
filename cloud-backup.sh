@@ -1,147 +1,10 @@
-
-
-# Test header: exit early for test options
-if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "--version" ] || [ "$1" = "-v" ] || [ "$1" = "--dry-run" ]; then
-    exit 0
-fi
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-
-# Help handling
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    echo "For detailed help, see the script documentation."
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-
 #!/bin/bash
 # cloud-backup.sh – Sync local backups to cloud (rclone)
 
 # Load configuration
 load_config
 if [ "$CONFIG_LOADED" = true ]; then
+    true
     # Override defaults with config values (script-specific)
     # Example:
     # VAR=$(get_config ".${script%.sh}.var" "$VAR")
@@ -150,6 +13,7 @@ fi
 # Load configuration
 load_config
 if [ "$CONFIG_LOADED" = true ]; then
+    true
     # Override defaults with config values (script-specific)
     # Example:
     # VAR=$(get_config ".${script%.sh}.var" "$VAR")
@@ -159,6 +23,7 @@ set -u
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # Defaults
@@ -205,6 +70,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Load config if exists
+# shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 
 if ! command -v rclone &>/dev/null; then
@@ -213,4 +79,5 @@ if ! command -v rclone &>/dev/null; then
 fi
 
 log_info "Syncing $LOCAL_BACKUP_DIR → $REMOTE_PATH"
+# shellcheck disable=SC2086
 rclone sync "$LOCAL_BACKUP_DIR" "$REMOTE_PATH" $RCLONE_OPTS $DRY_RUN

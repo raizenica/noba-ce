@@ -7,6 +7,7 @@ shopt -s nullglob
 
 # Source the shared library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -245,6 +246,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -*)
             echo "Unknown option: $1" >&2
+# shellcheck disable=SC2317
             exit 1
             ;;
         *)
@@ -264,16 +266,19 @@ done
 CMD=$(algo_to_cmd "$ALGO")
 if [ "$CMD" = "unsupported" ]; then
     echo "ERROR: Unsupported algorithm '$ALGO'." >&2
+# shellcheck disable=SC2317
     exit 1
 fi
 if ! command -v "$CMD" &>/dev/null; then
     echo "ERROR: Command '$CMD' not available for algorithm '$ALGO'." >&2
+# shellcheck disable=SC2317
     exit 1
 fi
 
 # Validate output format
 if [[ ! "$OUTPUT_FORMAT" =~ ^(plain|csv|json)$ ]]; then
     echo "ERROR: Invalid output format '$OUTPUT_FORMAT'. Use plain, csv, or json." >&2
+# shellcheck disable=SC2317
     exit 1
 fi
 
@@ -281,6 +286,7 @@ fi
 if [ "$GUI" = true ]; then
     if ! command -v kdialog &>/dev/null; then
         echo "ERROR: kdialog not available for GUI mode." >&2
+# shellcheck disable=SC2317
         exit 1
     fi
     # If no files provided, launch file picker
@@ -289,6 +295,7 @@ if [ "$GUI" = true ]; then
         IFS=$'\n' read -d '' -r -a FILES < <(kdialog --getopenfilename --multiple --separate-output "$HOME" "All Files (*)" 2>/dev/null)
         if [ ${#FILES[@]} -eq 0 ]; then
             kdialog --error "No files selected."
+# shellcheck disable=SC2317
             exit 1
         fi
     fi
@@ -298,6 +305,7 @@ fi
 if [ ${#FILES[@]} -eq 0 ] && [ -t 0 ]; then
     echo "ERROR: No files specified and no input from stdin." >&2
     usage
+# shellcheck disable=SC2317
     exit 1
 fi
 
