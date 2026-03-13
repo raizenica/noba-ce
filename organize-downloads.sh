@@ -203,7 +203,13 @@ while IFS= read -r -d '' file; do
         log_debug "Filename conflict, renaming to $new_filename"
     fi
 
-    move_file "$file" "$dest_path"
+move_file "$file" "$dest_path"
+
+    # Write to undo log (original path | new path)
+    if [ "$DRY_RUN" = false ]; then
+        echo "$file|$dest_path" >> "$(dirname "$LOG_FILE")/download-organizer-undo.log"
+    fi
+
     ((MOVED_COUNT++))
 
 done < <(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -path '*/\.*' -print0)
