@@ -1,128 +1,69 @@
 #!/bin/bash
+# disk-sentinel.sh – Monitor disk space and alert when threshold exceeded
 
-# Test header: exit early for test options
-#!/bin/bash
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/noba-lib.sh"
 
-# Early exit for testing (added by recover script)
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "Usage: $(basename "$0") [OPTIONS]"
-    exit 0
-fi
-if [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
-    echo "$(basename "$0") version 1.0"
-    exit 0
-fi
-if [ "$1" = "--dry-run" ]; then
-    echo "Dry run – exiting 0 for test."
-    exit 0
-fi
-
-# Disk Space Sentinel – monitor and clean up disk space with email alerts
-
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    true
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
-
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    true
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
-
-set -u
-set -o pipefail
+# -------------------------------------------------------------------
+# Default configuration
+# -------------------------------------------------------------------
+THRESHOLD="${THRESHOLD:-85}"
+TARGETS=()
+# If no targets specified, use defaults: / and /home
+DEFAULT_TARGETS=("/" "/home")
+CLEANUP="${CLEANUP:-true}"
+EMAIL="${EMAIL:-strikerke@gmail.com}"
+LOG_FILE="${LOG_FILE:-$HOME/.local/share/disk-sentinel.log}"
+DRY_RUN=false
+# Filesystem types to ignore (regex)
+IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc)$"
 
 # -------------------------------------------------------------------
-# Configuration and defaults
+# Load user configuration (if any)
 # -------------------------------------------------------------------
-
-# Source central config if available
-# shellcheck source=/dev/null
-if [ -f "$HOME/.config/automation.conf" ]; then
-    source "$HOME/.config/automation.conf"
-    source "$HOME/.config/automation.conf"
+load_config
+if [ "$CONFIG_LOADED" = true ]; then
+    # Read targets array from config (if defined)
+    targets_from_config=$(get_config_array ".disk.targets")
+    if [ -n "$targets_from_config" ]; then
+        mapfile -t TARGETS <<< "$targets_from_config"
+    fi
+    THRESHOLD="$(get_config ".disk.threshold" "$THRESHOLD")"
+    CLEANUP="$(get_config ".disk.cleanup_enabled" "$CLEANUP")"
+    EMAIL="$(get_config ".email" "$EMAIL")"  # top-level email fallback
+    IGNORE_FS="$(get_config ".disk.ignore_fs" "$IGNORE_FS")"
+    LOG_FILE="$(get_config ".logs.dir" "$LOG_FILE")/disk-sentinel.log"
 fi
 
-# Defaults (can be overridden by config file)
-THRESHOLD="${DISK_THRESHOLD:-85}"
-# Define default targets as an array
-DEFAULT_TARGETS=(/ /home)
-# Use DISK_TARGETS from config if set, otherwise defaults
-if [ -n "${DISK_TARGETS[*]:-}" ]; then
-    TARGETS=("${DISK_TARGETS[@]}")
-else
+# If TARGETS still empty, use defaults
+if [ ${#TARGETS[@]} -eq 0 ]; then
     TARGETS=("${DEFAULT_TARGETS[@]}")
 fi
-CLEANUP="${CLEANUP_ENABLED:-true}"
-EMAIL="${EMAIL:-strikerke@gmail.com}"
-LOG_FILE="$HOME/.local/share/disk-sentinel.log"
-DRY_RUN=false
-VERBOSE=false
-
-# Virtual filesystems to ignore (regex patterns)
-IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc)$"
 
 # -------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------
-
 show_version() {
-    if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null; then
-        version=$(git describe --tags --always --dirty 2>/dev/null)
-        echo "$(basename "$0") version $version"
-    else
-        echo "$(basename "$0") version unknown (not in git repo)"
-    fi
+    echo "disk-sentinel.sh version 1.0"
     exit 0
 }
 
-usage() {
+show_help() {
     cat <<EOF
-Usage: $0 [options]
+Usage: $0 [OPTIONS]
+
+Monitor disk space and send alerts when usage exceeds threshold.
 
 Options:
   -t, --threshold PERCENT  Set warning threshold (default: $THRESHOLD)
-  -n, --dry-run            Don't perform cleanup or send email
-  -v, --verbose            Print more details
-  --help                   Show this help
+  -n, --dry-run            Perform trial run with no changes
+  -v, --verbose            Enable verbose output
+  --help                   Show this help message
   --version                Show version information
 EOF
     exit 0
-}
-
-# Check required commands
-check_deps() {
-    local missing=()
-    for cmd in df awk du sort head date mkdir mktemp; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing+=("$cmd")
-        fi
-    done
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "ERROR: Missing required commands: ${missing[*]}" >&2
-        exit 1
-    fi
-}
-
-# Logging function
-log() {
-    local msg="$1"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$timestamp - $msg" >> "$LOG_FILE"
-    if [ "$VERBOSE" = true ] || [ "$DRY_RUN" = false ]; then
-        echo "$msg"
-    fi
 }
 
 # Send email via msmtp (if available)
@@ -130,34 +71,30 @@ send_email() {
     local subject="$1"
     local body="$2"
     if [ -z "$EMAIL" ]; then
-        log "No email recipient set, skipping notification."
+        log_warn "No email recipient set – skipping notification."
         return
     fi
     if ! command -v msmtp &>/dev/null; then
-        log "msmtp not installed, cannot send email."
+        log_warn "msmtp not installed – cannot send email."
         return
     fi
-    # Use printf for portability
     printf "Subject: %s\n\n%s\n" "$subject" "$body" | msmtp "$EMAIL"
-    log "Email sent to $EMAIL"
+    log_info "Email sent to $EMAIL"
 }
 
-# Run a command with sudo, capturing output to log (no direct redirection)
+# Run a command with sudo, capturing output to log
 run_sudo() {
     local cmd_desc="$1"
     shift
     if [ "$DRY_RUN" = true ]; then
-        log "[DRY RUN] Would run (sudo): $*"
+        log_debug "[DRY RUN] Would run (sudo): $*"
         return 0
     fi
-    log "Running: $cmd_desc"
-    # Check if user can sudo without password for this command
+    log_debug "Running (sudo): $cmd_desc"
+    # Check if sudo is available without password
     if sudo -n true 2>/dev/null; then
-        # Use a temporary file to capture output
         local temp_output
         temp_output=$(mktemp)
-        # Run command with sudo, capture both stdout and stderr
-                # shellcheck disable=SC2024
         if sudo "$@" > "$temp_output" 2>&1; then
             cat "$temp_output" >> "$LOG_FILE"
             rm -f "$temp_output"
@@ -166,11 +103,11 @@ run_sudo() {
             local status=$?
             cat "$temp_output" >> "$LOG_FILE"
             rm -f "$temp_output"
-            log "WARNING: Command failed (exit $status): $*"
+            log_warn "Command failed (exit $status): $*"
             return $status
         fi
     else
-        log "WARNING: sudo not available or requires password; skipping $cmd_desc"
+        log_warn "sudo not available or requires password – skipping $cmd_desc"
         return 1
     fi
 }
@@ -178,148 +115,84 @@ run_sudo() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -t|--threshold)
-            THRESHOLD="$2"
-            shift 2
-            ;;
-        -n|--dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        -v|--verbose)
-            VERBOSE=true
-            shift
-            ;;
-        --help)
-            usage
-            ;;
-        --version)
-            show_version
-            ;;
-        -*)
-            echo "Unknown option: $1" >&2
-            exit 1
-            ;;
-        *)
-            echo "Unexpected argument: $1" >&2
-            exit 1
-            ;;
+PARSED_ARGS=$(getopt -o t:nv -l threshold:,dry-run,verbose,help,version -- "$@")
+if [ $? -ne 0 ]; then
+    show_help
+fi
+eval set -- "$PARSED_ARGS"
+
+while true; do
+    case "$1" in
+        -t|--threshold) THRESHOLD="$2"; shift 2 ;;
+        -n|--dry-run)   DRY_RUN=true; shift ;;
+        -v|--verbose)   VERBOSE=true; shift ;;
+        --help)         show_help ;;
+        --version)      show_version ;;
+        --)             shift; break ;;
+        *)              break ;;
     esac
 done
 
 # -------------------------------------------------------------------
-# Pre-flight checks and setup
-# shellcheck disable=SC2119
-# shellcheck disable=SC2119
+# Pre-flight checks
 # -------------------------------------------------------------------
-check_deps
-mkdir -p "$(dirname "$LOG_FILE")"
+check_deps df awk du sort head date mkdir mktemp
 
 # Validate threshold
 if ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]] || [ "$THRESHOLD" -lt 0 ] || [ "$THRESHOLD" -gt 100 ]; then
-    echo "ERROR: Threshold must be a number between 0 and 100." >&2
+    log_error "Threshold must be a number between 0 and 100."
     exit 1
 fi
 
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-# If dry-run, exit 0 (for testing)
-if [ "$DRY_RUN" = true ]; then
-    echo "Dry run – exiting."
-    exit 0
-fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-# If dry-run, exit 0 (for testing)
-if [ "$DRY_RUN" = true ]; then
-    echo "Dry run – exiting."
-    exit 0
-fi
-# If dry-run, exit 0 (for testing)
-if [ "$DRY_RUN" = true ]; then
-    echo "Dry run – exiting."
-    exit 0
-fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then echo "Dry run – exiting."; exit 0; fi
-if [ "$DRY_RUN" = true ]; then log "Dry run – no actions taken."; exit 0; fi
-# Start
-log "=== Disk Space Check ==="
+mkdir -p "$(dirname "$LOG_FILE")"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
+log_info "========== Disk Sentinel started at $(date) =========="
+log_info "Threshold: $THRESHOLD%, Cleanup: $CLEANUP, Dry run: $DRY_RUN"
+log_debug "Targets: ${TARGETS[*]}"
+
+# -------------------------------------------------------------------
+# Main loop
+# -------------------------------------------------------------------
 for target in "${TARGETS[@]}"; do
-    # Skip if target does not exist
     if [ ! -e "$target" ]; then
-        log "WARNING: Target '$target' does not exist, skipping."
+        log_warn "Target '$target' does not exist – skipping."
         continue
     fi
 
-    # Get usage percentage and mount point using df --output (more reliable)
+    # Get usage percentage and mount point
     if ! df_output=$(df --output=pcent,target "$target" 2>/dev/null | tail -1); then
-        log "WARNING: Cannot get disk usage for '$target', skipping."
+        log_warn "Cannot get disk usage for '$target' – skipping."
         continue
     fi
     usage=$(echo "$df_output" | awk '{print $1}' | sed 's/%//')
     mount=$(echo "$df_output" | awk '{print $2}')
 
     # Get filesystem type
-    if ! fstype=$(df -T "$target" 2>/dev/null | awk 'NR==2 {print $2}'); then
-        fstype="unknown"
-    fi
+    fstype=$(df -T "$target" 2>/dev/null | awk 'NR==2 {print $2}') || fstype="unknown"
 
-    log "$mount: ${usage}% used (fstype: $fstype)"
+    log_info "$mount: ${usage}% used (fstype: $fstype)"
 
-    # Skip if filesystem type is in IGNORE_FS
+    # Skip virtual filesystems
     if [[ "$fstype" =~ $IGNORE_FS ]]; then
-        log "Skipping $mount (virtual filesystem $fstype)"
+        log_debug "Skipping $mount (virtual filesystem $fstype)"
         continue
     fi
 
     if [ "$usage" -ge "$THRESHOLD" ]; then
-        log "WARNING: $mount exceeded ${THRESHOLD}% threshold."
+        log_warn "WARNING: $mount exceeded ${THRESHOLD}% threshold."
 
         # Prepare email body
-        EMAIL_BODY="Disk space alert for $mount on $(hostname) at $(date)\n"
-        EMAIL_BODY+="Usage: ${usage}% (threshold ${THRESHOLD}%)\n\n"
-        EMAIL_BODY+="Top 10 directories by size:\n"
-        EMAIL_BODY+="$(du -h "$target" 2>/dev/null | sort -rh | head -10)\n"
+        email_body="Disk space alert for $mount on $(hostname) at $(date)\n"
+        email_body+="Usage: ${usage}% (threshold ${THRESHOLD}%)\n\n"
+        email_body+="Top 10 directories by size:\n"
+        email_body+="$(du -h "$target" 2>/dev/null | sort -rh | head -10)\n"
 
-        # Cleanup if enabled and not dry-run
+        # Cleanup if enabled and not dry run
         if [ "$CLEANUP" = true ] && [ "$DRY_RUN" = false ]; then
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-        log "Dry run – skipping actual cleanup."
-            log "Starting cleanup on $mount..."
+            log_info "Starting cleanup on $mount..."
 
-            # Clean package manager caches (using run_sudo)
+            # Package manager caches
             if command -v dnf &>/dev/null; then
                 run_sudo "cleaning DNF cache" dnf clean all
             elif command -v apt-get &>/dev/null; then
@@ -328,42 +201,41 @@ for target in "${TARGETS[@]}"; do
                 run_sudo "cleaning pacman cache" pacman -Sc --noconfirm
             fi
 
-            # Clean user cache – no sudo needed
-            log "Cleaning ~/.cache..."
+            # User cache (no sudo)
+            log_info "Cleaning ~/.cache..."
             if [ "$DRY_RUN" = false ]; then
                 rm -rf "$HOME/.cache/"* >> "$LOG_FILE" 2>&1
             else
-                log "[DRY RUN] Would clean ~/.cache"
+                log_debug "[DRY RUN] Would clean ~/.cache"
             fi
 
-            # Clean system temp (old files) – requires sudo
+            # System temp files older than 1 day
             run_sudo "cleaning /tmp (files older than 1 day)" find /tmp -type f -atime +1 -delete
 
-            # Vacuum journals older than 3 days – requires sudo
+            # Journal vacuum
             if command -v journalctl &>/dev/null; then
                 run_sudo "vacuuming systemd journals" journalctl --vacuum-time=3d
             fi
 
-            # After cleanup, check new usage
+            # Get new usage
             new_usage=$(df --output=pcent "$target" 2>/dev/null | tail -1 | sed 's/%//')
-            EMAIL_BODY+="\nCleanup performed. New usage: ${new_usage}%"
-            log "Cleanup completed. New usage: ${new_usage}%"
+            email_body+="\nCleanup performed. New usage: ${new_usage}%"
+            log_info "Cleanup completed. New usage: ${new_usage}%"
         elif [ "$CLEANUP" = false ]; then
-            EMAIL_BODY+="\nNo cleanup performed (CLEANUP=false)."
+            email_body+="\nNo cleanup performed (cleanup disabled)."
         else
-            # DRY_RUN is true, but we still build body indicating dry run
-            EMAIL_BODY+="\nDRY RUN: No actual changes made."
+            email_body+="\nDRY RUN: No actual changes made."
         fi
 
-        # Send email alert (unless dry run)
+        # Send email (unless dry run)
         if [ "$DRY_RUN" = false ]; then
-            send_email "⚠ Disk Space Alert: $mount at ${usage}%" "$EMAIL_BODY"
+            send_email "⚠ Disk Space Alert: $mount at ${usage}%" "$email_body"
         else
-            log "[DRY RUN] Would send email alert."
+            log_info "[DRY RUN] Would send email alert."
         fi
     else
-        log "$mount usage is OK."
+        log_info "$mount usage is OK."
     fi
 done
 
-log "=== Check Complete ==="
+log_info "========== Disk Sentinel finished at $(date) =========="
