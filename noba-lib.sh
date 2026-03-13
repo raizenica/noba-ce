@@ -1,56 +1,63 @@
 #!/bin/bash
 # noba-lib.sh – Shared functions for Nobara automation scripts
-# Version: 2.1.0
+# Version: 2.2.0
 # This file should be sourced by other scripts, not executed directly.
 
 # Prevent multiple inclusions
 if [[ -n "${_NOBA_LIB_LOADED:-}" ]]; then
     return 0
 fi
-_NOBA_LIB_LOADED=1
-
-# Library version
-readonly NOBA_LIB_VERSION="2.1.0"
+readonly _NOBA_LIB_LOADED=1
+readonly NOBA_LIB_VERSION="2.2.0"
 
 # -------------------------------------------------------------------
 # Configuration file location (can be overridden by environment)
 # -------------------------------------------------------------------
 : "${NOBA_CONFIG:=$HOME/.config/noba/config.yaml}"
-CONFIG_FILE="$NOBA_CONFIG"
+readonly CONFIG_FILE="$NOBA_CONFIG"
+
+# Cache dependency checks on load
+if command -v yq &>/dev/null; then
+    readonly _NOBA_YQ_AVAILABLE=true
+else
+    readonly _NOBA_YQ_AVAILABLE=false
+fi
 
 # -------------------------------------------------------------------
 # Color support – disable if not a terminal or NO_COLOR is set
 # -------------------------------------------------------------------
 if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
-    export RED='\033[0;31m'
-    export GREEN='\033[0;32m'
-    export YELLOW='\033[1;33m'
-    export BLUE='\033[0;34m'
-    export CYAN='\033[0;36m'
-    export NC='\033[0m'  # No Color
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly BLUE='\033[0;34m'
+    readonly CYAN='\033[0;36m'
+    readonly NC='\033[0m'  # No Color
 else
-    export RED='' GREEN='' YELLOW='' BLUE='' CYAN='' NC=''
+    readonly RED='' GREEN='' YELLOW='' BLUE='' CYAN='' NC=''
 fi
 
 # -------------------------------------------------------------------
-# Logging functions (using printf for reliability)
+# Logging functions (Includes Timestamps for Automation)
 # -------------------------------------------------------------------
+_timestamp() { date +'%Y-%m-%d %H:%M:%S'; }
+
 log_info() {
-    printf "${GREEN}[INFO]${NC} %s\n" "$*"
+    printf "${GREEN}[%s] [INFO]${NC} %s\n" "$(_timestamp)" "$*"
 }
 log_warn() {
-    printf "${YELLOW}[WARN]${NC} %s\n" "$*" >&2
+    printf "${YELLOW}[%s] [WARN]${NC} %s\n" "$(_timestamp)" "$*" >&2
 }
 log_error() {
-    printf "${RED}[ERROR]${NC} %s\n" "$*" >&2
+    printf "${RED}[%s] [ERROR]${NC} %s\n" "$(_timestamp)" "$*" >&2
 }
 log_debug() {
-    if [[ "${VERBOSE:-false}" = true ]]; then
-        printf "${CYAN}[DEBUG]${NC} %s\n" "$*"
+    if [[ "${VERBOSE:-false}" == true ]]; then
+        printf "${CYAN}[%s] [DEBUG]${NC} %s\n" "$(_timestamp)" "$*"
     fi
 }
 log_success() {
-    printf "${GREEN}[SUCCESS]${NC} %s\n" "$*"
+    printf "${GREEN}[%s] [SUCCESS]${NC} %s\n" "$(_timestamp)" "$*"
 }
 die() {
     log_error "$*"
@@ -58,14 +65,15 @@ die() {
 }
 
 # -------------------------------------------------------------------
-# Configuration helpers – always check yq availability on the fly
+# Configuration helpers
 # -------------------------------------------------------------------
 # Get a scalar value from the YAML config. Usage:
 #   value=$(get_config ".some.key" "default")
 get_config() {
     local key="$1"
     local default="${2:-}"
-    if command -v yq &>/dev/null && [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
+
+    if [[ "$_NOBA_YQ_AVAILABLE" == true && -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
         local value
         value=$(yq eval "$key" "$CONFIG_FILE" 2>/dev/null)
         if [[ -n "$value" && "$value" != "null" ]]; then
@@ -80,10 +88,9 @@ get_config() {
 #   while IFS= read -r item; do ...; done < <(get_config_array ".some.list")
 get_config_array() {
     local key="$1"
-    if command -v yq &>/dev/null && [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
+    if [[ "$_NOBA_YQ_AVAILABLE" == true && -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]]; then
         yq eval "$key[]" "$CONFIG_FILE" 2>/dev/null | grep -v '^null$' || true
     fi
-    # else return nothing
 }
 
 # -------------------------------------------------------------------
@@ -107,7 +114,6 @@ check_deps() {
 
 # Create a temporary directory safely. Usage:
 #   temp_dir=$(make_temp_dir) || exit 1
-# Optionally specify a base directory (default: /tmp) and a template (default: noba.XXXXXXXXXX)
 make_temp_dir() {
     local base="${1:-/tmp}"
     local template="${2:-noba.XXXXXXXXXX}"
@@ -118,19 +124,20 @@ make_temp_dir() {
     mktemp -d "$base/$template"
 }
 
-# Create a temporary directory and automatically remove it on script exit.
-# Usage:
-#   temp_dir=$(make_temp_dir_auto) || exit 1
-#   # ... use temp_dir ...
-#   # No need to clean up manually
+# Create a temporary directory and safely append it to the EXIT trap.
 make_temp_dir_auto() {
     local temp_dir
     temp_dir=$(make_temp_dir "$@") || return 1
-    trap 'rm -rf "$temp_dir"' EXIT
+
+    # Extract existing trap, if any, and append our cleanup routine safely
+    local existing_trap
+    existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
+    trap "${existing_trap:+$existing_trap; }rm -rf \"$temp_dir\"" EXIT
+
     echo "$temp_dir"
 }
 
-# Convert bytes to human-readable format (e.g., 1048576 -> 1.0 MiB)
+# Convert bytes to human-readable format
 human_size() {
     local bytes="$1"
     if [[ ! "$bytes" =~ ^[0-9]+$ ]]; then
@@ -144,17 +151,16 @@ human_size() {
     fi
 }
 
-# Interactive confirmation prompt. Returns 0 (true) if user answers y/Y.
-# In non‑interactive mode, returns default (y or n) without prompting.
-# Usage:
-#   if confirm "Continue?"; then ...
+# Interactive confirmation prompt.
 confirm() {
     local prompt="$1"
-    local default="${2:-n}"   # default can be "y" or "n"
-    if [[ ! -t 0 ]]; then
-        # Non‑interactive: use default
+    local default="${2:-n}"
+
+    # Non‑interactive guard: check if stdin and stdout are terminals
+    if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
         [[ "$default" == "y" ]] && return 0 || return 1
     fi
+
     local answer
     while true; do
         read -rp "$prompt (y/n) [${default}]: " answer
@@ -166,7 +172,7 @@ confirm() {
     done
 }
 
-# Check if the script is running as root. If not, exit with error.
+# Check if the script is running as root.
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         die "This script must be run as root."
