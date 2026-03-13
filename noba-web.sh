@@ -208,7 +208,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <div class="grid">
         <template x-for="card in layout" :key="card">
             <!-- System Health Card -->
-            <div x-show="card === 'system'" class="card">
+            <div x-if="card === 'system'" class="card">
                 <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
                 <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
                 <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
@@ -219,7 +219,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- GPU Temperature Card -->
-            <div x-show="card === 'gpu'" class="card">
+            <div x-if="card === 'gpu'" class="card">
                 <div class="card-header"><i class="fas fa-microchip"></i> GPU Temperature</div>
                 <div class="stat-row">
                     <span class="stat-label">GPU Temp</span>
@@ -228,7 +228,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Backup Status Card -->
-            <div x-show="card === 'backup'" class="card">
+            <div x-if="card === 'backup'" class="card">
                 <div class="card-header"><i class="fas fa-database"></i> Backup</div>
                 <div class="stat-row"><span class="stat-label">Last backup</span>
                     <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
@@ -242,7 +242,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Updates Card -->
-            <div x-show="card === 'updates'" class="card">
+            <div x-if="card === 'updates'" class="card">
                 <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
                 <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
                 <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
@@ -250,7 +250,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Disk Usage Card -->
-            <div x-show="card === 'disk'" class="card" style="grid-column: span 2;">
+            <div x-if="card === 'disk'" class="card" style="grid-column: span 2;">
                 <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
                 <template x-for="disk in disks" :key="disk.mount">
                     <div class="disk-item">
@@ -264,7 +264,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Download Organizer Card -->
-            <div x-show="card === 'organizer'" class="card">
+            <div x-if="card === 'organizer'" class="card">
                 <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
                 <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
                 <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
@@ -275,7 +275,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Disk Sentinel Card -->
-            <div x-show="card === 'sentinel'" class="card">
+            <div x-if="card === 'sentinel'" class="card">
                 <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
                 <pre x-text="diskAlerts"></pre>
                 <div class="button-grid">
@@ -284,7 +284,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Network Stats Card -->
-            <div x-show="card === 'network'" class="card">
+            <div x-if="card === 'network'" class="card">
                 <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
                 <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
                 <template x-for="iface in interfaces" :key="iface.name">
@@ -299,7 +299,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Services Status Card -->
-            <div x-show="card === 'services'" class="card">
+            <div x-if="card === 'services'" class="card">
                 <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
                 <template x-for="svc in services" :key="svc.name">
                     <div class="stat-row">
@@ -314,7 +314,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
 
             <!-- Docker Containers Card -->
-            <div x-show="card === 'docker'" class="card">
+            <div x-if="card === 'docker'" class="card">
                 <div class="card-header"><i class="fab fa-docker"></i> Docker Containers</div>
                 <template x-if="dockerContainers.length === 0">
                     <div class="stat-row"><span class="stat-label">No running containers</span></div>
