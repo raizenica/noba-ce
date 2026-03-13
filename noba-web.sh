@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-web.sh – Interactive web dashboard with battery, ZFS, and on‑demand speed test
+# noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, and service resource usage
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Helper functions
+# Helper functions (same as before)
 # -------------------------------------------------------------------
 show_version() {
     echo "noba-web.sh version 1.0"
@@ -132,7 +132,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# HTML file (static layout with new cards and speed test button)
+# HTML file (master version with all enhancements)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -186,7 +186,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
 
     <div class="grid">
-        <!-- System Health Card -->
+        <!-- System Health Card (unchanged) -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
@@ -197,7 +197,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Battery Health Card (only shows if battery present) -->
+        <!-- Battery Card (if present) -->
         <div class="card" x-show="battery.present">
             <div class="card-header"><i class="fas fa-battery-three-quarters"></i> Battery</div>
             <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" x-text="battery.status"></span></div>
@@ -207,12 +207,16 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row" x-show="battery.power !== 'N/A'"><span class="stat-label">Power</span><span class="stat-value" x-text="battery.power"></span></div>
         </div>
 
-        <!-- GPU Temperature Card -->
+        <!-- GPU Card with load and temperature -->
         <div class="card">
-            <div class="card-header"><i class="fas fa-microchip"></i> GPU Temperature</div>
+            <div class="card-header"><i class="fas fa-microchip"></i> GPU</div>
             <div class="stat-row">
-                <span class="stat-label">GPU Temp</span>
+                <span class="stat-label">Temperature</span>
                 <span class="stat-value" x-text="gpuTemp"></span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Load</span>
+                <span class="stat-value" x-text="gpuLoad"></span>
             </div>
         </div>
 
@@ -238,7 +242,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
         </div>
 
-        <!-- Disk Usage Card -->
+        <!-- Disk Usage Card (unchanged) -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
             <template x-for="disk in disks" :key="disk.mount">
@@ -252,7 +256,21 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </template>
         </div>
 
-        <!-- ZFS Pool Status Card (only shows if any pool exists) -->
+        <!-- Disk I/O Stats Card (NEW) -->
+        <div class="card" style="grid-column: span 2;">
+            <div class="card-header"><i class="fas fa-tachometer-alt"></i> Disk I/O</div>
+            <template x-for="disk in diskio" :key="disk.name">
+                <div class="stat-row">
+                    <span class="stat-label" x-text="disk.name"></span>
+                    <span class="stat-value" x-text="'R:' + disk.read + ' W:' + disk.write"></span>
+                </div>
+            </template>
+            <template x-if="diskio.length === 0">
+                <div class="stat-row"><span class="stat-label">No disk I/O data</span></div>
+            </template>
+        </div>
+
+        <!-- ZFS Pool Status Card (if pools exist) -->
         <div class="card" x-show="zfs.pools && zfs.pools.length > 0">
             <div class="card-header"><i class="fas fa-database"></i> ZFS Pools</div>
             <template x-for="pool in zfs.pools" :key="pool.name">
@@ -287,7 +305,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Network Stats Card with Speed Test button -->
+        <!-- Network Stats Card with Speed Test -->
         <div class="card">
             <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
             <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
@@ -305,7 +323,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Services Status Card (expanded) -->
+        <!-- Services Status Card with resource usage (ENHANCED) -->
         <div class="card">
             <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
             <template x-for="svc in services" :key="svc.name">
@@ -316,6 +334,14 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         'warning': svc.status === 'inactive',
                         'danger': svc.status === 'failed'
                     }" x-text="svc.status"></span>
+                </div>
+                <div class="stat-row" style="font-size: 0.9rem; margin-top: -0.5rem;" x-show="svc.memory">
+                    <span class="stat-label">Memory</span>
+                    <span class="stat-value" x-text="svc.memory"></span>
+                </div>
+                <div class="stat-row" style="font-size: 0.9rem;" x-show="svc.cpu">
+                    <span class="stat-label">CPU Time</span>
+                    <span class="stat-value" x-text="svc.cpu"></span>
                 </div>
             </template>
         </div>
@@ -361,9 +387,9 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 diskAlerts: '', showModal: false, modalTitle: '', modalOutput: '',
                 runningScript: false,
                 defaultIp: '', interfaces: [], services: [],
-                gpuTemp: '', dockerContainers: [],
-                battery: {},                     // new
-                zfs: { pools: [] },              // new
+                gpuTemp: '', gpuLoad: '', dockerContainers: [],
+                battery: {}, zfs: { pools: [] },
+                diskio: [],  // NEW
 
                 async init() {
                     await this.refreshStats();
@@ -401,9 +427,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.interfaces = data.interfaces || [];
                         this.services = data.services || [];
                         this.gpuTemp = data.gpuTemp || 'N/A';
+                        this.gpuLoad = data.gpuLoad || 'N/A';
                         this.dockerContainers = data.dockerContainers || [];
-                        this.battery = data.battery || {};               // new
-                        this.zfs = data.zfs || { pools: [] };            // new
+                        this.battery = data.battery || {};
+                        this.zfs = data.zfs || { pools: [] };
+                        this.diskio = data.diskio || [];   // NEW
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     }
@@ -440,7 +468,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Python server with battery, ZFS, and speed test handling
+# Python server (master version with all enhancements)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 import http.server
@@ -547,6 +575,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         return "N/A"
 
+    # NEW: GPU load (NVIDIA only)
+    def get_gpu_load(self):
+        try:
+            result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader'],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                load = result.stdout.strip()
+                if load:
+                    return load
+        except:
+            pass
+        return 'N/A'
+
     # ---------- Docker ----------
     def get_docker_containers(self):
         containers = []
@@ -560,6 +601,72 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except:
             pass
         return containers
+
+    # NEW: Disk I/O stats
+    def get_disk_io(self):
+        disks = []
+        try:
+            with open('/proc/diskstats') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 14:
+                        continue
+                    name = parts[2]
+                    # Skip loop, ram, and partition devices (optional)
+                    if name.startswith(('loop', 'ram', 'sr')):
+                        continue
+                    # We want whole disks like sda, nvme0n1, not partitions (e.g., sda1)
+                    if name[-1].isdigit() and not (name.startswith('nvme') and name[-2].isdigit()):
+                        # This is a partition, skip
+                        continue
+                    reads = int(parts[5])   # sectors read
+                    writes = int(parts[9])  # sectors written
+                    # Convert sectors to bytes (typically 512 bytes per sector)
+                    read_bytes = reads * 512
+                    write_bytes = writes * 512
+                    disks.append({
+                        'name': name,
+                        'read': self.human_bytes(read_bytes),
+                        'write': self.human_bytes(write_bytes)
+                    })
+        except Exception as e:
+            print(f"Disk I/O error: {e}", file=sys.stderr)
+        return disks[:5]  # limit to 5 disks
+
+    # NEW: Systemd service memory/CPU
+    def get_service_details(self, service):
+        details = {}
+        try:
+            result = subprocess.run(['systemctl', '--user', 'show', service],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if '=' in line:
+                        key, val = line.split('=', 1)
+                        if key == 'MemoryCurrent':
+                            if val and val != '0':
+                                details['memory'] = self.human_bytes(int(val))
+                            else:
+                                details['memory'] = 'N/A'
+                        elif key == 'CPUUsageNSec':
+                            if val and val != '0':
+                                # Convert nanoseconds to seconds
+                                sec = int(val) / 1_000_000_000
+                                if sec < 60:
+                                    details['cpu'] = f"{sec:.1f}s"
+                                elif sec < 3600:
+                                    minutes = int(sec // 60)
+                                    seconds = int(sec % 60)
+                                    details['cpu'] = f"{minutes}m{seconds}s"
+                                else:
+                                    hours = int(sec // 3600)
+                                    minutes = int((sec % 3600) // 60)
+                                    details['cpu'] = f"{hours}h{minutes}m"
+                            else:
+                                details['cpu'] = 'N/A'
+        except:
+            pass
+        return details
 
     # ---------- GET ----------
     def do_GET(self):
@@ -586,7 +693,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 data = json.loads(post_data)
                 script = data.get('script', '')
 
-                # Special case: speed test
                 if script == 'speedtest':
                     try:
                         proc = subprocess.run(['speedtest-cli', '--simple'],
@@ -802,7 +908,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except:
             stats['interfaces'] = []
 
-        # Services
+        # Services with details
         service_list = os.environ.get('NOBA_WEB_SERVICES', 'backup-to-nas.service,organize-downloads.service,noba-web.service,syncthing.service').split(',')
         services_status = []
         for svc in service_list:
@@ -817,11 +923,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     status = 'unknown'
             except:
                 status = 'error'
-            services_status.append({'name': svc, 'status': status})
+            # Get memory/CPU details
+            details = self.get_service_details(svc)
+            svc_info = {'name': svc, 'status': status}
+            if details:
+                svc_info.update(details)
+            services_status.append(svc_info)
         stats['services'] = services_status
 
         # GPU
         stats['gpuTemp'] = self.get_gpu_temp()
+        stats['gpuLoad'] = self.get_gpu_load()
 
         # Docker
         stats['dockerContainers'] = self.get_docker_containers()
@@ -831,6 +943,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # ZFS
         stats['zfs'] = {'pools': self.get_zfs_pools()}
+
+        # Disk I/O
+        stats['diskio'] = self.get_disk_io()
 
         return stats
 
