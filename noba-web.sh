@@ -1,6 +1,6 @@
 #!/bin/bash
 # noba-web.sh – Ultimate dashboard (full version with all embedded code)
-# Version: 3.1.1
+# Version: 3.2.0
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-web.sh version 3.1.1"
+    echo "noba-web.sh version 3.2.0"
     exit 0
 }
 
@@ -144,7 +144,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Write index.html (full content)
+# Write index.html
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -174,281 +174,89 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         body {
             background: var(--bg-gradient);
             color: var(--text-primary);
-            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
             min-height: 100vh;
             padding: 2rem;
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
         }
-        h1 {
-            font-size: 2.5rem;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-            margin-bottom: 0.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
+        h1 { font-size: 2.5rem; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.75rem; }
         h1 i { color: var(--accent); font-size: 2rem; }
-        .timestamp {
-            color: var(--text-secondary);
-            margin-bottom: 2.5rem;
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        .card {
-            background: var(--card-bg);
-            backdrop-filter: var(--card-blur);
-            -webkit-backdrop-filter: var(--card-blur);
-            border: 1px solid var(--card-border);
-            border-radius: 1.5rem;
-            padding: 1.5rem;
-            box-shadow: var(--glass-shadow);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-        }
-        .card-header {
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin-bottom: 1.25rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--text-primary);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            padding-bottom: 0.75rem;
-        }
+        .timestamp { color: var(--text-secondary); margin-bottom: 2.5rem; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        .card { background: var(--card-bg); backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur); border: 1px solid var(--card-border); border-radius: 1.5rem; padding: 1.5rem; box-shadow: var(--glass-shadow); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); }
+        .card-header { font-size: 1.25rem; font-weight: 600; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 0.75rem; }
         .card-header i { color: var(--accent); width: 1.5rem; }
-        .stat-row {
-            display: flex;
-            justify-content: space-between;
-            margin: 0.75rem 0;
-            font-size: 0.95rem;
-        }
+
+        .stat-row { display: flex; justify-content: space-between; margin: 0.75rem 0; font-size: 0.95rem; }
         .stat-label { color: var(--text-secondary); }
-        .stat-value { font-weight: 500; color: var(--text-primary); }
+        .stat-value { font-weight: 500; }
         .success { color: var(--success); }
         .warning { color: var(--warning); }
         .danger { color: var(--danger); }
 
-        .disk-item {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin: 0.75rem 0;
-        }
-        .disk-item span:first-child {
-            min-width: 80px;
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-        }
-        .disk-bar {
-            flex: 1;
-            height: 0.5rem;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 1rem;
-            overflow: hidden;
-        }
-        .disk-bar-fill {
-            height: 100%;
-            border-radius: 1rem;
-            transition: width 0.3s ease;
-        }
-        .disk-percent {
-            min-width: 3rem;
-            text-align: right;
-            font-weight: 500;
-        }
+        .disk-item { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0; }
+        .disk-item span:first-child { min-width: 80px; font-size: 0.9rem; color: var(--text-secondary); }
+        .disk-bar { flex: 1; height: 0.5rem; background: rgba(255, 255, 255, 0.1); border-radius: 1rem; overflow: hidden; }
+        .disk-bar-fill { height: 100%; border-radius: 1rem; transition: width 0.3s ease; }
+        .disk-percent { min-width: 3rem; text-align: right; font-weight: 500; }
 
-        pre {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 0.75rem;
-            border-radius: 0.75rem;
-            font-size: 0.8rem;
-            font-family: 'Fira Code', monospace;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            color: var(--text-secondary);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            margin: 1rem 0 0.5rem;
-        }
+        pre { background: rgba(0, 0, 0, 0.3); padding: 0.75rem; border-radius: 0.75rem; font-size: 0.8rem; font-family: 'Fira Code', monospace; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; color: var(--text-secondary); border: 1px solid rgba(255, 255, 255, 0.05); margin: 1rem 0 0.5rem; }
 
-        .button-grid {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-        .btn {
-            padding: 0.6rem 1.2rem;
-            border: none;
-            border-radius: 2rem;
-            background: rgba(255, 255, 255, 0.1);
-            color: var(--text-primary);
-            font-size: 0.9rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        .btn:hover {
-            background: rgba(255, 255, 255, 0.2);
-            transform: translateY(-2px);
-        }
-        .btn-primary {
-            background: var(--accent);
-            border-color: rgba(59, 130, 246, 0.5);
-        }
+        .button-grid { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+        .btn { padding: 0.6rem 1.2rem; border: none; border-radius: 2rem; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid rgba(255, 255, 255, 0.05); }
+        .btn:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-2px); }
+        .btn-primary { background: var(--accent); border-color: rgba(59, 130, 246, 0.5); }
         .btn-primary:hover { background: #2563eb; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-        .modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(8px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-        }
-        .modal-content {
-            background: var(--card-bg);
-            backdrop-filter: var(--card-blur);
-            border: 1px solid var(--card-border);
-            border-radius: 1.5rem;
-            padding: 2rem;
-            max-width: 600px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: var(--glass-shadow);
-        }
-        .modal-header {
-            font-size: 1.5rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-            color: var(--text-primary);
-        }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-content { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 1.5rem; padding: 2rem; width: 90%; max-width: 700px; box-shadow: var(--glass-shadow); }
+        .modal-content pre { max-height: 50vh; overflow-y: auto; }
+        .modal-header { font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem; }
 
-        .footer {
-            margin-top: 2rem;
-            text-align: center;
-            color: var(--text-secondary);
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            align-items: center;
-            font-size: 0.9rem;
-        }
-        .footer .btn {
-            background: transparent;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
+        .footer { margin-top: 2rem; text-align: center; color: var(--text-secondary); display: flex; justify-content: center; gap: 1.5rem; align-items: center; font-size: 0.9rem; }
+        canvas.sparkline { width: 100%; height: 40px; max-height: 40px; }
+        .collapsible { cursor: pointer; user-select: none; }
+        .collapsible i { transition: transform 0.2s; }
+        .collapsible.open i { transform: rotate(90deg); }
+        .collapsible-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }
+        .collapsible-content.open { max-height: 500px; }
 
-        canvas.sparkline {
-            width: 100%;
-            height: 40px;
-            max-height: 40px;
-            page-break-inside: avoid;
-            break-inside: avoid;
-        }
-
-        .collapsible {
-            cursor: pointer;
-            user-select: none;
-        }
-        .collapsible i {
-            transition: transform 0.2s;
-        }
-        .collapsible.open i {
-            transform: rotate(90deg);
-        }
-        .collapsible-content {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.3s ease-out;
-        }
-        .collapsible-content.open {
-            max-height: 500px;
-        }
-
-        @media (max-width: 640px) {
-            body { padding: 1rem; }
-            h1 { font-size: 2rem; }
-        }
+        @media (max-width: 640px) { body { padding: 1rem; } h1 { font-size: 2rem; } }
     </style>
 </head>
 <body x-data="dashboard()" x-init="init()">
     <h1><i class="fas fa-chart-pie"></i> Nobara Dashboard</h1>
-    <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
+    <div class="timestamp">
+        <i class="fas fa-sync-alt" :class="refreshing ? 'fa-spin' : ''"></i>
+        Last updated: <span x-text="timestamp"></span>
+    </div>
 
     <div class="grid">
-        <!-- System Health Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
             <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
             <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
-            <div class="stat-row"><span class="stat-label">CPU Temp</span><span class="stat-value" :class="tempClass" x-text="cpuTemp"></span></div>
+            <div class="stat-row"><span class="stat-label">CPU Temp</span><span class="stat-value" :class="cpuTempClass" x-text="cpuTemp"></span></div>
         </div>
 
-        <!-- Battery Card -->
-        <div class="card" x-show="battery.present">
-            <div class="card-header"><i class="fas fa-battery-three-quarters"></i> Battery</div>
-            <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" x-text="battery.status"></span></div>
-            <div class="stat-row"><span class="stat-label">Capacity</span><span class="stat-value" x-text="battery.capacity + '%'"></span></div>
-            <div class="stat-row"><span class="stat-label">Health</span><span class="stat-value" x-text="battery.health"></span></div>
-            <div class="stat-row" x-show="battery.voltage !== 'N/A'"><span class="stat-label">Voltage</span><span class="stat-value" x-text="battery.voltage"></span></div>
-            <div class="stat-row" x-show="battery.power !== 'N/A'"><span class="stat-label">Power</span><span class="stat-value" x-text="battery.power"></span></div>
-        </div>
-
-        <!-- GPU Card -->
         <div class="card">
-            <div class="card-header"><i class="fas fa-microchip"></i> GPU</div>
-            <div class="stat-row"><span class="stat-label">Temperature</span><span class="stat-value" x-text="gpuTemp"></span></div>
+            <div class="card-header"><i class="fas fa-gamepad"></i> GPU</div>
+            <div class="stat-row"><span class="stat-label">Temperature</span><span class="stat-value" :class="gpuTempClass" x-text="gpuTemp"></span></div>
             <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" x-text="gpuLoad"></span></div>
         </div>
 
-        <!-- Backup Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-database"></i> Backup</div>
-            <div class="stat-row"><span class="stat-label">Last backup</span><span class="stat-value" :class="backupClass" x-text="backupStatus"></span></div>
-            <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
-            <pre x-text="backupLog"></pre>
-            <div class="button-grid">
-                <button class="btn btn-primary" @click="runScript('backup')"><i class="fas fa-play"></i> Run Backup</button>
-                <button class="btn" @click="runScript('verify')"><i class="fas fa-check"></i> Verify</button>
-            </div>
+        <div class="card" x-show="zfs.pools && zfs.pools.length > 0">
+            <div class="card-header"><i class="fas fa-layer-group"></i> ZFS Pools</div>
+            <template x-for="pool in zfs.pools" :key="pool.name">
+                <div class="stat-row"><span class="stat-label" x-text="pool.name"></span><span class="stat-value" :class="{'success': pool.health==='ONLINE','warning': pool.health==='DEGRADED','danger': pool.health==='FAULTED'}" x-text="pool.health"></span></div>
+            </template>
         </div>
 
-        <!-- Updates Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
-            <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
-        </div>
-
-        <!-- Disk Usage Card -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
             <template x-for="disk in disks" :key="disk.mount">
@@ -460,185 +268,59 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </template>
         </div>
 
-        <!-- Disk I/O Card -->
         <div class="card" style="grid-column: span 2;">
-            <div class="card-header"><i class="fas fa-tachometer-alt"></i> Disk I/O</div>
-            <template x-for="disk in diskio" :key="disk.name">
-                <div class="stat-row"><span class="stat-label" x-text="disk.name"></span><span class="stat-value" x-text="'R:' + disk.read + ' W:' + disk.write"></span></div>
-            </template>
-            <template x-if="diskio.length === 0"><div class="stat-row"><span class="stat-label">No disk I/O data</span></div></template>
+            <div class="card-header"><i class="fas fa-cogs"></i> Monitored Services</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <template x-for="svc in services" :key="svc.name">
+                    <div style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 0.5rem;">
+                        <div class="stat-row" style="margin-top:0"><span class="stat-label" style="font-weight:600; color:var(--text-primary)" x-text="svc.name.replace('.service','')"></span><span class="stat-value" :class="{'success': svc.status==='active','warning': svc.status==='inactive','danger': svc.status==='failed'}" x-text="svc.status"></span></div>
+                        <div class="stat-row" style="font-size:0.85rem; margin-bottom:0" x-show="svc.memory"><span class="stat-label">Mem:</span><span class="stat-value" x-text="svc.memory"></span></div>
+                        <div class="stat-row" style="font-size:0.85rem; margin:0" x-show="svc.cpu"><span class="stat-label">CPU:</span><span class="stat-value" x-text="svc.cpu"></span></div>
+                    </div>
+                </template>
+            </div>
         </div>
 
-        <!-- ZFS Card -->
-        <div class="card" x-show="zfs.pools && zfs.pools.length > 0">
-            <div class="card-header"><i class="fas fa-database"></i> ZFS Pools</div>
-            <template x-for="pool in zfs.pools" :key="pool.name">
-                <div class="stat-row"><span class="stat-label" x-text="pool.name"></span><span class="stat-value" :class="{'success': pool.health==='ONLINE','warning': pool.health==='DEGRADED','danger': pool.health==='FAULTED'}" x-text="pool.health"></span></div>
-            </template>
-        </div>
-
-        <!-- Download Organizer Card -->
         <div class="card">
-            <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
-            <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
-            <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
-            <pre x-text="organizerLog"></pre>
-            <div class="button-grid"><button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button></div>
+            <div class="card-header"><i class="fas fa-play-circle"></i> Scripts & Actions</div>
+            <div class="button-grid" style="flex-direction: column;">
+                <button class="btn btn-primary" :disabled="runningScript" @click="runScript('backup')"><i class="fas fa-database"></i> Run NAS Backup</button>
+                <button class="btn" :disabled="runningScript" @click="runScript('verify')"><i class="fas fa-check-double"></i> Verify Backups</button>
+                <button class="btn" :disabled="runningScript" @click="runScript('organize')"><i class="fas fa-folder-open"></i> Organize Downloads</button>
+                <button class="btn" :disabled="runningScript" @click="runScript('diskcheck')"><i class="fas fa-stethoscope"></i> Check Disks</button>
+            </div>
         </div>
 
-        <!-- Network Card -->
         <div class="card">
-            <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
+            <div class="card-header"><i class="fas fa-network-wired"></i> Quick Info</div>
             <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
-            <template x-for="iface in interfaces" :key="iface.name">
-                <div class="stat-row"><span class="stat-label" x-text="iface.name"></span><span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span></div>
-            </template>
-            <template x-if="interfaces.length === 0"><div class="stat-row"><span class="stat-label">No data</span></div></template>
-            <div class="button-grid" style="margin-top:1rem;"><button class="btn" @click="runScript('speedtest')"><i class="fas fa-tachometer-alt"></i> Speed Test</button></div>
-        </div>
-
-        <!-- Services Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
-            <template x-for="svc in services" :key="svc.name">
-                <div class="stat-row"><span class="stat-label" x-text="svc.name.replace('.service','')"></span><span class="stat-value" :class="{'success': svc.status==='active','warning': svc.status==='inactive','danger': svc.status==='failed'}" x-text="svc.status"></span></div>
-                <div class="stat-row" style="font-size:0.9rem; margin-top:-0.5rem;" x-show="svc.memory"><span class="stat-label">Memory</span><span class="stat-value" x-text="svc.memory"></span></div>
-                <div class="stat-row" style="font-size:0.9rem;" x-show="svc.cpu"><span class="stat-label">CPU Time</span><span class="stat-value" x-text="svc.cpu"></span></div>
-            </template>
-        </div>
-
-        <!-- Docker Card -->
-        <div class="card">
-            <div class="card-header"><i class="fab fa-docker"></i> Docker Containers</div>
-            <template x-if="dockerContainers.length === 0"><div class="stat-row"><span class="stat-label">No running containers</span></div></template>
-            <template x-for="container in dockerContainers" :key="container">
-                <div class="stat-row"><span class="stat-label" x-text="container.split('(')[0]"></span><span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span></div>
-            </template>
-        </div>
-
-        <!-- Disk Sentinel with Sparkline -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
-            <pre x-text="diskSentinel.output"></pre>
-            <canvas class="sparkline" x-ref="diskChart"></canvas>
-            <div class="button-grid"><button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button></div>
-        </div>
-
-        <!-- Temperature Alerts with Sparkline -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-thermometer-half"></i> Temperature Alerts</div>
-            <div class="stat-row"><span class="stat-label">Current CPU</span><span class="stat-value" :class="cpuTempClass" x-text="cpuTemp"></span></div>
-            <div class="stat-row"><span class="stat-label">Current GPU</span><span class="stat-value" :class="gpuTempClass" x-text="gpuTemp"></span></div>
-            <pre x-text="temperatureAlert.output"></pre>
-            <canvas class="sparkline" x-ref="tempChart"></canvas>
-        </div>
-
-        <!-- System Report (collapsible) -->
-        <div class="card" x-data="{ open: false }">
-            <div class="card-header collapsible" @click="open = !open">
-                <i class="fas fa-chevron-right" :class="{ 'open': open }"></i> System Report
-            </div>
-            <div class="collapsible-content" :class="{ 'open': open }">
-                <pre x-text="systemReport.output"></pre>
-            </div>
-        </div>
-
-        <!-- Service Watch -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-heartbeat"></i> Service Watch</div>
-            <template x-for="svc in serviceWatch" :key="svc.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="svc.name"></span>
-                    <span class="stat-value" :class="{
-                        'success': svc.status === 'running',
-                        'warning': svc.status === 'degraded',
-                        'danger': svc.status === 'failed'
-                    }" x-text="svc.status"></span>
-                    <span class="stat-value" x-show="svc.response" x-text="svc.response"></span>
-                </div>
-            </template>
-            <template x-if="serviceWatch.length === 0">
-                <div class="stat-row"><span class="stat-label">No monitored services</span></div>
-            </template>
-        </div>
-
-        <!-- Backup Verifier -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-check-circle"></i> Backup Verifier</div>
-            <div class="stat-row"><span class="stat-label">Last result</span><span class="stat-value" :class="backupVerifierClass" x-text="backupVerifier.result"></span></div>
-            <pre x-text="backupVerifier.output"></pre>
-            <div class="button-grid"><button class="btn" @click="runScript('verify')"><i class="fas fa-redo"></i> Verify Now</button></div>
-        </div>
-
-        <!-- Cloud Backup -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-cloud-upload-alt"></i> Cloud Backup</div>
-            <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" :class="cloudBackupClass" x-text="cloudBackup.status"></span></div>
-            <div class="stat-row"><span class="stat-label">Last sync</span><span class="stat-value" x-text="cloudBackup.lastSync"></span></div>
-            <div class="stat-row"><span class="stat-label">Size</span><span class="stat-value" x-text="cloudBackup.size"></span></div>
-            <pre x-text="cloudBackup.output"></pre>
-            <div class="button-grid"><button class="btn" @click="runScript('cloudbackup')"><i class="fas fa-sync"></i> Sync Now</button></div>
+            <div class="stat-row"><span class="stat-label">Containers</span><span class="stat-value" x-text="dockerContainers.length + ' Running'"></span></div>
+            <div class="stat-row"><span class="stat-label">Updates</span><span class="stat-value" x-text="(dnfUpdates + flatpakUpdates) + ' Pending'"></span></div>
+            <div class="button-grid" style="margin-top:1rem;"><button class="btn" :disabled="runningScript" @click="runScript('speedtest')"><i class="fas fa-tachometer-alt"></i> Speed Test</button></div>
         </div>
     </div>
 
-    <!-- Modal for script output -->
-    <div x-show="showModal" class="modal" @click.self="showModal=false">
+    <div x-show="showModal" class="modal" @click.self="showModal=false" style="display: none;">
         <div class="modal-content">
             <div class="modal-header" x-text="modalTitle"></div>
             <pre x-text="modalOutput"></pre>
             <div class="button-grid" style="justify-content: flex-end;">
-                <button class="btn" @click="showModal=false">Close</button>
+                <button class="btn" :disabled="runningScript" @click="showModal=false">Close</button>
             </div>
         </div>
-    </div>
-
-    <div class="footer">
-        <i class="fas fa-sync-alt fa-spin" x-show="refreshing"></i>
-        <span>Auto‑refreshes every minute</span>
-        <button class="btn" @click="refreshStats"><i class="fas fa-redo"></i> Refresh Now</button>
     </div>
 
     <script>
         function dashboard() {
             return {
-                // System
-                diskChart: null,
-                tempChart: null,
-                timestamp: '', uptime: '', loadavg: '', memory: '', cpuTemp: '',
-                tempClass: '', backupStatus: '', backupClass: '', backupTime: '',
-                backupLog: '', dnfUpdates: 0, flatpakUpdates: 0, totalUpdates: 0,
-                disks: [], movedFiles: 0, lastMove: '', organizerLog: '',
-                diskAlerts: '', showModal: false, modalTitle: '', modalOutput: '',
-                runningScript: false, refreshing: false,
-                defaultIp: '', interfaces: [], services: [],
-                gpuTemp: '', gpuLoad: '', dockerContainers: [],
-                battery: {}, zfs: { pools: [] }, diskio: [],
+                timestamp: '', uptime: '', loadavg: '', memory: '', cpuTemp: '', gpuTemp: '', gpuLoad: '',
+                dnfUpdates: 0, flatpakUpdates: 0, defaultIp: '',
+                disks: [], services: [], dockerContainers: [], zfs: { pools: [] },
 
-                // Integrated scripts
-                diskSentinel: { output: '' },
-                diskSentinelHistory: [],
-                temperatureAlert: { output: '' },
-                tempHistory: [],
-                systemReport: { output: '' },
-                serviceWatch: [],
-                backupVerifier: { result: '', output: '' },
-                cloudBackup: { status: '', lastSync: '', size: '', output: '' },
+                showModal: false, modalTitle: '', modalOutput: '', runningScript: false, refreshing: false,
 
-                // Computed classes
-                get cpuTempClass() {
-                    const t = parseInt(this.cpuTemp) || 0;
-                    return t > 80 ? 'danger' : t > 60 ? 'warning' : '';
-                },
-                get gpuTempClass() {
-                    const t = parseInt(this.gpuTemp) || 0;
-                    return t > 85 ? 'danger' : t > 70 ? 'warning' : '';
-                },
-                get backupVerifierClass() {
-                    return this.backupVerifier.result.includes('OK') ? 'success' : this.backupVerifier.result.includes('Failed') ? 'danger' : '';
-                },
-                get cloudBackupClass() {
-                    return this.cloudBackup.status === 'OK' ? 'success' : this.cloudBackup.status === 'Syncing' ? 'warning' : 'danger';
-                },
+                get cpuTempClass() { const t = parseInt(this.cpuTemp) || 0; return t > 80 ? 'danger' : t > 60 ? 'warning' : ''; },
+                get gpuTempClass() { const t = parseInt(this.gpuTemp) || 0; return t > 85 ? 'danger' : t > 70 ? 'warning' : ''; },
 
                 async init() {
                     await this.refreshStats();
@@ -646,51 +328,13 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 },
 
                 async refreshStats() {
+                    if(this.refreshing) return;
                     this.refreshing = true;
                     try {
                         const response = await fetch('/api/stats');
                         if (!response.ok) return;
                         const data = await response.json();
-
-                        // Existing
-                        this.timestamp = data.timestamp;
-                        this.uptime = data.uptime;
-                        this.loadavg = data.loadavg;
-                        this.memory = data.memory;
-                        this.cpuTemp = data.cpuTemp;
-                        this.backupStatus = data.backupStatus;
-                        this.backupClass = data.backupStatus.includes('OK') ? 'success' : data.backupStatus.includes('Failed') ? 'danger' : '';
-                        this.backupTime = data.backupTime;
-                        this.backupLog = data.backupLog;
-                        this.dnfUpdates = data.dnfUpdates;
-                        this.flatpakUpdates = data.flatpakUpdates;
-                        this.totalUpdates = data.dnfUpdates + data.flatpakUpdates;
-                        this.disks = data.disks;
-                        this.movedFiles = data.movedFiles;
-                        this.lastMove = data.lastMove;
-                        this.organizerLog = data.organizerLog;
-                        this.diskAlerts = data.diskAlerts;
-                        this.defaultIp = data.defaultIp || 'N/A';
-                        this.interfaces = data.interfaces || [];
-                        this.services = data.services || [];
-                        this.gpuTemp = data.gpuTemp || 'N/A';
-                        this.gpuLoad = data.gpuLoad || 'N/A';
-                        this.dockerContainers = data.dockerContainers || [];
-                        this.battery = data.battery || {};
-                        this.zfs = data.zfs || { pools: [] };
-                        this.diskio = data.diskio || [];
-
-                        // New integrated
-                        this.diskSentinel = data.diskSentinel || { output: '' };
-                        this.diskSentinelHistory = data.diskSentinelHistory || [];
-                        this.temperatureAlert = data.temperatureAlert || { output: '' };
-                        this.tempHistory = data.tempHistory || [];
-                        this.systemReport = data.systemReport || { output: '' };
-                        this.serviceWatch = data.serviceWatch || [];
-                        this.backupVerifier = data.backupVerifier || { result: '', output: '' };
-                        this.cloudBackup = data.cloudBackup || { status: '', lastSync: '', size: '', output: '' };
-
-                        this.$nextTick(() => this.drawCharts());
+                        Object.assign(this, data);
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     } finally {
@@ -698,60 +342,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                     }
                 },
 
-                drawCharts() {
-                    if (this.diskChart) this.diskChart.destroy();
-                    if (this.tempChart) this.tempChart.destroy();
-
-                    if (this.$refs.diskChart && this.diskSentinelHistory.length) {
-                        this.diskChart = new Chart(this.$refs.diskChart, {
-                            type: 'line',
-                            data: {
-                                labels: this.diskSentinelHistory.map((_, i) => i),
-                                datasets: [{
-                                    data: this.diskSentinelHistory,
-                                    borderColor: '#3b82f6',
-                                    backgroundColor: 'rgba(59,130,246,0.1)',
-                                    tension: 0.4,
-                                    pointRadius: 0
-                                }]
-                            },
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: { legend: { display: false } },
-                                scales: { x: { display: false }, y: { display: false } }
-                            }
-                        });
-                    }
-
-                    if (this.$refs.tempChart && this.tempHistory.length) {
-                        this.tempChart = new Chart(this.$refs.tempChart, {
-                            type: 'line',
-                            data: {
-                                labels: this.tempHistory.map((_, i) => i),
-                                datasets: [{
-                                    data: this.tempHistory,
-                                    borderColor: '#f59e0b',
-                                    backgroundColor: 'rgba(245,158,11,0.1)',
-                                    tension: 0.4,
-                                    pointRadius: 0
-                                }]
-                            },
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: { legend: { display: false } },
-                                scales: { x: { display: false }, y: { display: false } }
-                            }
-                        });
-                    }
-                },
-
                 async runScript(script) {
                     if (this.runningScript) return;
                     this.runningScript = true;
                     this.modalTitle = `Running ${script}...`;
-                    this.modalOutput = 'Starting...';
+                    this.modalOutput = 'Executing... This might take a moment.';
                     this.showModal = true;
 
                     try {
@@ -778,13 +373,13 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Write server.py (full version)
+# Write server.py
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 #!/usr/bin/env python3
 """
-Nobara Dashboard Server - Full version with integrated scripts.
-Listens on HOST:PORT and serves the dashboard with real‑time stats.
+Nobara Dashboard Server - Improved Concurrency & Caching
+Listens on HOST:PORT and serves the dashboard with real-time stats.
 """
 
 import http.server
@@ -792,7 +387,6 @@ import socketserver
 import json
 import subprocess
 import os
-import sys
 import time
 import re
 import logging
@@ -803,7 +397,7 @@ PORT = int(os.environ.get('PORT', 8080))
 HOST = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR = os.path.expanduser("~/.local/bin")
 LOG_DIR = os.path.expanduser("~/.local/share")
-CACHE_TTL = 30  # seconds for expensive commands (updates)
+CACHE_TTL = 30  # seconds
 PID_FILE = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
 
 logging.basicConfig(
@@ -819,12 +413,10 @@ def strip_ansi(s):
 
 def human_bytes(b):
     for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
-        if b < 1024.0:
-            return f"{b:.1f} {unit}"
+        if b < 1024.0: return f"{b:.1f} {unit}"
         b /= 1024.0
     return f"{b:.1f} PiB"
 
-# Simple TTL cache
 class TTLCache:
     def __init__(self, ttl_seconds):
         self.ttl = ttl_seconds
@@ -842,334 +434,95 @@ class TTLCache:
 
 _cache = TTLCache(CACHE_TTL)
 
+def run_cmd(cmd_list, timeout=2, cache_ttl=None):
+    """Executes a subprocess and returns stripped stdout. Allows optional caching."""
+    cache_key = " ".join(cmd_list)
+    if cache_ttl:
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        res = subprocess.run(cmd_list, capture_output=True, text=True, timeout=timeout)
+        out = res.stdout.strip() if res.returncode == 0 else ""
+        if cache_ttl and out:
+            _cache.set(cache_key, out)
+        return out
+    except Exception as e:
+        logging.debug(f"Command failed: {cache_key} -> {e}")
+        return ""
+
+# -------------------- Threaded Server Class --------------------
+class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
 # -------------------- Handler class --------------------
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory='.', **kwargs)
 
     def log_message(self, format, *args):
-        logging.info("%s - %s" % (self.address_string(), format % args))
+        # Silence standard HTTP logs to keep stderr clean
+        pass
 
-    # ---------- Battery ----------
-    def get_battery_info(self):
-        battery = {'present': False}
-        try:
-            for bat in ['BAT0', 'BAT1']:
-                bat_path = f'/sys/class/power_supply/{bat}'
-                if os.path.exists(bat_path):
-                    battery['present'] = True
-                    with open(f'{bat_path}/status') as f:
-                        battery['status'] = f.read().strip()
-                    with open(f'{bat_path}/capacity') as f:
-                        battery['capacity'] = f.read().strip()
-                    health_file = f'{bat_path}/health'
-                    if os.path.exists(health_file):
-                        with open(health_file) as f:
-                            battery['health'] = f.read().strip()
-                    else:
-                        battery['health'] = 'N/A'
-                    voltage_file = f'{bat_path}/voltage_now'
-                    if os.path.exists(voltage_file):
-                        with open(voltage_file) as f:
-                            voltage = int(f.read().strip()) / 1_000_000
-                        battery['voltage'] = f"{voltage:.2f}V"
-                    else:
-                        battery['voltage'] = 'N/A'
-                    power_file = f'{bat_path}/power_now'
-                    if os.path.exists(power_file):
-                        with open(power_file) as f:
-                            power = int(f.read().strip()) / 1_000_000
-                        battery['power'] = f"{power:.2f}W"
-                    else:
-                        battery['power'] = 'N/A'
-                    break
-        except Exception as e:
-            logging.error(f"Battery error: {e}")
-            battery['present'] = False
-        return battery
-
-    # ---------- ZFS ----------
+    # ---------- System Stats ----------
     def get_zfs_pools(self):
         pools = []
-        try:
-            result = subprocess.run(['zpool', 'list', '-H', '-o', 'name,health'],
-                                    capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 2:
-                        pools.append({'name': parts[0], 'health': parts[1]})
-        except Exception as e:
-            logging.debug(f"ZFS error (ignored): {e}")
+        out = run_cmd(['zpool', 'list', '-H', '-o', 'name,health'], timeout=2, cache_ttl=10)
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2: pools.append({'name': parts[0], 'health': parts[1]})
         return pools
 
-    # ---------- GPU (NVIDIA + AMD) ----------
-    def get_gpu_temp(self):
-        # Try NVIDIA first
-        try:
-            result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                temp = result.stdout.strip()
-                if temp:
-                    return temp + "°C"
-        except:
-            pass
-        # Try AMD via rocm-smi
-        try:
-            result = subprocess.run(['rocm-smi', '--showtemp', '--json'],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+    def get_gpu_info(self):
+        # NVIDIA Temp
+        out = run_cmd(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'], timeout=1, cache_ttl=5)
+        if out: return f"{out}°C", run_cmd(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader'], timeout=1, cache_ttl=5)
+
+        # AMD Temp
+        out = run_cmd(['rocm-smi', '--showtemp', '--json'], timeout=1, cache_ttl=5)
+        if out:
+            try:
+                data = json.loads(out)
                 for card in data.values():
                     if isinstance(card, dict):
-                        for key, val in card.items():
-                            if 'temperature' in key.lower():
-                                return f"{float(val):.0f}°C"
-        except:
-            pass
-        # Fallback to sensors
-        try:
-            result = subprocess.run(['sensors', '-u'], capture_output=True, text=True, timeout=2)
-            match = re.search(r'edge:.*?temp1_input: (\d+\.\d+)', result.stdout, re.DOTALL)
-            if match:
-                return f"{float(match.group(1)):.0f}°C"
-            match = re.search(r'Tdie:.*?temp1_input: (\d+\.\d+)', result.stdout, re.DOTALL)
-            if match:
-                return f"{float(match.group(1)):.0f}°C"
-        except:
-            pass
-        return "N/A"
+                        for k, v in card.items():
+                            if 'temperature' in k.lower(): return f"{float(v):.0f}°C", "N/A"
+            except: pass
+        return "N/A", "N/A"
 
-    def get_gpu_load(self):
-        # NVIDIA
-        try:
-            result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader'],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                load = result.stdout.strip()
-                if load:
-                    return load
-        except:
-            pass
-        # AMD via rocm-smi
-        try:
-            result = subprocess.run(['rocm-smi', '--showuse', '--json'],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                for card in data.values():
-                    if isinstance(card, dict):
-                        for key, val in card.items():
-                            if 'use' in key.lower():
-                                return f"{val}%"
-        except:
-            pass
-        return 'N/A'
-
-    # ---------- Docker ----------
     def get_docker_containers(self):
         containers = []
-        try:
-            result = subprocess.run(['docker', 'ps', '--format', '{{.Names}} ({{.Status}})'],
-                                    capture_output=True, text=True, timeout=3)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if line:
-                        containers.append(line.strip())
-        except Exception as e:
-            logging.debug(f"Docker error: {e}")
-        return containers
+        out = run_cmd(['docker', 'ps', '--format', '{{.Names}} ({{.Status}})'], timeout=3, cache_ttl=10)
+        return out.splitlines() if out else []
 
-    # ---------- Disk I/O ----------
-    def get_disk_io(self):
-        disks = []
-        try:
-            with open('/proc/diskstats') as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) < 14:
-                        continue
-                    name = parts[2]
-                    if name.startswith(('loop', 'ram', 'sr')):
-                        continue
-                    reads = int(parts[5])   # sectors read
-                    writes = int(parts[9])  # sectors written
-                    read_bytes = reads * 512
-                    write_bytes = writes * 512
-                    disks.append({
-                        'name': name,
-                        'read': human_bytes(read_bytes),
-                        'write': human_bytes(write_bytes)
-                    })
-        except Exception as e:
-            logging.error(f"Disk I/O error: {e}")
-        return disks[:10]
-
-    # ---------- Systemd service memory/CPU ----------
     def get_service_details(self, service):
         details = {}
-        try:
-            result = subprocess.run(['systemctl', '--user', 'show', service],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if '=' in line:
-                        key, val = line.split('=', 1)
-                        if key == 'MemoryCurrent':
-                            if val and val != '0':
-                                details['memory'] = human_bytes(int(val))
-                            else:
-                                details['memory'] = 'N/A'
-                        elif key == 'CPUUsageNSec':
-                            if val and val != '0':
-                                sec = int(val) / 1_000_000_000
-                                if sec < 60:
-                                    details['cpu'] = f"{sec:.1f}s"
-                                elif sec < 3600:
-                                    minutes = int(sec // 60)
-                                    seconds = int(sec % 60)
-                                    details['cpu'] = f"{minutes}m{seconds}s"
-                                else:
-                                    hours = int(sec // 3600)
-                                    minutes = int((sec % 3600) // 60)
-                                    details['cpu'] = f"{hours}h{minutes}m"
-                            else:
-                                details['cpu'] = 'N/A'
-        except Exception as e:
-            logging.debug(f"Service details error for {service}: {e}")
+        out = run_cmd(['systemctl', '--user', 'show', service], timeout=1, cache_ttl=10)
+        for line in out.splitlines():
+            if '=' in line:
+                key, val = line.split('=', 1)
+                if key == 'MemoryCurrent' and val != '0' and val.isdigit():
+                    details['memory'] = human_bytes(int(val))
+                elif key == 'CPUUsageNSec' and val != '0' and val.isdigit():
+                    sec = int(val) / 1_000_000_000
+                    details['cpu'] = f"{sec:.1f}s" if sec < 60 else f"{int(sec//60)}m{int(sec%60)}s"
         return details
-
-    # ---------- NEW: Disk Sentinel ----------
-    def get_disk_sentinel(self):
-        result = {'output': '', 'history': []}
-        script = os.path.join(SCRIPT_DIR, 'disk-sentinel.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
-                out = proc.stdout + proc.stderr
-                result['output'] = strip_ansi(out)[-500:]
-                # TODO: Replace with real history extraction from your script's logs
-                # For now, placeholder data:
-                result['history'] = [75, 78, 80, 77, 79, 82, 81]
-            except Exception as e:
-                result['output'] = f"Error: {e}"
-        else:
-            result['output'] = "Script not found"
-        return result
-
-    # ---------- NEW: Temperature Alert ----------
-    def get_temperature_alert(self):
-        result = {'output': '', 'history': []}
-        script = os.path.join(SCRIPT_DIR, 'temperature-alert.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script], capture_output=True, text=True, timeout=5)
-                out = proc.stdout + proc.stderr
-                result['output'] = strip_ansi(out)[-500:]
-                # TODO: Replace with real temperature history
-                result['history'] = [45, 47, 50, 48, 46, 49, 52]
-            except Exception as e:
-                result['output'] = f"Error: {e}"
-        else:
-            result['output'] = "Script not found"
-        return result
-
-    # ---------- NEW: System Report ----------
-    def get_system_report(self):
-        result = {'output': ''}
-        script = os.path.join(SCRIPT_DIR, 'system-report.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
-                out = proc.stdout + proc.stderr
-                result['output'] = strip_ansi(out)[-1000:]
-            except Exception as e:
-                result['output'] = f"Error: {e}"
-        else:
-            result['output'] = "Script not found"
-        return result
-
-    # ---------- NEW: Service Watch ----------
-    def get_service_watch(self):
-        services = []
-        script = os.path.join(SCRIPT_DIR, 'service-watch.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
-                for line in proc.stdout.splitlines():
-                    parts = line.split(':', 1)
-                    if len(parts) == 2:
-                        name = parts[0].strip()
-                        rest = parts[1].strip()
-                        status_match = re.search(r'^(running|degraded|failed|stopped)', rest, re.I)
-                        status = status_match.group(1).lower() if status_match else 'unknown'
-                        time_match = re.search(r'\((\d+ms)\)', rest)
-                        response = time_match.group(1) if time_match else ''
-                        services.append({'name': name, 'status': status, 'response': response})
-            except Exception as e:
-                logging.error(f"Service watch error: {e}")
-        return services
-
-    # ---------- NEW: Backup Verifier ----------
-    def get_backup_verifier(self):
-        result = {'result': 'N/A', 'output': ''}
-        script = os.path.join(SCRIPT_DIR, 'backup-verifier.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script], capture_output=True, text=True, timeout=30)
-                out = proc.stdout + proc.stderr
-                result['output'] = strip_ansi(out)[-500:]
-                if 'OK' in out or 'verified' in out.lower():
-                    result['result'] = 'OK'
-                elif 'FAIL' in out or 'error' in out.lower():
-                    result['result'] = 'Failed'
-                else:
-                    result['result'] = 'Unknown'
-            except Exception as e:
-                result['output'] = f"Error: {e}"
-                result['result'] = 'Error'
-        else:
-            result['output'] = "Script not found"
-        return result
-
-    # ---------- NEW: Cloud Backup ----------
-    def get_cloud_backup(self):
-        result = {'status': 'N/A', 'lastSync': 'N/A', 'size': 'N/A', 'output': ''}
-        script = os.path.join(SCRIPT_DIR, 'cloud-backup.sh')
-        if os.path.exists(script):
-            try:
-                proc = subprocess.run([script, '--status'], capture_output=True, text=True, timeout=20)
-                out = proc.stdout + proc.stderr
-                result['output'] = strip_ansi(out)[-500:]
-                for line in out.splitlines():
-                    if 'Status:' in line:
-                        result['status'] = line.split(':',1)[1].strip()
-                    elif 'Last sync:' in line:
-                        result['lastSync'] = line.split(':',1)[1].strip()
-                    elif 'Size:' in line:
-                        result['size'] = line.split(':',1)[1].strip()
-            except Exception as e:
-                result['output'] = f"Error: {e}"
-        else:
-            result['output'] = "Script not found"
-        return result
 
     # ---------- GET /api/stats ----------
     def do_GET(self):
-        try:
-            if self.path == '/api/stats':
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                stats = self.get_stats()
-                self.wfile.write(json.dumps(stats).encode())
-            else:
+        if self.path == '/api/stats':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(self.get_stats()).encode())
+        else:
+            # Only serve basic files from current dir to prevent traversal
+            if self.path in ['/', '/index.html']:
                 super().do_GET()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except Exception as e:
-            logging.error(f"GET error: {e}")
+            else:
+                self.send_error(404, "Not Found")
 
     # ---------- POST /api/run ----------
     def do_POST(self):
@@ -1185,31 +538,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     'verify': 'backup-verifier.sh',
                     'organize': 'organize-downloads.sh',
                     'diskcheck': 'disk-sentinel.sh',
-                    'speedtest': 'speedtest-cli',
                     'cloudbackup': 'cloud-backup.sh',
                 }
 
                 if script == 'speedtest':
-                    try:
-                        proc = subprocess.run(['speedtest-cli', '--simple'],
-                                              capture_output=True, text=True, timeout=60)
-                        output = proc.stdout + proc.stderr
-                        success = proc.returncode == 0
-                    except Exception as e:
-                        output = f"Speed test failed: {str(e)}"
-                        success = False
+                    proc = subprocess.run(['speedtest-cli', '--simple'], capture_output=True, text=True, timeout=60)
+                    output = proc.stdout + proc.stderr
+                    success = proc.returncode == 0
                 else:
                     script_file = os.path.join(SCRIPT_DIR, script_map.get(script, ''))
                     if not os.path.exists(script_file):
-                        output = f"Script {script} not found"
+                        output = f"Script {script} not found at {script_file}"
                         success = False
                     else:
-                        proc = subprocess.run(
-                            [script_file, '--verbose'],
-                            capture_output=True, text=True,
-                            timeout=120, cwd=SCRIPT_DIR
-                        )
-                        output = proc.stdout + proc.stderr
+                        proc = subprocess.run([script_file, '--verbose'], capture_output=True, text=True, timeout=120, cwd=SCRIPT_DIR)
+                        output = strip_ansi(proc.stdout + proc.stderr)
                         success = proc.returncode == 0
 
                 result = {'success': success, 'output': output}
@@ -1218,239 +561,91 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps(result).encode())
             except subprocess.TimeoutExpired:
-                output = "Script timed out."
-                result = {'success': False, 'output': output}
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
+                self._send_json({'success': False, 'output': 'Script timed out.'})
             except Exception as e:
-                output = f"Error: {str(e)}"
-                result = {'success': False, 'output': output}
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
+                self._send_json({'success': False, 'output': f"Error: {str(e)}"})
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _send_json(self, data):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
 
     # ---------- Main stats collector ----------
     def get_stats(self):
         stats = {'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')}
 
-        # Uptime
         try:
-            with open('/proc/uptime') as f:
-                uptime_sec = float(f.read().split()[0])
-                hours = int(uptime_sec // 3600)
-                minutes = int((uptime_sec % 3600) // 60)
-                stats['uptime'] = f"{hours}h {minutes}m"
-        except:
-            stats['uptime'] = 'N/A'
+            uptime_sec = float(open('/proc/uptime').read().split()[0])
+            stats['uptime'] = f"{int(uptime_sec//3600)}h {int((uptime_sec%3600)//60)}m"
+        except: stats['uptime'] = 'N/A'
 
-        # Load average
-        try:
-            stats['loadavg'] = open('/proc/loadavg').read().split()[0]
-        except:
-            stats['loadavg'] = 'N/A'
+        try: stats['loadavg'] = open('/proc/loadavg').read().split()[0]
+        except: stats['loadavg'] = 'N/A'
 
-        # Memory
         try:
-            meminfo = {}
             with open('/proc/meminfo') as f:
-                for line in f:
-                    if line.startswith('MemTotal:'):
-                        meminfo['total'] = int(line.split()[1]) // 1024
-                    elif line.startswith('MemAvailable:'):
-                        meminfo['avail'] = int(line.split()[1]) // 1024
-            stats['memory'] = f"{meminfo.get('avail',0)}Mi/{meminfo.get('total',0)}Mi"
-        except:
-            stats['memory'] = 'N/A'
+                lines = f.readlines()
+            mem_tot = next(int(l.split()[1])//1024 for l in lines if 'MemTotal' in l)
+            mem_av = next(int(l.split()[1])//1024 for l in lines if 'MemAvailable' in l)
+            stats['memory'] = f"{mem_av}Mi/{mem_tot}Mi"
+        except: stats['memory'] = 'N/A'
 
-        # CPU Temp (reuse GPU temp)
-        stats['cpuTemp'] = self.get_gpu_temp()
+        gpu_temp, gpu_load = self.get_gpu_info()
+        stats['gpuTemp'], stats['gpuLoad'], stats['cpuTemp'] = gpu_temp, gpu_load, gpu_temp
 
-        # Backup
-        backup_log = os.path.join(LOG_DIR, 'backup-to-nas.log')
-        if os.path.exists(backup_log):
-            with open(backup_log) as f:
-                lines = [strip_ansi(l) for l in f.readlines()]
-                last_line = lines[-1].strip() if lines else ''
-                if 'ERROR' in last_line:
-                    stats['backupStatus'] = 'Failed'
-                elif 'finished' in last_line:
-                    stats['backupStatus'] = 'OK'
-                else:
-                    stats['backupStatus'] = 'Unknown'
-                stats['backupLog'] = ''.join(lines[-5:])[-500:]
-                stats['backupTime'] = time.ctime(os.path.getmtime(backup_log))
-        else:
-            stats['backupStatus'] = 'No log'
-            stats['backupLog'] = ''
-            stats['backupTime'] = ''
-
-        # Updates (cached)
+        # Updates (Cached)
         cached_updates = _cache.get('updates')
         if cached_updates:
-            dnf_updates, flatpak_updates = cached_updates
+            stats['dnfUpdates'], stats['flatpakUpdates'] = cached_updates
         else:
-            dnf_out = ''
-            try:
-                dnf_out = subprocess.run(['dnf', 'check-update', '-q'], capture_output=True, text=True, timeout=10).stdout
-            except:
-                pass
-            dnf_updates = len([l for l in dnf_out.splitlines() if l and not l.startswith('Last metadata')])
-            flatpak_out = ''
-            try:
-                flatpak_out = subprocess.run(['flatpak', 'remote-ls', '--updates'], capture_output=True, text=True, timeout=10).stdout
-            except:
-                pass
-            flatpak_updates = len([l for l in flatpak_out.splitlines() if l])
-            _cache.set('updates', (dnf_updates, flatpak_updates))
-        stats['dnfUpdates'] = dnf_updates
-        stats['flatpakUpdates'] = flatpak_updates
+            dnf_out = run_cmd(['dnf', 'check-update', '-q'], timeout=10)
+            flat_out = run_cmd(['flatpak', 'remote-ls', '--updates'], timeout=10)
+            dnf_c = len([l for l in dnf_out.splitlines() if l and not l.startswith('Last metadata')])
+            flat_c = len([l for l in flat_out.splitlines() if l])
+            _cache.set('updates', (dnf_c, flat_c))
+            stats['dnfUpdates'], stats['flatpakUpdates'] = dnf_c, flat_c
 
         # Disk usage
         disks = []
-        try:
-            output = subprocess.run(['df', '-h'], capture_output=True, text=True).stdout
-            for line in output.splitlines()[1:]:
-                parts = line.split()
-                if len(parts) >= 5 and parts[0].startswith('/dev/'):
-                    mount = parts[5] if len(parts) > 5 else ''
-                    if mount.startswith(('/var/lib/snapd', '/boot')):
-                        continue
-                    percent = parts[4].replace('%', '')
-                    if int(percent) >= 90:
-                        bar_class = 'danger'
-                    elif int(percent) >= 75:
-                        bar_class = 'warning'
-                    else:
-                        bar_class = 'success'
-                    disks.append({'mount': mount, 'percent': percent, 'barClass': bar_class})
-        except:
-            pass
+        df_out = run_cmd(['df', '-h'], timeout=2, cache_ttl=10)
+        for line in df_out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 5 and parts[0].startswith('/dev/'):
+                mount = parts[5] if len(parts) > 5 else ''
+                if mount.startswith(('/var/lib/snapd', '/boot')): continue
+                pct = parts[4].replace('%', '')
+                bar_class = 'danger' if int(pct) >= 90 else 'warning' if int(pct) >= 75 else 'success'
+                disks.append({'mount': mount, 'percent': pct, 'barClass': bar_class})
         stats['disks'] = disks
 
-        # Download organizer
-        organizer_log = os.path.join(LOG_DIR, 'download-organizer.log')
-        moved = 0
-        last_move = ''
-        if os.path.exists(organizer_log):
-            with open(organizer_log) as f:
-                lines = [strip_ansi(l) for l in f.readlines()]
-                moved = sum(1 for l in lines if 'Moved:' in l)
-                last_line = next((l for l in reversed(lines) if 'Moved:' in l), '')
-                if last_line:
-                    last_move = last_line.split('Moved:')[-1].strip()
-            stats['movedFiles'] = moved
-            stats['lastMove'] = last_move
-            stats['organizerLog'] = ''.join(lines[-5:])[-500:]
-        else:
-            stats['movedFiles'] = 0
-            stats['lastMove'] = ''
-            stats['organizerLog'] = ''
+        # Default IP
+        ip_out = run_cmd(['ip', '-4', 'route', 'get', '1'], timeout=1, cache_ttl=30)
+        match = re.search(r'src\s+(\d+\.\d+\.\d+\.\d+)', ip_out)
+        stats['defaultIp'] = match.group(1) if match else 'N/A'
 
-        # Disk alerts (from disk-sentinel.log)
-        disk_log = os.path.join(LOG_DIR, 'disk-sentinel.log')
-        if os.path.exists(disk_log):
-            with open(disk_log) as f:
-                lines = [strip_ansi(l) for l in f.readlines()]
-                alerts = [l for l in lines if 'WARNING' in l or 'exceeded' in l]
-                stats['diskAlerts'] = ''.join(alerts[-5:])[-500:] if alerts else 'No recent warnings'
-        else:
-            stats['diskAlerts'] = 'No log'
-
-        # Network
-        try:
-            result = subprocess.run(['ip', '-4', 'route', 'get', '1'],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                match = re.search(r'src\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
-                stats['defaultIp'] = match.group(1) if match else 'N/A'
-            else:
-                stats['defaultIp'] = 'N/A'
-        except:
-            stats['defaultIp'] = 'N/A'
-
-        interfaces = []
-        try:
-            with open('/proc/net/dev') as f:
-                lines = f.readlines()[2:]
-                for line in lines:
-                    parts = line.split()
-                    iface = parts[0].strip(':')
-                    rx_bytes = int(parts[1])
-                    tx_bytes = int(parts[9])
-                    interfaces.append({
-                        'name': iface,
-                        'rx': human_bytes(rx_bytes),
-                        'tx': human_bytes(tx_bytes)
-                    })
-            stats['interfaces'] = interfaces[:3]
-        except:
-            stats['interfaces'] = []
-
-        # Services with details
-        service_list = os.environ.get('NOBA_WEB_SERVICES', 'backup-to-nas.service,organize-downloads.service,noba-web.service,syncthing.service').split(',')
+        # Services
+        service_list = os.environ.get('NOBA_WEB_SERVICES', '').split(',')
         services_status = []
         for svc in service_list:
-            svc = svc.strip()
-            if not svc:
-                continue
-            try:
-                result = subprocess.run(['systemctl', '--user', 'is-active', svc],
-                                        capture_output=True, text=True, timeout=2)
-                status = result.stdout.strip()
-                if status not in ('active', 'inactive', 'failed'):
-                    status = 'unknown'
-            except:
-                status = 'error'
-            details = self.get_service_details(svc)
-            svc_info = {'name': svc, 'status': status}
-            if details:
-                svc_info.update(details)
+            if not svc.strip(): continue
+            status = run_cmd(['systemctl', '--user', 'is-active', svc.strip()], timeout=1) or 'unknown'
+            svc_info = {'name': svc.strip(), 'status': status}
+            svc_info.update(self.get_service_details(svc.strip()))
             services_status.append(svc_info)
         stats['services'] = services_status
 
-        # GPU
-        stats['gpuTemp'] = self.get_gpu_temp()
-        stats['gpuLoad'] = self.get_gpu_load()
-
-        # Docker
         stats['dockerContainers'] = self.get_docker_containers()
-
-        # Battery
-        stats['battery'] = self.get_battery_info()
-
-        # ZFS
         stats['zfs'] = {'pools': self.get_zfs_pools()}
-
-        # Disk I/O
-        stats['diskio'] = self.get_disk_io()
-
-        # NEW integrated data
-        disk_sentinel = self.get_disk_sentinel()
-        stats['diskSentinel'] = {'output': disk_sentinel['output']}
-        stats['diskSentinelHistory'] = disk_sentinel['history']
-
-        temp_alert = self.get_temperature_alert()
-        stats['temperatureAlert'] = {'output': temp_alert['output']}
-        stats['tempHistory'] = temp_alert['history']
-
-        stats['systemReport'] = self.get_system_report()
-        stats['serviceWatch'] = self.get_service_watch()
-        stats['backupVerifier'] = self.get_backup_verifier()
-        stats['cloudBackup'] = self.get_cloud_backup()
 
         return stats
 
 # -------------------- Server setup --------------------
 def run_server():
-    handler = Handler
-    with socketserver.TCPServer((HOST, PORT), handler) as httpd:
-        httpd.allow_reuse_address = True
+    with ThreadedTCPServer((HOST, PORT), Handler) as httpd:
         logging.info(f"Serving dashboard at http://{HOST}:{PORT}")
         print(f"Serving dashboard at http://{HOST}:{PORT}")
         try:
@@ -1466,7 +661,7 @@ if __name__ == '__main__':
 EOF
 
 # -------------------------------------------------------------------
-# Start the server with better error reporting
+# Start the server
 # -------------------------------------------------------------------
 kill_server
 
@@ -1475,15 +670,12 @@ export HOST
 export PID_FILE="$SERVER_PID_FILE"
 cd "$HTML_DIR"
 
-# Clear old log and start fresh
 : > "$LOG_FILE"
 
-# Start server in background
 nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > "$SERVER_PID_FILE"
 
-# Wait a moment for startup
 sleep 2
 if kill -0 "$SERVER_PID" 2>/dev/null; then
     log_success "Web dashboard started on http://$HOST:$PORT"
