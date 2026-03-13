@@ -1,8 +1,6 @@
 #!/bin/bash
-# noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, service resource usage,
-# and integrated disk‑sentinel, temperature‑alert, system‑report, service‑watch,
-# backup‑verifier, and cloud‑backup – all beautifully displayed!
-# Version: 3.1.0
+# noba-web.sh – Ultimate dashboard (full version with all embedded code)
+# Version: 3.1.1
 
 set -euo pipefail
 
@@ -11,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
-# Default configuration (can be overridden by config file)
+# Default configuration
 # -------------------------------------------------------------------
 START_PORT="${START_PORT:-8080}"
 MAX_PORT="${MAX_PORT:-8090}"
@@ -19,11 +17,11 @@ HTML_DIR="${HTML_DIR:-/tmp/noba-web}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
 LOG_FILE="${LOG_FILE:-/tmp/noba-web.log}"
 KILL_ONLY=false
-HOST="${HOST:-0.0.0.0}"          # Bind to all interfaces by default
+HOST="${HOST:-0.0.0.0}"
 DEFAULT_SERVICES="backup-to-nas.service organize-downloads.service noba-web.service syncthing.service"
 
 # -------------------------------------------------------------------
-# Load user configuration (using stateless get_config)
+# Load user configuration (stateless)
 # -------------------------------------------------------------------
 START_PORT="$(get_config ".web.start_port" "$START_PORT")"
 MAX_PORT="$(get_config ".web.max_port" "$MAX_PORT")"
@@ -39,7 +37,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-web.sh version 3.1.0 (noba-lib version $NOBA_LIB_VERSION)"
+    echo "noba-web.sh version 3.1.1"
     exit 0
 }
 
@@ -83,7 +81,7 @@ find_free_port() {
 
     if command -v ss &>/dev/null; then
         for port in $(seq "$start" "$max"); do
-            if ! ss -tuln 2>/dev/null | grep -q ":$port "; then
+            if ! ss -tuln 2>/dev/null | grep -q ":$port[[:space:]]"; then
                 echo "$port"
                 return 0
             fi
@@ -146,7 +144,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Embedded HTML (index.html) – full version with all cards
+# Write index.html (full content)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -780,7 +778,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Python server (full version with all new methods)
+# Write server.py (full version)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 #!/usr/bin/env python3
@@ -1468,7 +1466,7 @@ if __name__ == '__main__':
 EOF
 
 # -------------------------------------------------------------------
-# Start the server
+# Start the server with better error reporting
 # -------------------------------------------------------------------
 kill_server
 
@@ -1477,18 +1475,22 @@ export HOST
 export PID_FILE="$SERVER_PID_FILE"
 cd "$HTML_DIR"
 
-# Start server in background with nohup
+# Clear old log and start fresh
+: > "$LOG_FILE"
+
+# Start server in background
 nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > "$SERVER_PID_FILE"
 
-# Wait a moment to ensure server started
-sleep 1
+# Wait a moment for startup
+sleep 2
 if kill -0 "$SERVER_PID" 2>/dev/null; then
     log_success "Web dashboard started on http://$HOST:$PORT"
     log_info "Log file: $LOG_FILE"
     log_info "Use '$0 --kill' to stop the server."
 else
-    log_error "Server failed to start. Check log: $LOG_FILE"
+    log_error "Server failed to start. Last 20 lines of log:"
+    tail -20 "$LOG_FILE" >&2
     exit 1
 fi
