@@ -365,30 +365,12 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                     try {
                         const response = await fetch('/api/stats');
                         const data = await response.json();
+                        console.log('Raw API data:', data);  // ← ADD THIS
                         this.timestamp = data.timestamp;
                         this.uptime = data.uptime;
-                        this.loadavg = data.loadavg;
-                        this.memory = data.memory;
-                        this.cpuTemp = data.cpuTemp;
-                        this.tempClass = data.cpuTemp > 80 ? 'danger' : data.cpuTemp > 60 ? 'warning' : '';
-                        this.backupStatus = data.backupStatus;
-                        this.backupClass = data.backupStatus.includes('OK') ? 'success' : data.backupStatus.includes('Failed') ? 'danger' : '';
-                        this.backupTime = data.backupTime;
-                        this.backupLog = data.backupLog;
-                        this.dnfUpdates = data.dnfUpdates;
-                        this.flatpakUpdates = data.flatpakUpdates;
-                        this.totalUpdates = data.dnfUpdates + data.flatpakUpdates;
-                        this.disks = data.disks;
-                        this.movedFiles = data.movedFiles;
-                        this.lastMove = data.lastMove;
-                        this.organizerLog = data.organizerLog;
-                        this.diskAlerts = data.diskAlerts;
-                        this.defaultIp = data.defaultIp || 'N/A';
-                        this.interfaces = data.interfaces || [];
-                        this.services = data.services || [];
-                        this.gpuTemp = data.gpuTemp || 'N/A';
-                        this.dockerContainers = data.dockerContainers || [];
+                        // ... all other assignments ...
                         this.layout = data.layout || ['system', 'gpu', 'backup', 'updates', 'disk', 'organizer', 'sentinel', 'network', 'services', 'docker'];
+                        console.log('Layout after assignment:', this.layout); // ← AND THIS
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     }
