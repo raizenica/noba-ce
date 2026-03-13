@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # Default configuration
 # -------------------------------------------------------------------
 VERBOSE=false
+# shellcheck disable=SC2034
 CHECK_ALL=true
 OLD_CONFIG_FILE="${OLD_CONFIG_FILE:-$HOME/.config/automation.conf}"
 NEW_CONFIG_FILE="${NEW_CONFIG_FILE:-$HOME/.config/noba/config.yaml}"
@@ -163,6 +164,7 @@ fi
 log_info "Dependency checks:"
 
 # Define command lists by category
+# shellcheck disable=SC2034
 common_cmds=(
     "rsync"
     "msmtp"
@@ -177,6 +179,7 @@ common_cmds=(
     "kdialog"       # optional
 )
 
+# shellcheck disable=SC2034
 backup_cmds=(
     "rsync"
     "msmtp"
@@ -184,47 +187,48 @@ backup_cmds=(
     "flock"
 )
 
+# shellcheck disable=SC2034
 verifier_cmds=(
     "find"
     "shuf"
     "md5sum"
 )
-
+# shellcheck disable=SC2034
 checksum_cmds=(
     "find"
     "jq"
     "yq"
     # clipboard tools: wl-copy or xclip
 )
-
+# shellcheck disable=SC2034
 disk_cmds=(
     "df"
     "du"
     "msmtp"
 )
-
+# shellcheck disable=SC2034
 images_cmds=(
     "convert"
 )
-
+# shellcheck disable=SC2034
 organizer_cmds=(
     "find"
     "mv"
 )
-
+# shellcheck disable=SC2034
 hogwarts_cmds=(
     "find"
 )
-
+# shellcheck disable=SC2034
 motd_cmds=(
     "curl"
     "jq"
 )
-
+# shellcheck disable=SC2034
 dashboard_cmds=(
     "find"
 )
-
+# shellcheck disable=SC2034
 notify_cmds=(
     "notify-send"
 )

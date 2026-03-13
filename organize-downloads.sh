@@ -111,6 +111,7 @@ while true; do
         -d|--download-dir) DOWNLOAD_DIR="$2"; shift 2 ;;
         -a|--min-age)      MIN_AGE_MINUTES="$2"; shift 2 ;;
         -n|--dry-run)      DRY_RUN=true; shift ;;
+         # shellcheck disable=SC2034
         -v|--verbose)      VERBOSE=true; shift ;;
         --help)            show_help ;;
         --version)         show_version ;;
@@ -176,7 +177,7 @@ find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -path '*/\.*' -print0 | while IFS=
     # Find category
     dest_folder="$DOWNLOAD_DIR/Others"
     for cat in "${!CATEGORIES[@]}"; do
-        if [[ " ${CATEGORIES[$cat]} " =~ " $ext " ]]; then
+              if [[ " ${CATEGORIES[$cat]} " == *" $ext "* ]]; then
             dest_folder="$DOWNLOAD_DIR/$cat"
             break
         fi

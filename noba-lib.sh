@@ -68,6 +68,7 @@ load_config() {
     fi
 
     # Override get_config with real yq version
+    # shellcheck disable=SC2329
     get_config() {
         local key="$1"
         local default="${2:-}"
@@ -80,6 +81,7 @@ load_config() {
         fi
     }
 
+    # shellcheck disable=SC2329
     get_config_array() {
         local key="$1"
         # SC1087: This is a yq query, not a shell array expansion

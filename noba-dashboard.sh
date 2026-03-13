@@ -29,6 +29,7 @@ UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
 
 # Helper to strip ANSI color codes
 strip_ansi() {
+    # shellcheck disable=SC2001
     echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
 }
 

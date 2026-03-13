@@ -97,7 +97,7 @@ run_sudo() {
         # shellcheck disable=SC2024  # sudo doesn't affect redirects, but we use tee to capture
         if sudo "$@" 2>&1 | tee "$temp_output" >/dev/null; then
             # Check the exit status of the sudo command (first element of PIPESTATUS)
-            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            if [ "${PIPESTATUS[0]}" -eq 0 ]; then
                 cat "$temp_output" >> "$LOG_FILE"
                 rm -f "$temp_output"
                 return 0
@@ -106,7 +106,7 @@ run_sudo() {
                 cat "$temp_output" >> "$LOG_FILE"
                 rm -f "$temp_output"
                 log_warn "Command failed (exit $status): $*"
-                return $status
+                return "$status"
             fi
         else
             # The pipeline itself failed (rare)

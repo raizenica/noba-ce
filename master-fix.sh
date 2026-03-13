@@ -44,6 +44,7 @@ log_info "Fixing cloud-backup.sh SC2086 (unquoted variable)"
 sed -i '80i# shellcheck disable=SC2086' cloud-backup.sh
 
 log_info "Fixing disk-sentinel.sh empty then clause"
+# shellcheck disable=SC2016
 sed -i '52i\    source "$HOME/.config/automation.conf"' disk-sentinel.sh
 
 log_info "Fixing noba-lib.sh SC2329 (unused functions – false positive)"
