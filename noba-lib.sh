@@ -1,21 +1,18 @@
 #!/bin/bash
 # noba-lib.sh – Shared functions for Nobara automation scripts
+# Improved version with proper local variable scoping and cleaner config loading
 
 CONFIG_FILE="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
 
-# Colors (may be unused in this file, but used by sourcing scripts)
-# shellcheck disable=SC2034
-RED='\033[0;31m'
-# shellcheck disable=SC2034
-GREEN='\033[0;32m'
-# shellcheck disable=SC2034
-YELLOW='\033[1;33m'
-# shellcheck disable=SC2034
-BLUE='\033[0;34m'
-# shellcheck disable=SC2034
-CYAN='\033[0;36m'
-# shellcheck disable=SC2034
-NC='\033[0m'
+# -------------------------------------------------------------------
+# ANSI color codes (used by sourcing scripts)
+# -------------------------------------------------------------------
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export YELLOW='\033[1;33m'
+export BLUE='\033[0;34m'
+export CYAN='\033[0;36m'
+export NC='\033[0m'  # No Color
 
 # -------------------------------------------------------------------
 # Logging functions
@@ -39,17 +36,22 @@ log_success() {
 }
 
 # -------------------------------------------------------------------
-# Configuration helpers (with fallback if yq not available)
+# Configuration helpers (with fallback if yq is not available)
 # -------------------------------------------------------------------
 # Fallback versions (used if yq is missing)
 get_config() {
-    echo "$2"   # just return the default
+    local default="${2:-}"
+    echo "$default"
 }
 get_config_array() {
-    return 0    # return nothing
+    return 0   # return nothing (empty array)
 }
 
+# Flag indicating whether a real config was loaded
+CONFIG_LOADED=false
+
 load_config() {
+    # Reset to false; will set to true only if successful
     CONFIG_LOADED=false
 
     if ! command -v yq &>/dev/null; then
@@ -67,8 +69,8 @@ load_config() {
         return 1
     fi
 
-    # Override get_config with real yq version
-    # shellcheck disable=SC2329
+    # Override fallback functions with real yq‑powered versions
+    # shellcheck disable=SC2329  # these functions are called conditionally
     get_config() {
         local key="$1"
         local default="${2:-}"
@@ -84,8 +86,7 @@ load_config() {
     # shellcheck disable=SC2329
     get_config_array() {
         local key="$1"
-        # SC1087: This is a yq query, not a shell array expansion
-        # shellcheck disable=SC1087
+        # yq returns one line per array element; we filter out "null"
         yq eval "$key[]" "$CONFIG_FILE" 2>/dev/null | grep -v '^null$'
     }
 
@@ -93,14 +94,13 @@ load_config() {
     log_debug "Loaded configuration from $CONFIG_FILE"
     return 0
 }
-# shellcheck disable=SC2034
-CONFIG_LOADED=${CONFIG_LOADED:-false}
 
 # -------------------------------------------------------------------
 # Utility functions
 # -------------------------------------------------------------------
 check_deps() {
     local missing=()
+    local cmd
     for cmd in "$@"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
