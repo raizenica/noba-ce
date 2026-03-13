@@ -1,6 +1,6 @@
 #!/bin/bash
 # noba-tui.sh – Terminal UI (dialog) for launching Nobara scripts
-# Improved version with output viewing and common options
+# Version: 2.2.0
 
 set -euo pipefail
 
@@ -12,23 +12,19 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # Default configuration
 # -------------------------------------------------------------------
 DIALOG="${DIALOG:-dialog}"
-TEMP_DIR="${TEMP_DIR:-/tmp/noba-tui}"
-mkdir -p "$TEMP_DIR"
 
 # -------------------------------------------------------------------
-# Load user configuration (if any) – optional
+# Load user configuration
 # -------------------------------------------------------------------
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    # Could override DIALOG, etc.
-    :
+if command -v get_config &>/dev/null; then
+    DIALOG="$(get_config ".tui.dialog_cmd" "$DIALOG")"
 fi
 
 # -------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-tui.sh version 2.0"
+    echo "noba-tui.sh version 2.2.0"
     exit 0
 }
 
@@ -36,7 +32,7 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Launch a dialog-based menu to run various Nobara scripts.
+Launch an interactive dialog-based menu to run various Nobara scripts.
 
 Options:
   --help        Show this help message
@@ -45,34 +41,27 @@ EOF
     exit 0
 }
 
-cleanup() {
-    rm -f "$TEMP_DIR"/*.tmp
-}
-
 run_script() {
     local script="$1"
     local title="$2"
     local extra_args=()
 
-    # Ask for common flags (optional)
-    if $DIALOG --yesno "Run with --dry-run?" 0 0; then
+    # Ask for common flags
+    if $DIALOG --title "$title Options" --yesno "Run with --dry-run?" 7 40; then
         extra_args+=("--dry-run")
     fi
-    if $DIALOG --yesno "Run with --verbose?" 0 0; then
+    if $DIALOG --title "$title Options" --yesno "Run with --verbose?" 7 40; then
         extra_args+=("--verbose")
     fi
 
-    local output_file="$TEMP_DIR/output.tmp"
-    $DIALOG --infobox "Running $title...\n\nPlease wait." 0 0
-    if "$script" "${extra_args[@]}" > "$output_file" 2>&1; then
-        $DIALOG --textbox "$output_file" 20 70
-    else
-        $DIALOG --textbox "$output_file" 20 70 --title "Error - $title"
-    fi
+    # Run script and pipe live output to programbox, stripping ANSI color codes
+    # so dialog doesn't render garbage text.
+    "$script" "${extra_args[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | \
+        $DIALOG --title "Running: $title" --programbox 22 80
 }
 
 # -------------------------------------------------------------------
-# Parse arguments (though none are expected)
+# Parse arguments
 # -------------------------------------------------------------------
 if [ $# -gt 0 ]; then
     case "$1" in
@@ -83,48 +72,63 @@ if [ $# -gt 0 ]; then
 fi
 
 # -------------------------------------------------------------------
-# Ensure dialog is installed
+# Pre-flight checks & Setup
 # -------------------------------------------------------------------
 if ! command -v "$DIALOG" &>/dev/null; then
-    log_error "Dialog ($DIALOG) not found. Please install dialog (e.g., 'sudo dnf install dialog')."
-    exit 1
+    die "Dialog ($DIALOG) not found. Please install it (e.g., 'sudo dnf install dialog')."
 fi
 
-trap cleanup EXIT
+# Use the library's safe temp dir creator with automatic trap cleanup
+TEMP_DIR=$(make_temp_dir_auto "noba-tui.XXXXXXXXXX")
 
 # -------------------------------------------------------------------
 # Main menu
 # -------------------------------------------------------------------
 while true; do
-    choice=$($DIALOG --clear --title "Nobara Automation" \
-        --menu "Choose a script to run:" 20 60 12 \
+    choice=$($DIALOG --clear --title "Nobara Automation Suite" \
+        --cancel-label "Exit" \
+        --menu "Choose a script to execute:" 22 65 15 \
         "Backup"      "Run backup-to-nas.sh" \
         "Verify"      "Run backup-verifier.sh" \
-        "Checksum"    "Run checksum.sh" \
+        "Cloud"       "Run cloud-backup.sh" \
         "Disk"        "Run disk-sentinel.sh" \
-        "Images2PDF"  "Run images-to-pdf.sh" \
         "Organize"    "Run organize-downloads.sh" \
         "Undo"        "Run undo-organizer.sh" \
-        "MOTD"        "Show motd-generator.sh" \
-        "Dashboard"   "Show noba-dashboard.sh" \
+        "Report"      "Run system-report.sh" \
+        "Digest"      "Run noba-daily-digest.sh" \
+        "Watch"       "Run service-watch.sh" \
+        "Checksum"    "Run checksum.sh" \
+        "Images2PDF"  "Run images-to-pdf.sh" \
         "ConfigCheck" "Run config-check.sh" \
         "CronSetup"   "Run noba-cron-setup.sh" \
-        "Web"         "Start noba-web.sh" \
-        "Quit"        "Exit" 3>&1 1>&2 2>&3 3>&-)
+        "MOTD"        "Show motd-generator.sh" \
+        "Web"         "Start noba-web.sh dashboard" \
+        "Quit"        "Exit TUI" 3>&1 1>&2 2>&3 3>&-)
+
+    # If user presses ESC or Cancel, exit loop
+    if [ $? -ne 0 ]; then
+        break
+    fi
 
     case $choice in
         Backup)      run_script "$SCRIPT_DIR/backup-to-nas.sh" "Backup" ;;
-        Verify)      run_script "$SCRIPT_DIR/backup-verifier.sh" "Verify" ;;
-        Checksum)    run_script "$SCRIPT_DIR/checksum.sh" "Checksum" ;;
+        Verify)      run_script "$SCRIPT_DIR/backup-verifier.sh" "Verify Backups" ;;
+        Cloud)       run_script "$SCRIPT_DIR/cloud-backup.sh" "Cloud Sync" ;;
         Disk)        run_script "$SCRIPT_DIR/disk-sentinel.sh" "Disk Sentinel" ;;
-        Images2PDF)  run_script "$SCRIPT_DIR/images-to-pdf.sh" "Images to PDF" ;;
         Organize)    run_script "$SCRIPT_DIR/organize-downloads.sh" "Organize Downloads" ;;
         Undo)        run_script "$SCRIPT_DIR/undo-organizer.sh" "Undo Organizer" ;;
-        MOTD)        "$SCRIPT_DIR/motd-generator.sh" | $DIALOG --programbox "MOTD" 20 70 ;;
-        Dashboard)   "$SCRIPT_DIR/noba-dashboard.sh" | $DIALOG --programbox "Dashboard" 20 70 ;;
+        Report)      run_script "$SCRIPT_DIR/system-report.sh" "System Report" ;;
+        Digest)      run_script "$SCRIPT_DIR/noba-daily-digest.sh" "Daily Digest" ;;
+        Watch)       run_script "$SCRIPT_DIR/service-watch.sh" "Service Watch" ;;
+        Checksum)    run_script "$SCRIPT_DIR/checksum.sh" "Checksum Tool" ;;
+        Images2PDF)  run_script "$SCRIPT_DIR/images-to-pdf.sh" "Images to PDF" ;;
         ConfigCheck) run_script "$SCRIPT_DIR/config-check.sh" "Config Check" ;;
         CronSetup)   run_script "$SCRIPT_DIR/noba-cron-setup.sh" "Cron Setup" ;;
-        Web)         "$SCRIPT_DIR/noba-web.sh" & ;;
+        MOTD)        "$SCRIPT_DIR/motd-generator.sh" | sed 's/\x1b\[[0-9;]*m//g' | $DIALOG --title "MOTD" --programbox 22 75 ;;
+        Web)
+            "$SCRIPT_DIR/noba-web.sh" &
+            $DIALOG --title "Web Dashboard" --msgbox "Dashboard started in the background.\nCheck http://localhost:8080" 7 45
+            ;;
         Quit|"")     break ;;
     esac
 done
