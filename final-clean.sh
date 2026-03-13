@@ -1,24 +1,48 @@
 #!/bin/bash
 # final-clean.sh – Silence remaining ShellCheck warnings
 
-set -u
-set -o pipefail
+set -euo pipefail
 
-echo "Fixing checksum.sh SC2317 (unreachable command)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/noba-lib.sh"
+
+show_version() {
+    echo "final-clean.sh version 1.0"
+    exit 0
+}
+
+show_help() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Add ShellCheck disable directives to silence the last warnings.
+
+Options:
+  --help        Show this help message
+  --version     Show version information
+EOF
+    exit 0
+}
+
+if [ $# -gt 0 ]; then
+    case "$1" in
+        --help)    show_help ;;
+        --version) show_version ;;
+        *)         log_error "Unknown option: $1"; show_help ;;
+    esac
+fi
+
+log_info "Fixing checksum.sh SC2317 (unreachable command)"
 sed -i '301i# shellcheck disable=SC2317' checksum.sh
 
-echo "Fixing cloud-backup.sh SC2086 (intentional word splitting)"
+log_info "Fixing cloud-backup.sh SC2086 (intentional word splitting)"
 sed -i '81i# shellcheck disable=SC2086' cloud-backup.sh
 
-echo "Fixing disk-sentinel.sh SC2119 (check_deps called without args)"
-# The function check_deps is defined to accept arguments, but we call it without any.
-# Since it's meant to check all dependencies, passing no arguments is fine.
-# We'll disable the warning for that line.
+log_info "Fixing disk-sentinel.sh SC2119 (check_deps called without args)"
 sed -i '213i# shellcheck disable=SC2119' disk-sentinel.sh
 
-echo "Fixing master-fix.sh SC2016 (expressions in single quotes)"
-# This script is a helper, not part of the main suite, so we can ignore it.
-# Or we can add a disable at the top:
+log_info "Fixing master-fix.sh SC2016 (expressions in single quotes)"
 sed -i '1a# shellcheck disable=SC2016' master-fix.sh
 
-echo "All fixes applied. Run 'shellcheck *.sh' to verify."
+log_success "All fixes applied. Run 'shellcheck *.sh' to verify."
