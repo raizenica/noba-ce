@@ -105,7 +105,6 @@ random_indices() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o b:n:cDvq -l backup-dir:,num-files:,compare-original,checksum-cmd:,temp-dir:,verbose,quiet,dry-run,help,version -- "$@")
 if ! PARSED_ARGS=$(getopt -o b:n:cDvq -l backup-dir:,num-files:,compare-original,checksum-cmd:,temp-dir:,verbose,quiet,dry-run,help,version -- "$@"); then
     show_help
 fi
