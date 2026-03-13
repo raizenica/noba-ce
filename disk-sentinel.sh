@@ -89,18 +89,31 @@ run_sudo() {
         return 0
     fi
     log_debug "Running (sudo): $cmd_desc"
+    # Check if sudo is available without password
     if sudo -n true 2>/dev/null; then
         local temp_output
         temp_output=$(mktemp)
-        if sudo "$@" > "$temp_output" 2>&1; then
-            cat "$temp_output" >> "$LOG_FILE"
-            rm -f "$temp_output"
-            return 0
+        # Run command with sudo, capture both stdout and stderr using tee
+        # shellcheck disable=SC2024  # sudo doesn't affect redirects, but we use tee to capture
+        if sudo "$@" 2>&1 | tee "$temp_output" >/dev/null; then
+            # Check the exit status of the sudo command (first element of PIPESTATUS)
+            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                cat "$temp_output" >> "$LOG_FILE"
+                rm -f "$temp_output"
+                return 0
+            else
+                local status=${PIPESTATUS[0]}
+                cat "$temp_output" >> "$LOG_FILE"
+                rm -f "$temp_output"
+                log_warn "Command failed (exit $status): $*"
+                return $status
+            fi
         else
+            # The pipeline itself failed (rare)
             local status=$?
             cat "$temp_output" >> "$LOG_FILE"
             rm -f "$temp_output"
-            log_warn "Command failed (exit $status): $*"
+            log_warn "Pipeline failed (exit $status): $*"
             return $status
         fi
     else
