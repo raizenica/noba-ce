@@ -5,13 +5,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
-# shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
 VERBOSE=false
+CHECK_YAML=true
+CHECK_OLD=true
 # shellcheck disable=SC2034
 CHECK_ALL=true
 OLD_CONFIG_FILE="${OLD_CONFIG_FILE:-$HOME/.config/automation.conf}"
@@ -20,7 +21,7 @@ NEW_CONFIG_FILE="${NEW_CONFIG_FILE:-$HOME/.config/noba/config.yaml}"
 # -------------------------------------------------------------------
 # Load user configuration (optional)
 # -------------------------------------------------------------------
-load_config
+load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     # Override paths from YAML if defined
     logs_dir="$(get_config ".logs.dir" "$HOME/.local/share/noba")"
@@ -88,8 +89,7 @@ check_deps_list() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o vq -l verbose,quiet,no-yaml,no-old,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o vq -l verbose,quiet,no-yaml,no-old,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -117,7 +117,7 @@ done
 log_info "=== Configuration & Dependency Check ==="
 
 # 1. Check old config file (automation.conf)
-if [ "${CHECK_OLD:-true}" = true ]; then
+if [ "$CHECK_OLD" = true ]; then
     log_info "Old config file: $OLD_CONFIG_FILE"
     if [ -f "$OLD_CONFIG_FILE" ]; then
         log_success "File exists"
@@ -138,7 +138,7 @@ if [ "${CHECK_OLD:-true}" = true ]; then
 fi
 
 # 2. Check new YAML config
-if [ "${CHECK_YAML:-true}" = true ]; then
+if [ "$CHECK_YAML" = true ]; then
     log_info "New YAML config: $NEW_CONFIG_FILE"
     if [ -f "$NEW_CONFIG_FILE" ]; then
         log_success "File exists"
@@ -315,7 +315,7 @@ for cmd in rsync msmtp findmnt flock jq convert md5sum sha256sum; do
         break
     fi
 done
-if [ -n "${critical_missing:-0}" ] && [ "$critical_missing" -eq 1 ]; then
+if [ "$critical_missing" -eq 1 ]; then
     log_error "One or more critical dependencies missing."
     exit 1
 else
