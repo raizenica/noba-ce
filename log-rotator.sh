@@ -1,10 +1,10 @@
 #!/bin/bash
 # log-rotator.sh – Compress logs older than specified days
+# Improved version with correct counter and getopt handling
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
@@ -18,7 +18,7 @@ DRY_RUN=false
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
-load_config
+load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     # Override log directory from logs.dir in config
     logs_dir="$(get_config ".logs.dir" "$LOG_DIR")"
@@ -32,7 +32,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "log-rotator.sh version 1.0"
+    echo "log-rotator.sh version 2.0"
     exit 0
 }
 
@@ -55,8 +55,7 @@ EOF
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o d:l:n -l days:,log-dir:,dry-run,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o d:l:n -l days:,log-dir:,dry-run,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -97,8 +96,9 @@ log_info "Compressing files older than $DAYS days"
 # Main
 # -------------------------------------------------------------------
 count=0
-# Use find with null separator to handle spaces in filenames
-find "$LOG_DIR" -type f -name "*.log" -mtime +"$DAYS" -print0 | while IFS= read -r -d '' log; do
+
+# Use process substitution to preserve the counter
+while IFS= read -r -d '' log; do
     if [ "$DRY_RUN" = true ]; then
         log_info "[DRY RUN] Would compress: $log"
     else
@@ -109,7 +109,7 @@ find "$LOG_DIR" -type f -name "*.log" -mtime +"$DAYS" -print0 | while IFS= read 
             log_warn "Failed to compress: $log"
         fi
     fi
-done
+done < <(find "$LOG_DIR" -type f -name "*.log" -mtime +"$DAYS" -print0)
 
 if [ "$DRY_RUN" = true ]; then
     log_info "Dry run complete. No files were actually compressed."
