@@ -1,42 +1,36 @@
 #!/bin/bash
-# noba – Central command for all Nobara automation scripts
+# noba – Central command for Nobara automation suite
 
 set -u
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/noba-lib.sh"
 
-usage() {
+show_help() {
     cat <<EOF
 Usage: noba <command> [options]
 
 Commands:
-  backup          Run backup-to-nas.sh
-  verify          Run backup-verifier.sh
-  checksum        Run checksum.sh
-  disk            Run disk-sentinel.sh
-  images2pdf      Run images-to-pdf.sh
-  organize        Run organize-downloads.sh
-  undo            Run undo-organizer.sh
-  motd            Show motd-generator.sh
-  dashboard       Show noba-dashboard.sh
-  config-check    Run config-check.sh
-  cron-setup      Run noba-cron-setup.sh
-  cloud-backup    Run cloud-backup.sh
-  system-report   Run system-report.sh
-  log-rotate      Run log-rotator.sh
-  temp-alert      Run temperature-alert.sh
-  service-watch   Run service-watch.sh
-  tui             Launch noba-tui.sh
-  web             Start noba-web.sh
-  update          Run noba-update.sh
-  daily-digest    Run noba-daily-digest.sh
-  help            Show this help
+  setup         Run the setup script (check dependencies, install packages, create config, set up timers)
+  config        View or edit the unified configuration
+  list          List all available scripts
+  doctor        Run system diagnostics (config-check.sh)
+  run <script>  Directly run a script (e.g., noba run backup)
+  help          Show this help
+  version       Show version information
+
+For script-specific help, use noba run <script> --help.
 EOF
 }
 
+show_version() {
+    echo "Nobara Automation Suite version 1.0"
+    exit 0
+}
+
 if [ $# -eq 0 ]; then
-    usage
+    show_help
     exit 1
 fi
 
@@ -44,26 +38,73 @@ cmd="$1"
 shift
 
 case "$cmd" in
-    backup)         "$SCRIPT_DIR/backup-to-nas.sh" "$@" ;;
-    verify)         "$SCRIPT_DIR/backup-verifier.sh" "$@" ;;
-    checksum)       "$SCRIPT_DIR/checksum.sh" "$@" ;;
-    disk)           "$SCRIPT_DIR/disk-sentinel.sh" "$@" ;;
-    images2pdf)     "$SCRIPT_DIR/images-to-pdf.sh" "$@" ;;
-    organize)       "$SCRIPT_DIR/organize-downloads.sh" "$@" ;;
-    undo)           "$SCRIPT_DIR/undo-organizer.sh" "$@" ;;
-    motd)           "$SCRIPT_DIR/motd-generator.sh" "$@" ;;
-    dashboard)      "$SCRIPT_DIR/noba-dashboard.sh" "$@" ;;
-    config-check)   "$SCRIPT_DIR/config-check.sh" "$@" ;;
-    cron-setup)     "$SCRIPT_DIR/noba-cron-setup.sh" "$@" ;;
-    cloud-backup)   "$SCRIPT_DIR/cloud-backup.sh" "$@" ;;
-    system-report)  "$SCRIPT_DIR/system-report.sh" "$@" ;;
-    log-rotate)     "$SCRIPT_DIR/log-rotator.sh" "$@" ;;
-    temp-alert)     "$SCRIPT_DIR/temperature-alert.sh" "$@" ;;
-    service-watch)  "$SCRIPT_DIR/service-watch.sh" "$@" ;;
-    tui)            "$SCRIPT_DIR/noba-tui.sh" "$@" ;;
-    web)            "$SCRIPT_DIR/noba-web.sh" "$@" ;;
-    update)         "$SCRIPT_DIR/noba-update.sh" "$@" ;;
-    daily-digest)   "$SCRIPT_DIR/noba-daily-digest.sh" "$@" ;;
-    help|--help|-h) usage ;;
-    *) echo "Unknown command: $cmd"; usage; exit 1 ;;
+    setup)
+        "$SCRIPT_DIR/noba-setup.sh" "$@"
+        ;;
+    config)
+        if [ ! -f "$HOME/.config/noba/config.yaml" ]; then
+            log_warn "Config file not found. Run 'noba setup' to create a default."
+            exit 1
+        fi
+        if [ $# -eq 0 ]; then
+            # Show config
+            cat "$HOME/.config/noba/config.yaml"
+        elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
+            # Edit with default editor
+            ${EDITOR:-nano} "$HOME/.config/noba/config.yaml"
+        else
+            log_error "Unknown option: $1"
+            echo "Usage: noba config [--edit]"
+        fi
+        ;;
+    list)
+        echo "Available scripts in $SCRIPT_DIR:"
+        for script in "$SCRIPT_DIR"/*.sh; do
+            if [[ "$script" != *"noba-lib.sh" ]] && [[ "$script" != *"noba-setup.sh" ]]; then
+                basename "$script" .sh
+            fi
+        done
+        ;;
+    doctor)
+        "$SCRIPT_DIR/config-check.sh" "$@"
+        ;;
+    run)
+        if [ $# -eq 0 ]; then
+            log_error "No script specified. Usage: noba run <script>"
+            exit 1
+        fi
+        script="$1"
+        shift
+        # Map common names to actual script names
+        case "$script" in
+            backup)      script_file="backup-to-nas.sh" ;;
+            verify)      script_file="backup-verifier.sh" ;;
+            checksum)    script_file="checksum.sh" ;;
+            disk)        script_file="disk-sentinel.sh" ;;
+            images2pdf)  script_file="images-to-pdf.sh" ;;
+            organize)    script_file="organize-downloads.sh" ;;
+            undo)        script_file="undo-organizer.sh" ;;
+            motd)        script_file="motd-generator.sh" ;;
+            dashboard)   script_file="noba-dashboard.sh" ;;
+            web)         script_file="noba-web.sh" ;;
+            *)           script_file="$script" ;;
+        esac
+        full_path="$SCRIPT_DIR/$script_file"
+        if [ ! -x "$full_path" ]; then
+            log_error "Script '$script_file' not found or not executable."
+            exit 1
+        fi
+        exec "$full_path" "$@"
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    version|--version|-v)
+        show_version
+        ;;
+    *)
+        log_error "Unknown command: $cmd"
+        show_help
+        exit 1
+        ;;
 esac
