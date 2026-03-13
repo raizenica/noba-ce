@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-web.sh – Interactive web dashboard with automatic port fallback and customizable layout
+# noba-web.sh – Interactive web dashboard with automatic port fallback
 
 set -euo pipefail
 
@@ -27,18 +27,11 @@ load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     START_PORT="$(get_config ".web.start_port" "$START_PORT")"
     MAX_PORT="$(get_config ".web.max_port" "$MAX_PORT")"
-    # Read services list from YAML (if defined)
     SERVICES_LIST=$(get_config_array ".web.service_list" | tr '\n' ',' | sed 's/,$//')
     if [ -n "$SERVICES_LIST" ]; then
         export NOBA_WEB_SERVICES="$SERVICES_LIST"
     else
         export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
-    fi
-    # Read layout array from config
-    LAYOUT_LIST=$(get_config_array ".web.layout" | tr '\n' ',' | sed 's/,$//')
-    if [ -n "$LAYOUT_LIST" ]; then
-        export NOBA_WEB_LAYOUT="$LAYOUT_LIST"
-        echo "DEBUG: LAYOUT_LIST='$LAYOUT_LIST'" >&2
     fi
 else
     export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
@@ -152,7 +145,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Generate HTML file (with dynamic layout)
+# Generate HTML file (static layout)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -354,7 +347,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 runningScript: false,
                 defaultIp: '', interfaces: [], services: [],
                 gpuTemp: '', dockerContainers: [],
-                layout: [],
 
                 async init() {
                     await this.refreshStats();
@@ -364,13 +356,35 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 async refreshStats() {
                     try {
                         const response = await fetch('/api/stats');
+                        if (!response.ok) {
+                            console.error('HTTP error', response.status);
+                            return;
+                        }
                         const data = await response.json();
-                        console.log('Raw API data:', data);  // ← ADD THIS
+                        console.log('API data:', data);
                         this.timestamp = data.timestamp;
                         this.uptime = data.uptime;
-                        // ... all other assignments ...
-                        this.layout = data.layout || ['system', 'gpu', 'backup', 'updates', 'disk', 'organizer', 'sentinel', 'network', 'services', 'docker'];
-                        console.log('Layout after assignment:', this.layout); // ← AND THIS
+                        this.loadavg = data.loadavg;
+                        this.memory = data.memory;
+                        this.cpuTemp = data.cpuTemp;
+                        this.tempClass = data.cpuTemp > 80 ? 'danger' : data.cpuTemp > 60 ? 'warning' : '';
+                        this.backupStatus = data.backupStatus;
+                        this.backupClass = data.backupStatus.includes('OK') ? 'success' : data.backupStatus.includes('Failed') ? 'danger' : '';
+                        this.backupTime = data.backupTime;
+                        this.backupLog = data.backupLog;
+                        this.dnfUpdates = data.dnfUpdates;
+                        this.flatpakUpdates = data.flatpakUpdates;
+                        this.totalUpdates = data.dnfUpdates + data.flatpakUpdates;
+                        this.disks = data.disks;
+                        this.movedFiles = data.movedFiles;
+                        this.lastMove = data.lastMove;
+                        this.organizerLog = data.organizerLog;
+                        this.diskAlerts = data.diskAlerts;
+                        this.defaultIp = data.defaultIp || 'N/A';
+                        this.interfaces = data.interfaces || [];
+                        this.services = data.services || [];
+                        this.gpuTemp = data.gpuTemp || 'N/A';
+                        this.dockerContainers = data.dockerContainers || [];
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     }
@@ -407,7 +421,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Generate Python server (with enhanced stats and layout support)
+# Generate Python server (same as before, but without layout)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 import http.server
@@ -423,7 +437,6 @@ PORT = int(os.environ.get('PORT', 8080))
 SCRIPT_DIR = os.path.expanduser("~/.local/bin")
 LOG_DIR = os.path.expanduser("~/.local/share")
 
-# ANSI escape code stripper
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 def strip_ansi(s):
     return ansi_escape.sub('', s)
@@ -437,7 +450,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return f"{b:.1f} PiB"
 
     def get_gpu_temp(self):
-        # Try NVIDIA first
+        # ... (same as before)
         try:
             result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
                                     capture_output=True, text=True, timeout=2)
@@ -447,15 +460,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return temp + "°C"
         except:
             pass
-        # Try AMD via sensors (if configured)
         try:
             result = subprocess.run(['sensors', '-u'], capture_output=True, text=True, timeout=2)
-            # Look for temp1_input in amdgpu or k10temp
             import re
             match = re.search(r'edge:.*?temp1_input: (\d+\.\d+)', result.stdout, re.DOTALL)
             if match:
                 return f"{float(match.group(1)):.0f}°C"
-            # Fallback to k10temp
             match = re.search(r'Tdie:.*?temp1_input: (\d+\.\d+)', result.stdout, re.DOTALL)
             if match:
                 return f"{float(match.group(1)):.0f}°C"
@@ -581,7 +591,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         stats['cpuTemp'] = temp
 
-        # Backup status and log (stripped)
+        # Backup status and log
         backup_log = os.path.join(LOG_DIR, 'backup-to-nas.log')
         if os.path.exists(backup_log):
             with open(backup_log) as f:
@@ -636,7 +646,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         stats['disks'] = disks
 
-        # Download organizer stats (stripped)
+        # Download organizer stats
         organizer_log = os.path.join(LOG_DIR, 'download-organizer.log')
         moved = 0
         last_move = ''
@@ -655,7 +665,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             stats['lastMove'] = ''
             stats['organizerLog'] = ''
 
-        # Disk alerts (stripped)
+        # Disk alerts
         disk_log = os.path.join(LOG_DIR, 'disk-sentinel.log')
         if os.path.exists(disk_log):
             with open(disk_log) as f:
@@ -665,25 +675,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         else:
             stats['diskAlerts'] = 'No log'
 
-        # --- Network stats ---
-        # Improved IP detection using ip route
+        # Network stats
         try:
             result = subprocess.run(['ip', '-4', 'route', 'get', '1'],
                                     capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
-                # Extract IP from line like "1.0.0.0 via 192.168.1.1 dev wlp5s0 src 192.168.1.100 uid 1000"
                 import re
                 match = re.search(r'src\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
-                if match:
-                    stats['default_ip'] = match.group(1)
-                else:
-                    stats['default_ip'] = 'N/A'
+                stats['default_ip'] = match.group(1) if match else 'N/A'
             else:
                 stats['default_ip'] = 'N/A'
         except:
             stats['default_ip'] = 'N/A'
 
-        # Interface list and traffic
         interfaces = []
         try:
             with open('/proc/net/dev') as f:
@@ -691,8 +695,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 for line in lines:
                     parts = line.split()
                     iface = parts[0].strip(':')
-                    # Skip loopback if desired (optional)
-                    # if iface == 'lo': continue
                     rx_bytes = int(parts[1])
                     tx_bytes = int(parts[9])
                     interfaces.append({
@@ -700,11 +702,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         'rx': self.human_bytes(rx_bytes),
                         'tx': self.human_bytes(tx_bytes)
                     })
-            stats['interfaces'] = interfaces[:3]  # show up to 3 interfaces
+            stats['interfaces'] = interfaces[:3]
         except:
             stats['interfaces'] = []
 
-        # --- Services status (configurable via environment) ---
+        # Services status
         service_list = os.environ.get('NOBA_WEB_SERVICES', 'backup-to-nas.service,organize-downloads.service,noba-web.service,syncthing.service').split(',')
         services_status = []
         for svc in service_list:
@@ -722,20 +724,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             services_status.append({'name': svc, 'status': status})
         stats['services'] = services_status
 
-        # --- GPU Temperature ---
+        # GPU Temperature
         stats['gpuTemp'] = self.get_gpu_temp()
 
-        # --- Docker Containers ---
+        # Docker Containers
         stats['dockerContainers'] = self.get_docker_containers()
-
-        # --- Layout from environment (if any) ---
-        layout_str = os.environ.get('NOBA_WEB_LAYOUT', '')
-        print(f"DEBUG: NOBA_WEB_LAYOUT='{layout_str}'", file=sys.stderr)
-        if layout_str:
-            stats['layout'] = layout_str.split(',')
-        else:
-            # Default order if not configured
-            stats['layout'] = ['system', 'gpu', 'backup', 'updates', 'disk', 'organizer', 'sentinel', 'network', 'services', 'docker']
 
         return stats
 
