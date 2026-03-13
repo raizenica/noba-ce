@@ -300,6 +300,8 @@ if [ "$GUI" = true ]; then
 # shellcheck disable=SC2317
 # shellcheck disable=SC2317
 # shellcheck disable=SC2317
+# shellcheck disable=SC2317
+# shellcheck disable=SC2317
         fi
 # shellcheck disable=SC2317
     fi

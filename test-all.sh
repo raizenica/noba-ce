@@ -177,7 +177,17 @@ for script in *.sh; do
             continue
             ;;
     esac
-
+    # Special case: noba-dashboard.sh – just run it (no arguments needed)
+    if [[ "$script" == "noba-dashboard.sh" ]]; then
+        if run_test "$script" "$script"; then
+            echo -e "${GREEN}PASS${NC}"
+            PASS=$((PASS+1))
+        else
+            echo -e "${RED}FAIL (execution)${NC}"
+            FAIL=$((FAIL+1))
+        fi
+        continue
+    fi
     # -------------------------------------------------------------------
     # Special case: backup-verifier.sh needs a dummy backup dir
     # -------------------------------------------------------------------

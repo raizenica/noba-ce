@@ -50,6 +50,7 @@ show_version() {
     exit 0
 }
     source "$HOME/.config/automation.conf"
+    source "$HOME/.config/automation.conf"
 
 show_help() {
     cat <<EOF
@@ -210,6 +211,7 @@ for target in "${TARGETS[@]}"; do
                 log_debug "[DRY RUN] Would clean ~/.cache"
             fi
 
+# shellcheck disable=SC2119
             # System temp files older than 1 day
 # shellcheck disable=SC2119
             run_sudo "cleaning /tmp (files older than 1 day)" find /tmp -type f -atime +1 -delete
