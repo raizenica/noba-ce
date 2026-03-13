@@ -7,6 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
+# Check that getopt is available (part of util-linux)
+if ! command -v getopt &>/dev/null; then
+    log_error "getopt not found. Please install util-linux."
+    exit 1
+fi
+
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
