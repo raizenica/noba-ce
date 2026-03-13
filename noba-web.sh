@@ -1,5 +1,6 @@
 #!/bin/bash
 # noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, and service resource usage
+# Modernized HTML + all performance improvements
 
 set -euo pipefail
 
@@ -37,10 +38,10 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Helper functions (same as before)
+# Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-web.sh version 1.0"
+    echo "noba-web.sh version 2.1 (modern)"
     exit 0
 }
 
@@ -132,7 +133,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# HTML file (master version with all enhancements)
+# Modernized HTML file (with glassmorphism, smooth animations)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -144,49 +145,274 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         :root {
-            --bg: #1a1e24;
-            --card: #2d333b;
-            --text: #e1e4e8;
+            --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
             --accent: #3b82f6;
             --success: #10b981;
             --warning: #f59e0b;
             --danger: #ef4444;
+            --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            --card-blur: blur(12px);
         }
-        body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; margin: 20px; }
-        h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-        .timestamp { color: #9ca3af; margin-bottom: 2rem; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
-        .card { background: var(--card); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .card-header { font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
-        .stat-row { display: flex; justify-content: space-between; margin: 0.75rem 0; }
-        .stat-label { color: #9ca3af; }
-        .stat-value { font-weight: 600; }
+
+        body {
+            background: var(--bg-gradient);
+            color: var(--text-primary);
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            padding: 2rem;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        h1 i {
+            color: var(--accent);
+            font-size: 2rem;
+        }
+
+        .timestamp {
+            color: var(--text-secondary);
+            margin-bottom: 2.5rem;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: var(--card-blur);
+            -webkit-backdrop-filter: var(--card-blur);
+            border: 1px solid var(--card-border);
+            border-radius: 1.5rem;
+            padding: 1.5rem;
+            box-shadow: var(--glass-shadow);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .card-header {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-primary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 0.75rem;
+        }
+
+        .card-header i {
+            color: var(--accent);
+            width: 1.5rem;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 0.75rem 0;
+            font-size: 0.95rem;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+        }
+
+        .stat-value {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
         .success { color: var(--success); }
         .warning { color: var(--warning); }
         .danger { color: var(--danger); }
-        .disk-item { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; }
-        .disk-bar { flex: 1; height: 0.5rem; background: #4b5563; border-radius: 1rem; overflow: hidden; }
-        .disk-bar-fill { height: 100%; border-radius: 1rem; }
-        .disk-percent { min-width: 3rem; text-align: right; }
-        pre { background: #1a1e24; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.85rem; margin: 1rem 0; white-space: pre-wrap; word-wrap: break-word; }
-        .button-grid { display: flex; gap: 0.5rem; margin-top: 1rem; }
-        .btn { padding: 0.5rem 1rem; border: none; border-radius: 0.5rem; background: #4b5563; color: white; cursor: pointer; font-size: 0.9rem; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.25rem; }
-        .btn:hover { background: #6b7280; }
-        .btn-primary { background: var(--accent); }
-        .btn-primary:hover { background: #2563eb; }
-        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; }
-        .modal-content { background: var(--card); border-radius: 1rem; padding: 2rem; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
-        .modal-header { font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; }
-        .footer { margin-top: 2rem; text-align: center; color: #9ca3af; display: flex; justify-content: center; gap: 1rem; align-items: center; }
+
+        .disk-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 0.75rem 0;
+        }
+
+        .disk-item span:first-child {
+            min-width: 80px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .disk-bar {
+            flex: 1;
+            height: 0.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+
+        .disk-bar-fill {
+            height: 100%;
+            border-radius: 1rem;
+            transition: width 0.3s ease;
+        }
+
+        .disk-percent {
+            min-width: 3rem;
+            text-align: right;
+            font-weight: 500;
+        }
+
+        pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.75rem;
+            border-radius: 0.75rem;
+            font-size: 0.8rem;
+            font-family: 'Fira Code', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin: 1rem 0 0.5rem;
+        }
+
+        .button-grid {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: var(--card-bg);
+            backdrop-filter: var(--card-blur);
+            border: 1px solid var(--card-border);
+            border-radius: 1.5rem;
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: var(--glass-shadow);
+        }
+
+        .modal-header {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        .footer {
+            margin-top: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+            display: flex;
+            justify-content: center;
+            gap: 1.5rem;
+            align-items: center;
+            font-size: 0.9rem;
+        }
+
+        .footer .btn {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Responsive tweaks */
+        @media (max-width: 640px) {
+            body { padding: 1rem; }
+            h1 { font-size: 2rem; }
+        }
     </style>
 </head>
 <body x-data="dashboard()" x-init="init()">
-    <h1><i class="fas fa-chart-line"></i> Nobara Interactive Dashboard</h1>
-    <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
+    <h1>
+        <i class="fas fa-chart-pie"></i>
+        Nobara Dashboard
+    </h1>
+    <div class="timestamp">
+        <i class="far fa-clock"></i>
+        Last updated: <span x-text="timestamp"></span>
+    </div>
 
     <div class="grid">
-        <!-- System Health Card (unchanged) -->
+        <!-- System Health Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
@@ -197,7 +423,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Battery Card (if present) -->
+        <!-- Battery Card -->
         <div class="card" x-show="battery.present">
             <div class="card-header"><i class="fas fa-battery-three-quarters"></i> Battery</div>
             <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" x-text="battery.status"></span></div>
@@ -207,17 +433,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row" x-show="battery.power !== 'N/A'"><span class="stat-label">Power</span><span class="stat-value" x-text="battery.power"></span></div>
         </div>
 
-        <!-- GPU Card with load and temperature -->
+        <!-- GPU Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-microchip"></i> GPU</div>
-            <div class="stat-row">
-                <span class="stat-label">Temperature</span>
-                <span class="stat-value" x-text="gpuTemp"></span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Load</span>
-                <span class="stat-value" x-text="gpuLoad"></span>
-            </div>
+            <div class="stat-row"><span class="stat-label">Temperature</span><span class="stat-value" x-text="gpuTemp"></span></div>
+            <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" x-text="gpuLoad"></span></div>
         </div>
 
         <!-- Backup Status Card -->
@@ -242,12 +462,12 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
         </div>
 
-        <!-- Disk Usage Card (unchanged) -->
+        <!-- Disk Usage Card (spans 2 columns on wide screens) -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
             <template x-for="disk in disks" :key="disk.mount">
                 <div class="disk-item">
-                    <span style="min-width:80px;" x-text="disk.mount"></span>
+                    <span x-text="disk.mount"></span>
                     <div class="disk-bar">
                         <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
                     </div>
@@ -256,7 +476,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </template>
         </div>
 
-        <!-- Disk I/O Stats Card (NEW) -->
+        <!-- Disk I/O Stats Card -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-tachometer-alt"></i> Disk I/O</div>
             <template x-for="disk in diskio" :key="disk.name">
@@ -270,7 +490,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </template>
         </div>
 
-        <!-- ZFS Pool Status Card (if pools exist) -->
+        <!-- ZFS Pool Status Card -->
         <div class="card" x-show="zfs.pools && zfs.pools.length > 0">
             <div class="card-header"><i class="fas fa-database"></i> ZFS Pools</div>
             <template x-for="pool in zfs.pools" :key="pool.name">
@@ -305,7 +525,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Network Stats Card with Speed Test -->
+        <!-- Network Stats Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
             <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
@@ -323,7 +543,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             </div>
         </div>
 
-        <!-- Services Status Card with resource usage (ENHANCED) -->
+        <!-- Services Status Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
             <template x-for="svc in services" :key="svc.name">
@@ -373,7 +593,8 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     </div>
 
     <div class="footer">
-        <i class="fas fa-sync-alt"></i> Auto‑refreshes every minute •
+        <i class="fas fa-sync-alt fa-spin" x-show="refreshing"></i>
+        <span>Auto‑refreshes every minute</span>
         <button class="btn" @click="refreshStats"><i class="fas fa-redo"></i> Refresh Now</button>
     </div>
 
@@ -385,11 +606,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 backupLog: '', dnfUpdates: 0, flatpakUpdates: 0, totalUpdates: 0,
                 disks: [], movedFiles: 0, lastMove: '', organizerLog: '',
                 diskAlerts: '', showModal: false, modalTitle: '', modalOutput: '',
-                runningScript: false,
+                runningScript: false, refreshing: false,
                 defaultIp: '', interfaces: [], services: [],
                 gpuTemp: '', gpuLoad: '', dockerContainers: [],
                 battery: {}, zfs: { pools: [] },
-                diskio: [],  // NEW
+                diskio: [],
 
                 async init() {
                     await this.refreshStats();
@@ -397,6 +618,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 },
 
                 async refreshStats() {
+                    this.refreshing = true;
                     try {
                         const response = await fetch('/api/stats');
                         if (!response.ok) {
@@ -404,7 +626,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                             return;
                         }
                         const data = await response.json();
-                        console.log('API data:', data);
                         this.timestamp = data.timestamp;
                         this.uptime = data.uptime;
                         this.loadavg = data.loadavg;
@@ -431,9 +652,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.dockerContainers = data.dockerContainers || [];
                         this.battery = data.battery || {};
                         this.zfs = data.zfs || { pools: [] };
-                        this.diskio = data.diskio || [];   // NEW
+                        this.diskio = data.diskio || [];
                     } catch (e) {
                         console.error('Stats fetch failed', e);
+                    } finally {
+                        this.refreshing = false;
                     }
                 },
 
@@ -468,9 +691,15 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Python server (master version with all enhancements)
+# Python server (improved version, listens on all interfaces)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
+#!/usr/bin/env python3
+"""
+Nobara Dashboard Server - Improved version with caching, AMD GPU support,
+and systemd service details. Listens on all interfaces (0.0.0.0).
+"""
+
 import http.server
 import socketserver
 import json
@@ -479,60 +708,97 @@ import os
 import sys
 import time
 import re
+import signal
+import logging
+from datetime import datetime, timedelta
 
+# -------------------- Configuration --------------------
 PORT = int(os.environ.get('PORT', 8080))
 SCRIPT_DIR = os.path.expanduser("~/.local/bin")
 LOG_DIR = os.path.expanduser("~/.local/share")
+CACHE_TTL = 30  # seconds for expensive commands (updates)
+HOST = "0.0.0.0"  # Listen on all network interfaces
 
+# Setup logging
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, 'noba-web-server.log'),
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# -------------------- Helper functions --------------------
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 def strip_ansi(s):
     return ansi_escape.sub('', s)
 
+def human_bytes(b):
+    for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
+        if b < 1024.0:
+            return f"{b:.1f} {unit}"
+        b /= 1024.0
+    return f"{b:.1f} PiB"
+
+# Simple TTL cache
+class TTLCache:
+    def __init__(self, ttl_seconds):
+        self.ttl = ttl_seconds
+        self.cache = {}
+        self.timestamps = {}
+
+    def get(self, key):
+        if key in self.cache and datetime.now() - self.timestamps[key] < timedelta(seconds=self.ttl):
+            return self.cache[key]
+        return None
+
+    def set(self, key, value):
+        self.cache[key] = value
+        self.timestamps[key] = datetime.now()
+
+_cache = TTLCache(CACHE_TTL)
+
+# -------------------- Handler class --------------------
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def human_bytes(self, b):
-        for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
-            if b < 1024.0:
-                return f"{b:.1f} {unit}"
-            b /= 1024.0
-        return f"{b:.1f} PiB"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory='.', **kwargs)
+
+    def log_message(self, format, *args):
+        logging.info("%s - %s" % (self.address_string(), format % args))
 
     # ---------- Battery ----------
     def get_battery_info(self):
-        battery = {}
+        battery = {'present': False}
         try:
-            bat_path = '/sys/class/power_supply/BAT0'
-            if not os.path.exists(bat_path):
-                bat_path = '/sys/class/power_supply/BAT1'
-            if os.path.exists(bat_path):
-                battery['present'] = True
-                with open(f'{bat_path}/status') as f:
-                    battery['status'] = f.read().strip()
-                with open(f'{bat_path}/capacity') as f:
-                    battery['capacity'] = f.read().strip()
-                health_file = f'{bat_path}/health'
-                if os.path.exists(health_file):
-                    with open(health_file) as f:
-                        battery['health'] = f.read().strip()
-                else:
-                    battery['health'] = 'N/A'
-                voltage_file = f'{bat_path}/voltage_now'
-                if os.path.exists(voltage_file):
-                    with open(voltage_file) as f:
-                        voltage = int(f.read().strip()) / 1_000_000
-                    battery['voltage'] = f"{voltage:.2f}V"
-                else:
-                    battery['voltage'] = 'N/A'
-                power_file = f'{bat_path}/power_now'
-                if os.path.exists(power_file):
-                    with open(power_file) as f:
-                        power = int(f.read().strip()) / 1_000_000
-                    battery['power'] = f"{power:.2f}W"
-                else:
-                    battery['power'] = 'N/A'
-            else:
-                battery['present'] = False
+            for bat in ['BAT0', 'BAT1']:
+                bat_path = f'/sys/class/power_supply/{bat}'
+                if os.path.exists(bat_path):
+                    battery['present'] = True
+                    with open(f'{bat_path}/status') as f:
+                        battery['status'] = f.read().strip()
+                    with open(f'{bat_path}/capacity') as f:
+                        battery['capacity'] = f.read().strip()
+                    health_file = f'{bat_path}/health'
+                    if os.path.exists(health_file):
+                        with open(health_file) as f:
+                            battery['health'] = f.read().strip()
+                    else:
+                        battery['health'] = 'N/A'
+                    voltage_file = f'{bat_path}/voltage_now'
+                    if os.path.exists(voltage_file):
+                        with open(voltage_file) as f:
+                            voltage = int(f.read().strip()) / 1_000_000
+                        battery['voltage'] = f"{voltage:.2f}V"
+                    else:
+                        battery['voltage'] = 'N/A'
+                    power_file = f'{bat_path}/power_now'
+                    if os.path.exists(power_file):
+                        with open(power_file) as f:
+                            power = int(f.read().strip()) / 1_000_000
+                        battery['power'] = f"{power:.2f}W"
+                    else:
+                        battery['power'] = 'N/A'
+                    break
         except Exception as e:
-            print(f"Battery error: {e}", file=sys.stderr)
+            logging.error(f"Battery error: {e}")
             battery['present'] = False
         return battery
 
@@ -547,12 +813,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     parts = line.strip().split()
                     if len(parts) >= 2:
                         pools.append({'name': parts[0], 'health': parts[1]})
-        except:
-            pass
+        except Exception as e:
+            logging.debug(f"ZFS error (ignored): {e}")
         return pools
 
-    # ---------- GPU ----------
+    # ---------- GPU (NVIDIA + AMD) ----------
     def get_gpu_temp(self):
+        # Try NVIDIA first
         try:
             result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
                                     capture_output=True, text=True, timeout=2)
@@ -562,9 +829,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return temp + "°C"
         except:
             pass
+        # Try AMD via rocm-smi
+        try:
+            result = subprocess.run(['rocm-smi', '--showtemp', '--json'],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                for card in data.values():
+                    if isinstance(card, dict):
+                        for key, val in card.items():
+                            if 'temperature' in key.lower():
+                                return f"{float(val):.0f}°C"
+        except:
+            pass
+        # Fallback to sensors
         try:
             result = subprocess.run(['sensors', '-u'], capture_output=True, text=True, timeout=2)
-            import re
             match = re.search(r'edge:.*?temp1_input: (\d+\.\d+)', result.stdout, re.DOTALL)
             if match:
                 return f"{float(match.group(1)):.0f}°C"
@@ -575,8 +855,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
         return "N/A"
 
-    # NEW: GPU load (NVIDIA only)
     def get_gpu_load(self):
+        # NVIDIA
         try:
             result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader'],
                                     capture_output=True, text=True, timeout=2)
@@ -584,6 +864,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 load = result.stdout.strip()
                 if load:
                     return load
+        except:
+            pass
+        # AMD via rocm-smi
+        try:
+            result = subprocess.run(['rocm-smi', '--showuse', '--json'],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                for card in data.values():
+                    if isinstance(card, dict):
+                        for key, val in card.items():
+                            if 'use' in key.lower():
+                                return f"{val}%"
         except:
             pass
         return 'N/A'
@@ -598,11 +891,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 for line in result.stdout.splitlines():
                     if line:
                         containers.append(line.strip())
-        except:
-            pass
+        except Exception as e:
+            logging.debug(f"Docker error: {e}")
         return containers
 
-    # NEW: Disk I/O stats
+    # ---------- Disk I/O ----------
     def get_disk_io(self):
         disks = []
         try:
@@ -612,28 +905,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if len(parts) < 14:
                         continue
                     name = parts[2]
-                    # Skip loop, ram, and partition devices (optional)
                     if name.startswith(('loop', 'ram', 'sr')):
                         continue
-                    # We want whole disks like sda, nvme0n1, not partitions (e.g., sda1)
                     if name[-1].isdigit() and not (name.startswith('nvme') and name[-2].isdigit()):
-                        # This is a partition, skip
-                        continue
+                        continue  # skip partitions
                     reads = int(parts[5])   # sectors read
                     writes = int(parts[9])  # sectors written
-                    # Convert sectors to bytes (typically 512 bytes per sector)
                     read_bytes = reads * 512
                     write_bytes = writes * 512
                     disks.append({
                         'name': name,
-                        'read': self.human_bytes(read_bytes),
-                        'write': self.human_bytes(write_bytes)
+                        'read': human_bytes(read_bytes),
+                        'write': human_bytes(write_bytes)
                     })
         except Exception as e:
-            print(f"Disk I/O error: {e}", file=sys.stderr)
-        return disks[:5]  # limit to 5 disks
+            logging.error(f"Disk I/O error: {e}")
+        return disks[:5]
 
-    # NEW: Systemd service memory/CPU
+    # ---------- Systemd service memory/CPU ----------
     def get_service_details(self, service):
         details = {}
         try:
@@ -645,12 +934,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         key, val = line.split('=', 1)
                         if key == 'MemoryCurrent':
                             if val and val != '0':
-                                details['memory'] = self.human_bytes(int(val))
+                                details['memory'] = human_bytes(int(val))
                             else:
                                 details['memory'] = 'N/A'
                         elif key == 'CPUUsageNSec':
                             if val and val != '0':
-                                # Convert nanoseconds to seconds
                                 sec = int(val) / 1_000_000_000
                                 if sec < 60:
                                     details['cpu'] = f"{sec:.1f}s"
@@ -664,11 +952,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                     details['cpu'] = f"{hours}h{minutes}m"
                             else:
                                 details['cpu'] = 'N/A'
-        except:
-            pass
+        except Exception as e:
+            logging.debug(f"Service details error for {service}: {e}")
         return details
 
-    # ---------- GET ----------
+    # ---------- GET /api/stats ----------
     def do_GET(self):
         try:
             if self.path == '/api/stats':
@@ -682,9 +970,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
-            print(f"GET error: {e}", file=sys.stderr)
+            logging.error(f"GET error: {e}")
 
-    # ---------- POST (with speed test) ----------
+    # ---------- POST /api/run ----------
     def do_POST(self):
         if self.path == '/api/run':
             try:
@@ -778,20 +1066,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except:
             stats['memory'] = 'N/A'
 
-        # CPU Temp
-        temp = 'N/A'
-        try:
-            for path in ['/sys/class/thermal/thermal_zone0/temp',
-                         '/sys/class/hwmon/hwmon0/temp1_input',
-                         '/sys/class/hwmon/hwmon1/temp1_input']:
-                if os.path.exists(path):
-                    with open(path) as f:
-                        temp_val = int(f.read().strip()) // 1000
-                        temp = str(temp_val)
-                        break
-        except:
-            pass
-        stats['cpuTemp'] = temp
+        # CPU Temp (reuse GPU temp)
+        stats['cpuTemp'] = self.get_gpu_temp()
 
         # Backup
         backup_log = os.path.join(LOG_DIR, 'backup-to-nas.log')
@@ -812,19 +1088,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             stats['backupLog'] = ''
             stats['backupTime'] = ''
 
-        # Updates
-        dnf_out = ''
-        try:
-            dnf_out = subprocess.run(['dnf', 'check-update', '-q'], capture_output=True, text=True, timeout=10).stdout
-        except:
-            pass
-        stats['dnfUpdates'] = len([l for l in dnf_out.splitlines() if l and not l.startswith('Last metadata')])
-        flatpak_out = ''
-        try:
-            flatpak_out = subprocess.run(['flatpak', 'remote-ls', '--updates'], capture_output=True, text=True, timeout=10).stdout
-        except:
-            pass
-        stats['flatpakUpdates'] = len([l for l in flatpak_out.splitlines() if l])
+        # Updates (cached)
+        cached_updates = _cache.get('updates')
+        if cached_updates:
+            dnf_updates, flatpak_updates = cached_updates
+        else:
+            dnf_out = ''
+            try:
+                dnf_out = subprocess.run(['dnf', 'check-update', '-q'], capture_output=True, text=True, timeout=10).stdout
+            except:
+                pass
+            dnf_updates = len([l for l in dnf_out.splitlines() if l and not l.startswith('Last metadata')])
+            flatpak_out = ''
+            try:
+                flatpak_out = subprocess.run(['flatpak', 'remote-ls', '--updates'], capture_output=True, text=True, timeout=10).stdout
+            except:
+                pass
+            flatpak_updates = len([l for l in flatpak_out.splitlines() if l])
+            _cache.set('updates', (dnf_updates, flatpak_updates))
+        stats['dnfUpdates'] = dnf_updates
+        stats['flatpakUpdates'] = flatpak_updates
 
         # Disk usage
         disks = []
@@ -834,7 +1117,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 parts = line.split()
                 if len(parts) >= 5 and parts[0].startswith('/dev/'):
                     mount = parts[5] if len(parts) > 5 else ''
-                    if mount.startswith('/var/lib/snapd'):
+                    if mount.startswith(('/var/lib/snapd', '/boot')):
                         continue
                     percent = parts[4].replace('%', '')
                     if int(percent) >= 90:
@@ -882,13 +1165,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             result = subprocess.run(['ip', '-4', 'route', 'get', '1'],
                                     capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
-                import re
                 match = re.search(r'src\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
-                stats['default_ip'] = match.group(1) if match else 'N/A'
+                stats['defaultIp'] = match.group(1) if match else 'N/A'
             else:
-                stats['default_ip'] = 'N/A'
+                stats['defaultIp'] = 'N/A'
         except:
-            stats['default_ip'] = 'N/A'
+            stats['defaultIp'] = 'N/A'
 
         interfaces = []
         try:
@@ -901,8 +1183,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     tx_bytes = int(parts[9])
                     interfaces.append({
                         'name': iface,
-                        'rx': self.human_bytes(rx_bytes),
-                        'tx': self.human_bytes(tx_bytes)
+                        'rx': human_bytes(rx_bytes),
+                        'tx': human_bytes(tx_bytes)
                     })
             stats['interfaces'] = interfaces[:3]
         except:
@@ -923,7 +1205,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     status = 'unknown'
             except:
                 status = 'error'
-            # Get memory/CPU details
             details = self.get_service_details(svc)
             svc_info = {'name': svc, 'status': status}
             if details:
@@ -949,10 +1230,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         return stats
 
+# -------------------- Server setup with graceful shutdown --------------------
+def run_server():
+    handler = Handler
+    with socketserver.TCPServer((HOST, PORT), handler) as httpd:
+        httpd.allow_reuse_address = True
+        logging.info(f"Serving dashboard at http://{HOST}:{PORT} (accessible from network)")
+        print(f"Serving dashboard at http://{HOST}:{PORT}")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            logging.info("Shutting down...")
+            httpd.shutdown()
+
 if __name__ == '__main__':
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"Serving at port {PORT}")
-        httpd.serve_forever()
+    # Write PID file for external kill
+    with open(os.environ.get('PID_FILE', '/tmp/noba-web-server.pid'), 'w') as f:
+        f.write(str(os.getpid()))
+    run_server()
 EOF
 
 # -------------------------------------------------------------------
@@ -961,11 +1256,12 @@ EOF
 kill_server
 
 export PORT
+export PID_FILE="$SERVER_PID_FILE"
 cd "$HTML_DIR"
-nohup python3 server.py > "$LOG_FILE" 2>&1 &
+nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > "$SERVER_PID_FILE"
 
-log_info "Web dashboard started on http://localhost:$PORT"
+log_info "Web dashboard started on http://0.0.0.0:$PORT (accessible from network)"
 log_info "Log file: $LOG_FILE"
 log_info "Use '$0 --kill' to stop the server."
