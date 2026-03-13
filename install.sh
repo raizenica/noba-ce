@@ -1,10 +1,11 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
+# Version: 2.2.0
 
 set -euo pipefail
 
 # -------------------------------------------------------------------
-# Default paths (can be overridden by environment)
+# Default paths
 # -------------------------------------------------------------------
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/noba}"
@@ -20,15 +21,15 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Install Nobara Automation Suite.
+Install the Nobara Automation Suite.
 
 Options:
-  -d, --dir DIR       Installation directory (default: $INSTALL_DIR)
-  -c, --config DIR    Configuration directory (default: $CONFIG_DIR)
-  -s, --systemd DIR   Systemd user unit directory (default: $SYSTEMD_USER_DIR)
-  --skip-deps         Skip dependency installation (useful for testing)
-  -n, --dry-run       Show what would be done without copying
-  --help              Show this help
+  -d, --dir DIR      Installation directory (default: $INSTALL_DIR)
+  -c, --config DIR   Configuration directory (default: $CONFIG_DIR)
+  -s, --systemd DIR  Systemd user unit directory (default: $SYSTEMD_USER_DIR)
+  --skip-deps        Skip dependency installation (useful for testing)
+  -n, --dry-run      Show what would be done without copying
+  --help             Show this help
 EOF
     exit 0
 }
@@ -51,9 +52,9 @@ done
 # -------------------------------------------------------------------
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID="$ID"
-        OS_VERSION_ID="${VERSION_ID%%.*}"  # major version only
         OS_NAME="$NAME"
     else
         OS_ID="unknown"
@@ -76,20 +77,18 @@ install_deps() {
     local deps=()
     case "$OS_ID" in
         fedora|nobara|rhel|centos)
-            deps=(rsync msmtp ImageMagick yq jq dialog kdialog lm_sensors lsof speedtest-cli)
+            deps=(rsync rclone msmtp ImageMagick yq jq dialog psmisc lm_sensors lsof speedtest-cli)
             if [ "$DRY_RUN" = true ]; then
-                echo "DRY RUN: Would install: sudo dnf install ${deps[*]}"
+                echo "DRY RUN: Would install: sudo dnf install -y ${deps[*]}"
             else
                 echo "Installing dependencies via dnf..."
                 sudo dnf install -y "${deps[@]}"
             fi
             ;;
         debian|ubuntu|linuxmint|pop)
-            deps=(rsync msmtp imagemagick jq dialog kdialog lm-sensors lsof speedtest-cli)
-            # yq may need manual install
+            deps=(rsync rclone msmtp imagemagick jq dialog psmisc lm-sensors lsof speedtest-cli)
             if [ "$DRY_RUN" = true ]; then
                 echo "DRY RUN: Would install: sudo apt install -y ${deps[*]}"
-                echo "DRY RUN: yq may need manual install (see https://github.com/mikefarah/yq)"
             else
                 echo "Installing dependencies via apt..."
                 sudo apt update
@@ -105,7 +104,7 @@ install_deps() {
             fi
             ;;
         arch|manjaro|endeavouros)
-            deps=(rsync msmtp imagemagick yq jq dialog kdialog lm_sensors lsof speedtest-cli)
+            deps=(rsync rclone msmtp imagemagick yq jq dialog psmisc lm_sensors lsof speedtest-cli)
             if [ "$DRY_RUN" = true ]; then
                 echo "DRY RUN: Would install: sudo pacman -S ${deps[*]}"
             else
@@ -114,7 +113,7 @@ install_deps() {
             fi
             ;;
         *)
-            echo "WARNING: Unknown OS '$OS_ID'. Please install dependencies manually: rsync, msmtp, ImageMagick, yq, jq, dialog, kdialog, lm_sensors, lsof, speedtest-cli"
+            echo "WARNING: Unknown OS '$OS_ID'. Please install dependencies manually: rsync, rclone, msmtp, ImageMagick, yq, jq, dialog, psmisc, lm_sensors, lsof, speedtest-cli"
             ;;
     esac
 }
@@ -122,7 +121,7 @@ install_deps() {
 install_deps
 
 # -------------------------------------------------------------------
-# Installation steps (same as before)
+# Installation steps
 # -------------------------------------------------------------------
 echo "Installing Nobara Automation Suite to $INSTALL_DIR"
 echo "Configuration directory: $CONFIG_DIR"
@@ -141,6 +140,11 @@ fi
 echo "Copying scripts..."
 for script in "$SCRIPT_DIR"/*.sh; do
     name=$(basename "$script")
+    # Prevent the installer from installing itself
+    if [[ "$name" == "install.sh" ]] || [[ "$name" == "noba-setup.sh" ]]; then
+        continue
+    fi
+
     if [ "$DRY_RUN" = true ]; then
         echo "  Would copy $name to $INSTALL_DIR/"
     else
@@ -150,45 +154,79 @@ for script in "$SCRIPT_DIR"/*.sh; do
     fi
 done
 
-# Copy noba CLI (no extension)
+# Copy noba CLI wrapper
 if [ -f "$SCRIPT_DIR/noba" ]; then
     if [ "$DRY_RUN" = true ]; then
         echo "  Would copy noba to $INSTALL_DIR/"
     else
         cp "$SCRIPT_DIR/noba" "$INSTALL_DIR/"
         chmod +x "$INSTALL_DIR/noba"
-        echo "  Copied noba"
+        echo "  Copied noba wrapper"
     fi
 fi
 
 # Create default config if missing
 if [ ! -f "$CONFIG_DIR/config.yaml" ] && [ "$DRY_RUN" = false ]; then
     cat > "$CONFIG_DIR/config.yaml" <<CONFIG
-# Nobara unified configuration
-email: "your@email.com"
+# Nobara Automation Suite Unified Configuration
+email: "strikerke@gmail.com"
+
+logs:
+  dir: "$HOME/.local/share"
 
 backup:
   dest: "/mnt/vnnas/backups/raizen"
+  retention_days: 7
   sources:
-    - "/home/raizen/Documents"
-    - "/home/raizen/Pictures"
+    - "$HOME/Documents"
+    - "$HOME/Pictures"
+
+cloud:
+  remote: "mycloud:backups/raizen"
+  rclone_opts: "-v --checksum --progress --fast-list"
 
 disk:
   threshold: 85
+  cleanup_enabled: true
   targets:
     - "/"
-    - "/home"
-  cleanup_enabled: true
+    - "$HOME"
 
-logs:
-  dir: "$HOME/.local/share/noba"
+web:
+  port: 8080
+  service_list:
+    - backup-to-nas.service
+    - organize-downloads.service
+    - noba-web.service
+    - syncthing.service
+
+services:
+  monitor:
+    - sshd
+    - docker
+    - NetworkManager
+  notify: true
 CONFIG
     echo "Created default config at $CONFIG_DIR/config.yaml"
 elif [ "$DRY_RUN" = false ]; then
-    echo "Config file already exists, skipping."
+    echo "Config file already exists, skipping generation."
 fi
 
-# Copy systemd user units if they exist
+# Setup Bash Completions
+BASHRC="$HOME/.bashrc"
+COMPLETION_STR="source $INSTALL_DIR/noba-completion.sh"
+if [ "$DRY_RUN" = false ] && [ -f "$INSTALL_DIR/noba-completion.sh" ]; then
+    if grep -qF "$COMPLETION_STR" "$BASHRC" 2>/dev/null; then
+        echo "Bash completions already wired in $BASHRC."
+    else
+        echo "" >> "$BASHRC"
+        echo "# Nobara Automation Suite Completions" >> "$BASHRC"
+        echo "$COMPLETION_STR" >> "$BASHRC"
+        echo "Added Bash completions to $BASHRC."
+    fi
+fi
+
+# Copy systemd user units
 if [ -d "$SCRIPT_DIR/systemd" ]; then
     echo "Copying systemd user units..."
     for unit in "$SCRIPT_DIR"/systemd/*.{timer,service}; do
@@ -206,14 +244,15 @@ else
     echo "No systemd units directory found; skipping."
 fi
 
-if [ "$DRY_RUN" = false ]; then
+if [ "$DRY_RUN" = false ] && command -v systemctl &>/dev/null; then
     echo "Reloading systemd user daemon..."
-    systemctl --user daemon-reload
+    systemctl --user daemon-reload || true
 fi
 
 echo
 echo "Installation complete."
 if [ "$DRY_RUN" = false ]; then
+    echo "Please open a new terminal or run 'source ~/.bashrc' to enable CLI completions."
     echo "You can now enable timers, e.g.:"
     echo "  systemctl --user enable --now disk-sentinel.timer"
     echo "Edit configuration: $CONFIG_DIR/config.yaml"
