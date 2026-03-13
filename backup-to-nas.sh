@@ -299,7 +299,7 @@ else
     SIZE="N/A (dry run)"
 fi
 
-# Generate email report
+# Generate email report (always, but only send if not dry run)
 EMAIL_BODY=$(mktemp)
 if [ "$ERROR_OCCURRED" = true ]; then
     subject_prefix="❌ BACKUP FAILED"
@@ -366,7 +366,10 @@ cat >> "$EMAIL_BODY" <<EOF
 </html>
 EOF
 
-send_email_report "$subject_prefix - $(date '+%Y-%m-%d')" "$EMAIL_BODY"
+# Only send email if not dry-run
+if [ "$DRY_RUN" = false ]; then
+    send_email_report "$subject_prefix - $(date '+%Y-%m-%d')" "$EMAIL_BODY"
+fi
 
 rm -f "$EMAIL_BODY"
 log_info "========== Backup finished at $(date) =========="
