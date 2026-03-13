@@ -1,51 +1,46 @@
 #!/bin/bash
-# shellcheck disable=SC2329
-# shellcheck disable=SC2329
 # noba-lib.sh – Shared functions for Nobara automation scripts
 
-# Configuration
 CONFIG_FILE="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
 
-# Colors (for output) – may be unused in this file, but used by sourcing scripts
-# shellcheck disable=SC2034
+# Colors (may be unused in this file, but used by sourcing scripts)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# -------------------------------------------------------------------
 # Logging functions
+# -------------------------------------------------------------------
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $*"
 }
-
 log_warn() {
     echo -e "${YELLOW}[WARN]${NC} $*" >&2
 }
-
 log_error() {
     echo -e "${RED}[ERROR]${NC} $*" >&2
 }
-
 log_debug() {
     if [ "${VERBOSE:-false}" = true ]; then
         echo -e "${CYAN}[DEBUG]${NC} $*"
     fi
 }
 
-# Load YAML configuration with fallback
-# shellcheck disable=SC2034
-# Usage: load_config [prefix]
-# shellcheck disable=SC2034
-# Sets global variables: CONFIG_LOADED=true if successful
-# shellcheck disable=SC2034
+# -------------------------------------------------------------------
+# Configuration helpers (with fallback if yq not available)
+# -------------------------------------------------------------------
+# Fallback versions (used if yq is missing)
+get_config() {
+    echo "$2"   # just return the default
+}
+get_config_array() {
+    return 0    # return nothing
+}
+
 load_config() {
-    local prefix="${1:-}"
-    # shellcheck disable=SC2034
     CONFIG_LOADED=false
 
     if ! command -v yq &>/dev/null; then
@@ -63,8 +58,7 @@ load_config() {
         return 1
     fi
 
-    # Read a value from YAML
-    # Usage: get_config key [default]
+    # Override get_config with real yq version
     get_config() {
         local key="$1"
         local default="${2:-}"
@@ -77,11 +71,8 @@ load_config() {
         fi
     }
 
-    # Read an array from YAML (one line per element)
-    # Usage: get_config_array key
     get_config_array() {
         local key="$1"
-        # shellcheck disable=SC1087
         yq eval "$key[]" "$CONFIG_FILE" 2>/dev/null | grep -v '^null$'
     }
 
@@ -90,7 +81,9 @@ load_config() {
     return 0
 }
 
-# Check required commands
+# -------------------------------------------------------------------
+# Utility functions
+# -------------------------------------------------------------------
 check_deps() {
     local missing=()
     for cmd in "$@"; do
@@ -105,13 +98,11 @@ check_deps() {
     return 0
 }
 
-# Portable temporary directory creation
 make_temp_dir() {
     local base="${1:-/tmp}"
     mktemp -d "$base/noba.XXXXXXXXXX"
 }
 
-# Human-readable sizes
 human_size() {
     local bytes=$1
     if command -v numfmt &>/dev/null; then
