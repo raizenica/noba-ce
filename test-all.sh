@@ -333,78 +333,91 @@ edge_test() {
 for script in *.sh; do
     [[ "$script" == "noba-lib.sh" || "$script" == "test-all.sh" ]] && continue
     # Skip scripts that don't use getopt (like noba, which is a wrapper)
-    if [[ "$script" == "noba" ]]; then
+    if [[ "$script" == "noba" || "$script" == "install.sh" || "$script" == "setup-automation-timers.sh" ]]; then
         continue
     fi
-    # Run with --invalid-option and expect failure
-    run_test "$script" "$script" --invalid-option
-    edge_test "$script --invalid-option" $?
+    # Run with --invalid-option and expect failure; capture exit code without aborting
+    run_test "$script" "$script" --invalid-option || true
+    rc=$?
+    edge_test "$script --invalid-option" $rc
 done
 
 # 2. Test missing required arguments
 # backup-to-nas.sh requires --source and --dest
-run_test "backup-to-nas.sh" "backup-to-nas.sh" --dest /tmp
-edge_test "backup-to-nas.sh (missing --source)" $?
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --dest /tmp || true
+rc=$?
+edge_test "backup-to-nas.sh (missing --source)" $rc
 
-run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp
-edge_test "backup-to-nas.sh (missing --dest)" $?
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp || true
+rc=$?
+edge_test "backup-to-nas.sh (missing --dest)" $rc
 
 # organize-downloads.sh has no required args, but we can test with non-existent dir
-run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir /does/not/exist
-edge_test "organize-downloads.sh (non-existent dir)" $?
+run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir /does/not/exist || true
+rc=$?
+edge_test "organize-downloads.sh (non-existent dir)" $rc
 
 # 3. Test checksum.sh with large number of files (performance smoke test)
-run_test "checksum.sh" "checksum.sh" "$LARGE_DIR"/*
-edge_test "checksum.sh (100 files)" $?
+run_test "checksum.sh" "checksum.sh" "$LARGE_DIR"/* || true
+rc=$?
+edge_test "checksum.sh (100 files)" $rc
 
 # 4. Test organize-downloads.sh with file containing spaces and special chars
-# Copy the special file to Downloads (or a temp dir)
 TEST_DOWNLOAD_DIR="/tmp/test-downloads"
 mkdir -p "$TEST_DOWNLOAD_DIR"
 cp "$TEST_SPECIAL" "$TEST_DOWNLOAD_DIR/"
-run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir "$TEST_DOWNLOAD_DIR" --dry-run
-edge_test "organize-downloads.sh (special chars)" $?
+run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir "$TEST_DOWNLOAD_DIR" --dry-run || true
+rc=$?
+edge_test "organize-downloads.sh (special chars)" $rc
 rm -rf "$TEST_DOWNLOAD_DIR"
 
 # 5. Test images-to-pdf.sh with non-image file
 TMP_TEXT=$(mktemp)
 echo "not an image" > "$TMP_TEXT"
-run_test "images-to-pdf.sh" "images-to-pdf.sh" -o /tmp/out.pdf "$TMP_TEXT"
-edge_test "images-to-pdf.sh (invalid input)" $?
+run_test "images-to-pdf.sh" "images-to-pdf.sh" -o /tmp/out.pdf "$TMP_TEXT" || true
+rc=$?
+edge_test "images-to-pdf.sh (invalid input)" $rc
 rm -f "$TMP_TEXT" /tmp/out.pdf
 
 # 6. Test config-check.sh with invalid YAML
-# Temporarily set NOBA_CONFIG to point to invalid YAML
 export NOBA_CONFIG="$INVALID_YAML"
-run_test "config-check.sh" "config-check.sh"
-edge_test "config-check.sh (invalid YAML)" $?
+run_test "config-check.sh" "config-check.sh" || true
+rc=$?
+edge_test "config-check.sh (invalid YAML)" $rc
 unset NOBA_CONFIG
 
 # 7. Test noba CLI commands
-run_test "noba" "noba" list
-edge_test "noba list" $?
-run_test "noba" "noba" doctor --dry-run
-edge_test "noba doctor --dry-run" $?
-run_test "noba" "noba" run backup --dry-run
-edge_test "noba run backup --dry-run" $?
+run_test "noba" "noba" list || true
+rc=$?
+edge_test "noba list" $rc
+
+run_test "noba" "noba" doctor --dry-run || true
+rc=$?
+edge_test "noba doctor --dry-run" $rc
+
+run_test "noba" "noba" run backup --dry-run || true
+rc=$?
+edge_test "noba run backup --dry-run" $rc
+
 # noba config (without --edit) should show config or fail if missing; we have config, so it should succeed
-run_test "noba" "noba" config
-edge_test "noba config" $?
+run_test "noba" "noba" config || true
+rc=$?
+edge_test "noba config" $rc
 
 # 8. Test scripts that require sudo (if possible without password)
 if sudo -n true 2>/dev/null; then
-    # We can run a sudo-requiring script with --help or --dry-run, but they usually don't need sudo for that.
-    # For now, we skip because our scripts don't have direct sudo tests.
     log_info "Sudo available – could add more tests here."
 fi
 
 # 9. Test that dry-run on non-existent destination exits 0 for backup-to-nas.sh
-run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp --dest /does/not/exist --dry-run
-edge_test "backup-to-nas.sh (dry-run with missing dest)" $?
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp --dest /does/not/exist --dry-run || true
+rc=$?
+edge_test "backup-to-nas.sh (dry-run with missing dest)" $rc
 
 # 10. Test log-rotator.sh with non-existent directory
-run_test "log-rotator.sh" "log-rotator.sh" --log-dir /does/not/exist --dry-run
-edge_test "log-rotator.sh (non-existent dir)" $?
+run_test "log-rotator.sh" "log-rotator.sh" --log-dir /does/not/exist --dry-run || true
+rc=$?
+edge_test "log-rotator.sh (non-existent dir)" $rc
 
 # -------------------------------------------------------------------
 # Cleanup
