@@ -1,37 +1,35 @@
 #!/bin/bash
 # undo-organizer.sh – Undo last download organizer run
+# Version: 2.2.0
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
-UNDO_LOG="${UNDO_LOG:-$HOME/.local/share/download-organizer-undo.log}"
+LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
+UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
 DRY_RUN=false
 FORCE=false
 
 # -------------------------------------------------------------------
-# Load user configuration (if any)
+# Load user configuration
 # -------------------------------------------------------------------
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    # Override undo log path from logs.dir in config
-    logs_dir="$(get_config ".logs.dir" "$HOME/.local/share")"
-    # Expand tilde if present (get_config returns as-is)
-    logs_dir="${logs_dir/#\~/$HOME}"
-    UNDO_LOG="${logs_dir}/download-organizer-undo.log"
+if command -v get_config &>/dev/null; then
+    config_log_dir="$(get_config ".logs.dir" "$LOG_DIR")"
+    LOG_DIR="${config_log_dir/#\~/$HOME}"
+    UNDO_LOG="${LOG_DIR}/download-organizer-undo.log"
 fi
 
 # -------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "undo-organizer.sh version 1.0"
+    echo "undo-organizer.sh version 2.2.0"
     exit 0
 }
 
@@ -50,15 +48,10 @@ EOF
     exit 0
 }
 
-# Portable reverse line function (tac, tail -r, or awk)
+# Portable reverse line function
 reverse_lines() {
     if command -v tac &>/dev/null; then
         tac "$1"
-    elif command -v tail &>/dev/null && tail --version 2>/dev/null | grep -q "GNU"; then
-        # GNU tail has -r option (reverse) but it's not portable
-        # Actually tail -r is not in GNU, it's BSD. Use awk fallback.
-        # Use awk as most reliable fallback.
-        awk '{a[NR]=$0} END {for (i=NR;i>=1;i--) print a[i]}' "$1"
     else
         awk '{a[NR]=$0} END {for (i=NR;i>=1;i--) print a[i]}' "$1"
     fi
@@ -67,19 +60,7 @@ reverse_lines() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-# shellcheck disable=SC2034
-PARSED_ARGS=$(getopt -o df -l dry-run,force,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o df -l dry-run,force,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -98,14 +79,12 @@ done
 # -------------------------------------------------------------------
 # Pre-flight checks
 # -------------------------------------------------------------------
-# Check if undo log exists and is non‑empty
 if [ ! -f "$UNDO_LOG" ] || [ ! -s "$UNDO_LOG" ]; then
     if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] No undo log found – nothing to do."
+        log_info "[DRY RUN] No undo log found at $UNDO_LOG – nothing to do."
         exit 0
     else
-        log_error "No undo log found at $UNDO_LOG"
-        exit 1
+        die "No undo log found at $UNDO_LOG. Nothing to undo."
     fi
 fi
 
@@ -114,9 +93,7 @@ count=$(wc -l < "$UNDO_LOG")
 log_info "This will undo the last download organizer run, moving $count file(s) back."
 
 if [ "$FORCE" = false ] && [ "$DRY_RUN" = false ]; then
-    read -p "Are you sure? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    if ! confirm "Are you sure you want to proceed?" "n"; then
         log_info "Cancelled by user."
         exit 0
     fi
@@ -127,16 +104,16 @@ fi
 # -------------------------------------------------------------------
 log_info "Starting undo process (dry run: $DRY_RUN)..."
 
-# We'll use a temporary file to collect errors, but simpler: just process
-reverse_lines "$UNDO_LOG" | while IFS= read -r line; do
+ERROR_OCCURRED=false
+
+while IFS= read -r line; do
     # Remove trailing carriage return if any
     line=${line%$'\r'}
-    # Try new separator (ASCII unit separator \037)
+
+    # Try ASCII unit separator \037 first, fallback to pipe |
     if [[ "$line" == *$'\037'* ]]; then
         src="${line%%$'\037'*}"
-        rest="${line#*$'\037'}"
-        dest="${rest%%$'\037'*}"
-    # Fallback to old pipe separator
+        dest="${line#*$'\037'}"
     elif [[ "$line" == *'|'* ]]; then
         src="${line%%|*}"
         dest="${line#*|}"
@@ -146,29 +123,34 @@ reverse_lines "$UNDO_LOG" | while IFS= read -r line; do
     fi
 
     if [ -z "$src" ] || [ -z "$dest" ]; then
-        log_warn "Empty src or dest in entry, skipping: $line"
+        log_warn "Empty source or destination in entry, skipping: $line"
         continue
     fi
 
     if [ ! -f "$dest" ]; then
-        log_warn "Source file not found: $dest – skipping"
+        log_warn "Restoration source file not found: $dest – skipping"
+        ERROR_OCCURRED=true
         continue
     fi
 
     if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would restore: $dest → $src"
+        log_info "[DRY RUN] Would restore: $(basename "$dest") → $(dirname "$src")/"
     else
-        # Ensure target directory exists
         mkdir -p "$(dirname "$src")"
-        mv "$dest" "$src"
-        log_info "Restored: $dest → $src"
+        if mv "$dest" "$src"; then
+            log_info "Restored: $(basename "$dest")"
+        else
+            log_error "Failed to restore: $dest"
+            ERROR_OCCURRED=true
+        fi
     fi
-done
+done < <(reverse_lines "$UNDO_LOG")
 
 if [ "$DRY_RUN" = false ]; then
-    # Clear undo log after successful undo
-    : > "$UNDO_LOG"
-    log_info "Undo complete. Undo log cleared."
-else
-    log_info "[DRY RUN] Undo log would be cleared after actual run."
+    if [ "$ERROR_OCCURRED" = false ]; then
+        : > "$UNDO_LOG"
+        log_success "Undo complete. Undo log cleared."
+    else
+        log_warn "Undo completed with errors. The undo log was NOT cleared so you can retry failed files."
+    fi
 fi
