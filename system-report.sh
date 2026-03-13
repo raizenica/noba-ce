@@ -1,10 +1,10 @@
 #!/bin/bash
 # system-report.sh – Generate HTML report of system health and email it
+# Revised version with fixes and enhancements
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
@@ -19,7 +19,7 @@ SEND_EMAIL=true
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
-load_config
+load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     # Override defaults
     logs_dir="$(get_config ".logs.dir" "$HOME/.local/share/noba")"
@@ -32,7 +32,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "system-report.sh version 1.0"
+    echo "system-report.sh version 2.0"
     exit 0
 }
 
@@ -66,8 +66,10 @@ send_report() {
         mutt -s "$subject" -a "$attachment" -- "$EMAIL" < /dev/null
         log_info "Report emailed to $EMAIL via mutt."
     elif command -v mail &>/dev/null; then
-        mail -s "$subject" "$EMAIL" < /dev/null
-        log_info "Report emailed to $EMAIL via mail (attachment may not work)."
+        # mail doesn't support attachments, so we send a notice
+        echo "System report attached as $attachment" | mail -s "$subject" "$EMAIL"
+        log_info "Notification sent to $EMAIL via mail (attachment not included)."
+        log_info "Please find the report at $attachment"
     else
         log_warn "No mail program found – cannot send email."
     fi
@@ -76,8 +78,7 @@ send_report() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o o:d:e:n -l output:,dir:,email:,no-email,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o o:d:e:n -l output:,dir:,email:,no-email,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
@@ -99,10 +100,13 @@ done
 # Pre-flight checks
 # -------------------------------------------------------------------
 check_deps df grep tail date hostname
-# Optional tools: dnf, flatpak, mail/mutt – check at runtime
+# Optional tools: dnf, flatpak, mail/mutt – checked at runtime
 
 # Ensure report directory exists
-mkdir -p "$REPORT_DIR"
+mkdir -p "$REPORT_DIR" || {
+    log_error "Cannot create report directory $REPORT_DIR"
+    exit 1
+}
 REPORT_PATH="$REPORT_DIR/$REPORT_FILE"
 
 # -------------------------------------------------------------------
@@ -184,6 +188,6 @@ log_info "Report saved to $REPORT_PATH"
 # -------------------------------------------------------------------
 # Send email
 # -------------------------------------------------------------------
-send_report "System Report $(hostname) $(date)" "$REPORT_PATH"
+send_report "System Report $(hostname) $(date +%Y-%m-%d)" "$REPORT_PATH"
 
 log_info "Done."
