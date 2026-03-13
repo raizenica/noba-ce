@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-web.sh – Interactive web dashboard with automatic port fallback
+# noba-web.sh – Interactive web dashboard with automatic port fallback and customizable layout
 
 set -euo pipefail
 
@@ -33,6 +33,11 @@ if [ "$CONFIG_LOADED" = true ]; then
         export NOBA_WEB_SERVICES="$SERVICES_LIST"
     else
         export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
+    fi
+    # Read layout array from config
+    LAYOUT_LIST=$(get_config_array ".web.layout" | tr '\n' ',' | sed 's/,$//')
+    if [ -n "$LAYOUT_LIST" ]; then
+        export NOBA_WEB_LAYOUT="$LAYOUT_LIST"
     fi
 else
     export NOBA_WEB_SERVICES="${DEFAULT_SERVICES// /,}"
@@ -146,7 +151,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Generate HTML file (with GPU and Docker cards)
+# Generate HTML file (with dynamic layout)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -200,125 +205,127 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
 
     <div class="grid">
-        <!-- System Health Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
-            <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
-            <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
-            <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
-            <div class="stat-row"><span class="stat-label">CPU Temp</span>
-                <span class="stat-value" :class="tempClass" x-text="cpuTemp + '°C'"></span>
+        <template x-for="card in layout" :key="card">
+            <!-- System Health Card -->
+            <div x-show="card === 'system'" class="card">
+                <div class="card-header"><i class="fas fa-microchip"></i> System Health</div>
+                <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
+                <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
+                <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
+                <div class="stat-row"><span class="stat-label">CPU Temp</span>
+                    <span class="stat-value" :class="tempClass" x-text="cpuTemp + '°C'"></span>
+                </div>
             </div>
-        </div>
 
-        <!-- GPU Temperature Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-microchip"></i> GPU Temperature</div>
-            <div class="stat-row">
-                <span class="stat-label">GPU Temp</span>
-                <span class="stat-value" x-text="gpuTemp"></span>
+            <!-- GPU Temperature Card -->
+            <div x-show="card === 'gpu'" class="card">
+                <div class="card-header"><i class="fas fa-microchip"></i> GPU Temperature</div>
+                <div class="stat-row">
+                    <span class="stat-label">GPU Temp</span>
+                    <span class="stat-value" x-text="gpuTemp"></span>
+                </div>
             </div>
-        </div>
 
-        <!-- Backup Status Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-database"></i> Backup</div>
-            <div class="stat-row"><span class="stat-label">Last backup</span>
-                <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
+            <!-- Backup Status Card -->
+            <div x-show="card === 'backup'" class="card">
+                <div class="card-header"><i class="fas fa-database"></i> Backup</div>
+                <div class="stat-row"><span class="stat-label">Last backup</span>
+                    <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
+                </div>
+                <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
+                <pre x-text="backupLog"></pre>
+                <div class="button-grid">
+                    <button class="btn btn-primary" @click="runScript('backup')"><i class="fas fa-play"></i> Run Backup</button>
+                    <button class="btn" @click="runScript('verify')"><i class="fas fa-check"></i> Verify</button>
+                </div>
             </div>
-            <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
-            <pre x-text="backupLog"></pre>
-            <div class="button-grid">
-                <button class="btn btn-primary" @click="runScript('backup')"><i class="fas fa-play"></i> Run Backup</button>
-                <button class="btn" @click="runScript('verify')"><i class="fas fa-check"></i> Verify</button>
+
+            <!-- Updates Card -->
+            <div x-show="card === 'updates'" class="card">
+                <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
+                <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
+                <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
+                <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
             </div>
-        </div>
 
-        <!-- Updates Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-sync-alt"></i> Updates</div>
-            <div class="stat-row"><span class="stat-label">DNF</span><span class="stat-value" x-text="dnfUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Flatpak</span><span class="stat-value" x-text="flatpakUpdates"></span></div>
-            <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
-        </div>
-
-        <!-- Disk Usage Card -->
-        <div class="card" style="grid-column: span 2;">
-            <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
-            <template x-for="disk in disks" :key="disk.mount">
-                <div class="disk-item">
-                    <span style="min-width:80px;" x-text="disk.mount"></span>
-                    <div class="disk-bar">
-                        <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
+            <!-- Disk Usage Card -->
+            <div x-show="card === 'disk'" class="card" style="grid-column: span 2;">
+                <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
+                <template x-for="disk in disks" :key="disk.mount">
+                    <div class="disk-item">
+                        <span style="min-width:80px;" x-text="disk.mount"></span>
+                        <div class="disk-bar">
+                            <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
+                        </div>
+                        <span class="disk-percent" x-text="disk.percent+'%'"></span>
                     </div>
-                    <span class="disk-percent" x-text="disk.percent+'%'"></span>
-                </div>
-            </template>
-        </div>
-
-        <!-- Download Organizer Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
-            <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
-            <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
-            <pre x-text="organizerLog"></pre>
-            <div class="button-grid">
-                <button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button>
+                </template>
             </div>
-        </div>
 
-        <!-- Disk Sentinel Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
-            <pre x-text="diskAlerts"></pre>
-            <div class="button-grid">
-                <button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button>
+            <!-- Download Organizer Card -->
+            <div x-show="card === 'organizer'" class="card">
+                <div class="card-header"><i class="fas fa-download"></i> Download Organizer</div>
+                <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
+                <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
+                <pre x-text="organizerLog"></pre>
+                <div class="button-grid">
+                    <button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button>
+                </div>
             </div>
-        </div>
 
-        <!-- Network Stats Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
-            <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
-            <template x-for="iface in interfaces" :key="iface.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="iface.name"></span>
-                    <span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span>
+            <!-- Disk Sentinel Card -->
+            <div x-show="card === 'sentinel'" class="card">
+                <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
+                <pre x-text="diskAlerts"></pre>
+                <div class="button-grid">
+                    <button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button>
                 </div>
-            </template>
-            <template x-if="interfaces.length === 0">
-                <div class="stat-row"><span class="stat-label">No data</span></div>
-            </template>
-        </div>
+            </div>
 
-        <!-- Services Status Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
-            <template x-for="svc in services" :key="svc.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="svc.name.replace('.service','')"></span>
-                    <span class="stat-value" :class="{
-                        'success': svc.status === 'active',
-                        'warning': svc.status === 'inactive',
-                        'danger': svc.status === 'failed'
-                    }" x-text="svc.status"></span>
-                </div>
-            </template>
-        </div>
+            <!-- Network Stats Card -->
+            <div x-show="card === 'network'" class="card">
+                <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
+                <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
+                <template x-for="iface in interfaces" :key="iface.name">
+                    <div class="stat-row">
+                        <span class="stat-label" x-text="iface.name"></span>
+                        <span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span>
+                    </div>
+                </template>
+                <template x-if="interfaces.length === 0">
+                    <div class="stat-row"><span class="stat-label">No data</span></div>
+                </template>
+            </div>
 
-        <!-- Docker Containers Card -->
-        <div class="card">
-            <div class="card-header"><i class="fab fa-docker"></i> Docker Containers</div>
-            <template x-if="dockerContainers.length === 0">
-                <div class="stat-row"><span class="stat-label">No running containers</span></div>
-            </template>
-            <template x-for="container in dockerContainers" :key="container">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="container.split('(')[0]"></span>
-                    <span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span>
-                </div>
-            </template>
-        </div>
+            <!-- Services Status Card -->
+            <div x-show="card === 'services'" class="card">
+                <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
+                <template x-for="svc in services" :key="svc.name">
+                    <div class="stat-row">
+                        <span class="stat-label" x-text="svc.name.replace('.service','')"></span>
+                        <span class="stat-value" :class="{
+                            'success': svc.status === 'active',
+                            'warning': svc.status === 'inactive',
+                            'danger': svc.status === 'failed'
+                        }" x-text="svc.status"></span>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Docker Containers Card -->
+            <div x-show="card === 'docker'" class="card">
+                <div class="card-header"><i class="fab fa-docker"></i> Docker Containers</div>
+                <template x-if="dockerContainers.length === 0">
+                    <div class="stat-row"><span class="stat-label">No running containers</span></div>
+                </template>
+                <template x-for="container in dockerContainers" :key="container">
+                    <div class="stat-row">
+                        <span class="stat-label" x-text="container.split('(')[0]"></span>
+                        <span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span>
+                    </div>
+                </template>
+            </div>
+        </template>
     </div>
 
     <!-- Modal for script output -->
@@ -348,6 +355,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 runningScript: false,
                 defaultIp: '', interfaces: [], services: [],
                 gpuTemp: '', dockerContainers: [],
+                layout: [],
 
                 async init() {
                     await this.refreshStats();
@@ -381,6 +389,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.services = data.services || [];
                         this.gpuTemp = data.gpuTemp || 'N/A';
                         this.dockerContainers = data.dockerContainers || [];
+                        this.layout = data.layout || ['system', 'gpu', 'backup', 'updates', 'disk', 'organizer', 'sentinel', 'network', 'services', 'docker'];
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     }
@@ -417,7 +426,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Generate Python server (with enhanced stats)
+# Generate Python server (with enhanced stats and layout support)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 import http.server
@@ -737,6 +746,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # --- Docker Containers ---
         stats['dockerContainers'] = self.get_docker_containers()
+
+        # --- Layout from environment (if any) ---
+        layout_str = os.environ.get('NOBA_WEB_LAYOUT', '')
+        if layout_str:
+            stats['layout'] = layout_str.split(',')
+        else:
+            # Default order if not configured
+            stats['layout'] = ['system', 'gpu', 'backup', 'updates', 'disk', 'organizer', 'sentinel', 'network', 'services', 'docker']
 
         return stats
 
