@@ -179,11 +179,13 @@ for script in *.sh; do
     esac
     # Special case: noba-dashboard.sh – just run it (no arguments needed)
     if [[ "$script" == "noba-dashboard.sh" ]]; then
+        echo "DEBUG: Running dashboard test" >&2
         if run_test "$script" "$script"; then
             echo -e "${GREEN}PASS${NC}"
             PASS=$((PASS+1))
         else
-            echo -e "${RED}FAIL (execution)${NC}"
+            rc=$?
+            echo -e "${RED}FAIL (execution, exit code $rc)${NC}"
             FAIL=$((FAIL+1))
         fi
         continue
