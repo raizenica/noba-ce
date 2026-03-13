@@ -86,8 +86,7 @@ run_test() {
 # -------------------------------------------------------------------
 # Parse arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o t:snv -l timeout:,skip-slow,dry-run,verbose,help,version -- "$@")
-if [ $? -ne 0 ]; then
+if ! PARSED_ARGS=$(getopt -o t:snv -l timeout:,skip-slow,dry-run,verbose,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
