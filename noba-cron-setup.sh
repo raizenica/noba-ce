@@ -25,9 +25,8 @@ AUTOMATION_SCRIPTS=(
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
-load_config
+load_config || true   # Ignore non-zero exit
 if [ "$CONFIG_LOADED" = true ]; then
-    # Optionally override the list from config
     scripts_from_config=$(get_config_array ".cron.scripts")
     if [ -n "$scripts_from_config" ]; then
         mapfile -t AUTOMATION_SCRIPTS <<< "$scripts_from_config"
@@ -109,7 +108,7 @@ fi
 if [ "$REMOVE_MODE" = true ]; then
     log_info "Select a cron job to remove:"
     # Get current automation jobs with line numbers
-    local jobs=()
+    jobs=()
     while IFS= read -r line; do
         jobs+=("$line")
     done < <(crontab -l 2>/dev/null | grep -n -E "($(IFS=\|; echo "${AUTOMATION_SCRIPTS[*]}"))" || true)

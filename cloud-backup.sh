@@ -19,9 +19,8 @@ DRY_RUN=""
 # -------------------------------------------------------------------
 # Load user configuration (YAML first, then legacy conf)
 # -------------------------------------------------------------------
-load_config
+load_config || true   # Ignore non-zero exit (yq missing or config missing)
 if [ "$CONFIG_LOADED" = true ]; then
-    # Override from YAML if defined
     REMOTE_PATH="$(get_config ".cloud.remote" "$REMOTE_PATH")"
     LOCAL_BACKUP_DIR="$(get_config ".backup.dest" "$LOCAL_BACKUP_DIR")"
     RCLONE_OPTS="$(get_config ".cloud.rclone_opts" "$RCLONE_OPTS")"
