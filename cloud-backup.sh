@@ -1,10 +1,10 @@
 #!/bin/bash
 # cloud-backup.sh – Sync local backups to cloud using rclone
+# Version: 2.2.0
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
@@ -14,17 +14,23 @@ source "$SCRIPT_DIR/noba-lib.sh"
 CONFIG_FILE="${CLOUD_CONFIG:-$HOME/.config/rclone-backup.conf}"
 LOCAL_BACKUP_DIR="${BACKUP_DEST:-/mnt/vnnas/backups/raizen}"
 REMOTE_PATH="mycloud:backups/raizen"
-RCLONE_OPTS="-v --checksum --progress"
-DRY_RUN=""
+RCLONE_OPTS="-v --checksum --progress --fast-list"
+DRY_RUN=false
+LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
+LOG_FILE="$LOG_DIR/cloud-backup.log"
+STATE_FILE="$LOG_DIR/cloud-backup.state"
+LOCK_FILE="/tmp/cloud-backup.lock"
 
 # -------------------------------------------------------------------
-# Load user configuration (YAML first, then legacy conf)
+# Load user configuration
 # -------------------------------------------------------------------
-load_config || true   # Ignore non-zero exit (yq missing or config missing)
-if [ "$CONFIG_LOADED" = true ]; then
+if command -v get_config &>/dev/null; then
     REMOTE_PATH="$(get_config ".cloud.remote" "$REMOTE_PATH")"
     LOCAL_BACKUP_DIR="$(get_config ".backup.dest" "$LOCAL_BACKUP_DIR")"
     RCLONE_OPTS="$(get_config ".cloud.rclone_opts" "$RCLONE_OPTS")"
+    LOG_DIR="$(get_config ".logs.dir" "$LOG_DIR")"
+    LOG_FILE="$LOG_DIR/cloud-backup.log"
+    STATE_FILE="$LOG_DIR/cloud-backup.state"
 fi
 
 # Legacy config file (optional)
@@ -37,7 +43,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "cloud-backup.sh version 1.0"
+    echo "cloud-backup.sh version 2.2.0"
     exit 0
 }
 
@@ -48,29 +54,39 @@ Usage: $0 [OPTIONS]
 Sync local backups to a cloud provider using rclone.
 
 Options:
-  -n, --dry-run       Show what would be synced without transferring
-  -r, --remote PATH   Set remote path (default: $REMOTE_PATH)
-  -c, --config FILE   Use custom rclone config file (default: $CONFIG_FILE)
-  --help              Show this help message
-  --version           Show version information
+  -n, --dry-run      Show what would be synced without transferring
+  -r, --remote PATH  Set remote path (default: $REMOTE_PATH)
+  -c, --config FILE  Use custom rclone config file (default: $CONFIG_FILE)
+  --status           Output current sync status (used by Web Dashboard)
+  --help             Show this help message
+  --version          Show version information
 EOF
     exit 0
+}
+
+cleanup() {
+    if [ -n "${LOCK_FD:-}" ]; then
+        flock -u "$LOCK_FD" 2>/dev/null || true
+    fi
+    rm -f "$LOCK_FILE"
 }
 
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o nr:c: -l dry-run,remote:,config:,help,version -- "$@")
-if ! some_command; then
+if ! PARSED_ARGS=$(getopt -o nr:c:s -l dry-run,remote:,config:,status,help,version -- "$@"); then
     show_help
 fi
 eval set -- "$PARSED_ARGS"
 
+CHECK_STATUS=false
+
 while true; do
     case "$1" in
-        -n|--dry-run)   DRY_RUN="--dry-run"; shift ;;
+        -n|--dry-run)   DRY_RUN=true; shift ;;
         -r|--remote)    REMOTE_PATH="$2"; shift 2 ;;
         -c|--config)    CONFIG_FILE="$2"; shift 2 ;;
+        --status)       CHECK_STATUS=true; shift ;;
         --help)         show_help ;;
         --version)      show_version ;;
         --)             shift; break ;;
@@ -79,34 +95,105 @@ while true; do
 done
 
 # -------------------------------------------------------------------
+# Status Mode (For Web Dashboard)
+# -------------------------------------------------------------------
+if [ "$CHECK_STATUS" = true ]; then
+    # Check if currently running via lock file
+    if fuser "$LOCK_FILE" >/dev/null 2>&1; then
+        echo "Status: Syncing"
+    else
+        if [ -f "$STATE_FILE" ]; then
+            source "$STATE_FILE"
+            echo "Status: ${LAST_STATUS:-Unknown}"
+            echo "Last sync: ${LAST_SYNC_TIME:-Unknown}"
+            echo "Size: ${LAST_SIZE:-Unknown}"
+        else
+            echo "Status: No data"
+            echo "Last sync: N/A"
+            echo "Size: N/A"
+        fi
+    fi
+    exit 0
+fi
+
+# -------------------------------------------------------------------
 # Pre-flight checks
 # -------------------------------------------------------------------
-check_deps rclone
+check_deps rclone awk
 
 if [ ! -d "$LOCAL_BACKUP_DIR" ]; then
     log_warn "Local backup directory $LOCAL_BACKUP_DIR does not exist. Nothing to sync."
     exit 0
 fi
 
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Acquire lock to prevent concurrent rclone bans
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+    die "Another cloud backup instance is already running."
+fi
+LOCK_FD=200
+
+existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
+trap "${existing_trap:+$existing_trap; }cleanup" EXIT
+
 # -------------------------------------------------------------------
 # Main sync
 # -------------------------------------------------------------------
+log_info "========== Cloud Sync started at $(date) =========="
 log_info "Syncing $LOCAL_BACKUP_DIR → $REMOTE_PATH"
-log_debug "rclone options: $RCLONE_OPTS $DRY_RUN"
 
-# Build command array safely
-cmd=(rclone sync "$LOCAL_BACKUP_DIR" "$REMOTE_PATH")
-# Split RCLONE_OPTS into words
-if [ -n "$RCLONE_OPTS" ]; then
-    read -ra opts <<< "$RCLONE_OPTS"
-    cmd+=("${opts[@]}")
+# Build command array safely using eval to respect quotes in config
+eval "RCLONE_OPTS_ARR=($RCLONE_OPTS)"
+cmd=(rclone sync "$LOCAL_BACKUP_DIR" "$REMOTE_PATH" "${RCLONE_OPTS_ARR[@]}")
+
+if [ "$DRY_RUN" = true ]; then
+    cmd+=("--dry-run")
+    log_info "Executing (DRY RUN): ${cmd[*]}"
+else
+    log_info "Executing: ${cmd[*]}"
 fi
-[ -n "$DRY_RUN" ] && cmd+=("$DRY_RUN")
 
-# Execute
+# Execute Sync
+SYNC_SUCCESS=false
 if "${cmd[@]}"; then
     log_info "Sync completed successfully."
+    SYNC_SUCCESS=true
 else
     log_error "rclone sync failed."
-    exit 1
 fi
+
+# Update State File (Only if not dry run)
+if [ "$DRY_RUN" = false ]; then
+    current_time=$(date '+%Y-%m-%d %H:%M:%S')
+
+    if [ "$SYNC_SUCCESS" = true ]; then
+        log_info "Calculating remote size for dashboard..."
+        # Safely fetch size from remote
+        size_bytes=$(rclone size "$REMOTE_PATH" --json 2>/dev/null | awk -F'[:,]' '/"bytes"/{print $2}' | tr -d ' ' || echo "0")
+        human_sz=$(human_size "$size_bytes")
+
+        cat > "$STATE_FILE" <<EOF
+LAST_STATUS="OK"
+LAST_SYNC_TIME="$current_time"
+LAST_SIZE="$human_sz"
+EOF
+    else
+        # Keep old size, update status to failed
+        if [ -f "$STATE_FILE" ]; then
+            sed -i 's/^LAST_STATUS=.*/LAST_STATUS="Failed"/' "$STATE_FILE"
+        else
+            cat > "$STATE_FILE" <<EOF
+LAST_STATUS="Failed"
+LAST_SYNC_TIME="$current_time"
+LAST_SIZE="Unknown"
+EOF
+        fi
+        exit 1
+    fi
+fi
+
+log_info "========== Cloud Sync finished at $(date) =========="
