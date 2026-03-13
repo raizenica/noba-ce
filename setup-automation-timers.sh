@@ -1,88 +1,165 @@
 #!/bin/bash
 # setup-automation-timers.sh – Create systemd user timer units for automation scripts
+# Version: 2.2.0
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/noba-lib.sh"
+
+# -------------------------------------------------------------------
 # Configuration
+# -------------------------------------------------------------------
 USER_UNIT_DIR="${HOME}/.config/systemd/user"
 SCRIPTS_DIR="${HOME}/.local/bin"
+DRY_RUN=false
+FORCE=false
 
-# List of timer-service pairs with descriptions and schedules
+# Map: [script-name]="Description | Schedule | RandomizedDelaySec"
+# RandomizedDelay prevents I/O spikes when multiple 'daily' tasks trigger at 00:00
 declare -A TIMERS=(
-    [disk-sentinel]="Daily disk sentinel check;OnCalendar=daily"
-    [system-report]="Weekly system report;OnCalendar=weekly"
-    [cloud-backup]="Daily cloud backup;OnCalendar=daily"
-    [log-rotator]="Weekly log rotation;OnCalendar=weekly"
-    [service-watch]="Service watch every 15 minutes;OnCalendar=*:0/15"
-    [temperature-alert]="Temperature alert every 5 minutes;OnCalendar=*:0/5"
+    [backup-to-nas]="Daily NAS Backup|daily|15m"
+    [cloud-backup]="Daily Cloud Sync|daily|30m"
+    [disk-sentinel]="Daily Disk Monitor|daily|5m"
+    [system-report]="Weekly System Report|weekly|10m"
+    [noba-daily-digest]="Daily Morning Digest|*-*-* 07:00:00|5m"
+    [organize-downloads]="Hourly Download Organizer|hourly|2m"
+    [service-watch]="Service Watchdog (15m)|*:0/15|0"
+    [temperature-alert]="Temperature Alert (5m)|*:0/5|0"
 )
 
-# Create unit directory if missing
-mkdir -p "$USER_UNIT_DIR"
+# -------------------------------------------------------------------
+# Helper functions
+# -------------------------------------------------------------------
+show_help() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
 
-# Function to create a .timer file
+Create systemd user timer and service units for Nobara automation scripts.
+
+Options:
+  -f, --force      Overwrite existing unit files
+  -n, --dry-run    Show what would be created without writing files
+  --help           Show this help message
+EOF
+    exit 0
+}
+
+# Parse arguments
+if ! PARSED_ARGS=$(getopt -o fn -l force,dry-run,help -- "$@"); then
+    show_help
+fi
+eval set -- "$PARSED_ARGS"
+
+while true; do
+    case "$1" in
+        -f|--force)   FORCE=true; shift ;;
+        -n|--dry-run) DRY_RUN=true; shift ;;
+        --help)       show_help ;;
+        --)           shift; break ;;
+        *)            break ;;
+    esac
+done
+
+# -------------------------------------------------------------------
+# Unit Generators
+# -------------------------------------------------------------------
 create_timer() {
     local name="$1"
-    local description="$2"
-    local schedule="$3"
+    local desc="$2"
+    local sched="$3"
+    local delay="$4"
     local timer_file="${USER_UNIT_DIR}/${name}.timer"
 
-    if [ -f "$timer_file" ]; then
-        echo "Timer $timer_file already exists. Skipping."
+    if [ -f "$timer_file" ] && [ "$FORCE" = false ]; then
+        log_warn "Timer $name.timer already exists. Use --force to overwrite."
+        return
+    fi
+
+    local delay_config=""
+    if [ "$delay" != "0" ]; then
+        delay_config="RandomizedDelaySec=$delay"
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would create $name.timer ($sched)"
         return
     fi
 
     cat > "$timer_file" <<EOF
 [Unit]
-Description=$description
+Description=$desc Timer
 
 [Timer]
-$schedule
+OnCalendar=$sched
+$delay_config
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 EOF
-    echo "Created $timer_file"
+    log_success "Created $timer_file"
 }
 
-# Function to create a .service file
 create_service() {
     local name="$1"
-    local description="$2"
+    local desc="$2"
     local service_file="${USER_UNIT_DIR}/${name}.service"
 
-    if [ -f "$service_file" ]; then
-        echo "Service $service_file already exists. Skipping."
+    if [ -f "$service_file" ] && [ "$FORCE" = false ]; then
+        log_warn "Service $name.service already exists. Use --force to overwrite."
         return
     fi
 
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would create $name.service"
+        return
+    fi
+
+    # Explicitly set PATH to match the user's environment so dependencies like docker/dnf/yq don't fail
     cat > "$service_file" <<EOF
 [Unit]
-Description=$description
+Description=$desc Service
+After=network-online.target
 
 [Service]
 Type=oneshot
+Environment="PATH=$PATH"
 ExecStart=${SCRIPTS_DIR}/${name}.sh
-
-[Install]
-WantedBy=multi-user.target
 EOF
-    echo "Created $service_file"
+    log_success "Created $service_file"
 }
 
-# Main loop
+# -------------------------------------------------------------------
+# Main Execution
+# -------------------------------------------------------------------
+if [ "$DRY_RUN" = false ]; then
+    mkdir -p "$USER_UNIT_DIR"
+fi
+
+log_info "Setting up systemd timers in $USER_UNIT_DIR..."
+
 for name in "${!TIMERS[@]}"; do
-    IFS=';' read -r desc schedule <<< "${TIMERS[$name]}"
-    create_timer "$name" "$desc" "$schedule"
+    # Check if the target script actually exists
+    if [ ! -x "${SCRIPTS_DIR}/${name}.sh" ]; then
+        log_warn "Target script ${name}.sh not found or not executable in $SCRIPTS_DIR. Skipping..."
+        continue
+    fi
+
+    IFS='|' read -r desc sched delay <<< "${TIMERS[$name]}"
+    create_timer "$name" "$desc" "$sched" "$delay"
     create_service "$name" "$desc"
 done
 
-echo
-echo "All timer and service files created. To enable and start a timer, run:"
-echo "  systemctl --user enable --now <name>.timer"
-echo
-echo "For example:"
-echo "  systemctl --user enable --now disk-sentinel.timer"
-echo
-echo "To see all timers: systemctl --user list-timers"
+if [ "$DRY_RUN" = false ]; then
+    log_info "Reloading systemd user daemon..."
+    systemctl --user daemon-reload
+
+    echo ""
+    log_info "Done! To enable and start all created timers, you can run:"
+    echo -e "${CYAN}  for timer in ${!TIMERS[@]}; do systemctl --user enable --now \$timer.timer; done${NC}"
+    echo ""
+    log_info "To view active timers:"
+    echo -e "${CYAN}  systemctl --user list-timers${NC}"
+fi
