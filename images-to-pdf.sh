@@ -1,10 +1,10 @@
 #!/bin/bash
 # images-to-pdf.sh – Convert images to PDF (CLI and GUI modes)
+# Revised version with fixed argument parsing and better ImageMagick handling
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
@@ -27,7 +27,7 @@ USE_GUI=false
 # -------------------------------------------------------------------
 # Load user configuration (YAML)
 # -------------------------------------------------------------------
-load_config
+load_config || true
 if [ "$CONFIG_LOADED" = true ]; then
     PAPER_SIZE="$(get_config ".images2pdf.default_paper_size" "$PAPER_SIZE")"
     ORIENTATION="$(get_config ".images2pdf.default_orientation" "$ORIENTATION")"
@@ -38,7 +38,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "images-to-pdf.sh version 1.0"
+    echo "images-to-pdf.sh version 2.0"
     exit 0
 }
 
@@ -64,6 +64,18 @@ EOF
     exit 0
 }
 
+# Detect ImageMagick command (convert or magick)
+detect_convert() {
+    if command -v magick &>/dev/null; then
+        echo "magick"
+    elif command -v convert &>/dev/null; then
+        echo "convert"
+    else
+        log_error "ImageMagick (convert/magick) not found. Please install ImageMagick."
+        exit 1
+    fi
+}
+
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
@@ -75,9 +87,8 @@ if [ $# -eq 0 ]; then
         exit 1
     fi
 else
-    PARSED_ARGS=$(getopt -o o:s:r:q:m:pv -l output:,paper-size:,orientation:,quality:,metadata:,progress,verbose,help,version -- "$@")
-    if ! some_command; then
-    show_help
+    if ! PARSED_ARGS=$(getopt -o o:s:r:q:m:pv -l output:,paper-size:,orientation:,quality:,metadata:,progress,verbose,help,version -- "$@"); then
+        show_help
     fi
     eval set -- "$PARSED_ARGS"
 
@@ -87,16 +98,17 @@ else
             -s|--paper-size)     PAPER_SIZE="$2"; shift 2 ;;
             -r|--orientation)    ORIENTATION="$2"; shift 2 ;;
             -q|--quality)        QUALITY="$2"; shift 2 ;;
-            -m|--metadata)        METADATA="$2"; shift 2 ;;
-            -p|--progress)        PROGRESS=true; shift ;;
-            -v|--verbose)         VERBOSE=true; shift ;;
-            --help)               show_help ;;
-            --version)            show_version ;;
-            --)                   shift; break ;;
-            *)                    break ;;
+            -m|--metadata)       METADATA="$2"; shift 2 ;;
+            -p|--progress)       PROGRESS=true; shift ;;
+            -v|--verbose)        VERBOSE=true; shift ;;
+            --help)              show_help ;;
+            --version)           show_version ;;
+            --)                  shift; break ;;
+            *)                   break ;;
         esac
     done
 
+    # Remaining arguments are image files
     IMAGES=("$@")
     if [ ${#IMAGES[@]} -eq 0 ]; then
         log_error "No image files specified."
@@ -146,7 +158,7 @@ fi
 # -------------------------------------------------------------------
 # Pre-flight checks
 # -------------------------------------------------------------------
-check_deps convert
+CONVERT_CMD=$(detect_convert)
 
 # Validate quality
 if [ -n "$QUALITY" ] && { [ "$QUALITY" -lt 1 ] || [ "$QUALITY" -gt 100 ]; } 2>/dev/null; then
@@ -175,8 +187,8 @@ if [ -e "$OUTPUT_FILE" ]; then
     fi
 fi
 
-# Optional check for PDF write support
-if ! convert -list format 2>/dev/null | grep -q "PDF.*rw"; then
+# Check for PDF write support in ImageMagick
+if ! $CONVERT_CMD -list format 2>/dev/null | grep -q "PDF.*rw"; then
     log_warn "ImageMagick PDF output may be restricted by policy. Check /etc/ImageMagick-*/policy.xml"
 fi
 
@@ -213,7 +225,7 @@ fi
 
 # Progress (ImageMagick 7+)
 if [ "$PROGRESS" = true ]; then
-    if convert -version | grep -q "Version: ImageMagick 7"; then
+    if $CONVERT_CMD -version | grep -q "Version: ImageMagick 7"; then
         CONVERT_OPTS+=("-progress")
     else
         log_warn "Progress option requires ImageMagick 7. Ignored."
@@ -223,7 +235,7 @@ fi
 # Verbose
 if [ "$VERBOSE" = true ]; then
     CONVERT_OPTS+=("-verbose")
-    log_debug "convert ${IMAGES[*]} ${CONVERT_OPTS[*]} $OUTPUT_FILE"
+    log_debug "$CONVERT_CMD ${IMAGES[*]} ${CONVERT_OPTS[*]} $OUTPUT_FILE"
 fi
 
 # -------------------------------------------------------------------
@@ -231,7 +243,7 @@ fi
 # -------------------------------------------------------------------
 log_info "Converting ${#IMAGES[@]} images to PDF: $OUTPUT_FILE"
 
-if ! convert "${IMAGES[@]}" "${CONVERT_OPTS[@]}" "$OUTPUT_FILE"; then
+if ! $CONVERT_CMD "${IMAGES[@]}" "${CONVERT_OPTS[@]}" "$OUTPUT_FILE"; then
     exit_code=$?
     if [ "$USE_GUI" = true ]; then
         kdialog --error "❌ Conversion failed (exit code $exit_code). Check the files and try again."
