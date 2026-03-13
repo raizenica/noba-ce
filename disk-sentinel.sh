@@ -1,10 +1,10 @@
 #!/bin/bash
 # disk-sentinel.sh – Monitor disk space and alert when threshold exceeded
+# Version: 2.2.0 (compatible with noba-lib.sh 2.2.0)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
@@ -13,20 +13,18 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # -------------------------------------------------------------------
 THRESHOLD="${THRESHOLD:-85}"
 TARGETS=()
-# If no targets specified, use defaults: / and /home
 DEFAULT_TARGETS=("/" "/home")
 CLEANUP="${CLEANUP:-true}"
 EMAIL="${EMAIL:-strikerke@gmail.com}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/disk-sentinel.log}"
 DRY_RUN=false
 # Filesystem types to ignore (regex)
-IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc)$"
+IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc|overlay)$"
 
 # -------------------------------------------------------------------
-# Load user configuration (if any)
+# Load user configuration
 # -------------------------------------------------------------------
-load_config || true
-if [ "$CONFIG_LOADED" = true ]; then
+if command -v get_config &>/dev/null; then
     targets_from_config=$(get_config_array ".disk.targets")
     if [ -n "$targets_from_config" ]; then
         mapfile -t TARGETS <<< "$targets_from_config"
@@ -35,7 +33,11 @@ if [ "$CONFIG_LOADED" = true ]; then
     CLEANUP="$(get_config ".disk.cleanup_enabled" "$CLEANUP")"
     EMAIL="$(get_config ".email" "$EMAIL")"
     IGNORE_FS="$(get_config ".disk.ignore_fs" "$IGNORE_FS")"
-    LOG_FILE="$(get_config ".logs.dir" "$LOG_FILE")/disk-sentinel.log"
+
+    config_log_dir="$(get_config ".logs.dir" "")"
+    if [ -n "$config_log_dir" ]; then
+        LOG_FILE="$config_log_dir/disk-sentinel.log"
+    fi
 fi
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
@@ -46,7 +48,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "disk-sentinel.sh version 1.0"
+    echo "disk-sentinel.sh version 2.2.0"
     exit 0
 }
 
@@ -66,7 +68,7 @@ EOF
     exit 0
 }
 
-# Send email via msmtp (if available)
+# Send email via msmtp or mail
 send_email() {
     local subject="$1"
     local body="$2"
@@ -74,49 +76,35 @@ send_email() {
         log_warn "No email recipient set – skipping notification."
         return
     fi
-    if ! command -v msmtp &>/dev/null; then
-        log_warn "msmtp not installed – cannot send email."
-        return
+
+    if command -v msmtp &>/dev/null; then
+        printf "Subject: %s\n\n%s\n" "$subject" "$body" | msmtp "$EMAIL"
+        log_info "Email sent to $EMAIL via msmtp"
+    elif command -v mail &>/dev/null; then
+        echo -e "$body" | mail -s "$subject" "$EMAIL"
+        log_info "Email sent to $EMAIL via mail"
+    else
+        log_warn "No mail program found – cannot send email."
     fi
-    printf "Subject: %s\n\n%s\n" "$subject" "$body" | msmtp "$EMAIL"
-    log_info "Email sent to $EMAIL"
 }
 
-# Run a command with sudo, capturing output to log
+# Run a command with sudo seamlessly
 run_sudo() {
     local cmd_desc="$1"
     shift
     if [ "$DRY_RUN" = true ]; then
-        log_debug "[DRY RUN] Would run (sudo): $*"
+        log_info "[DRY RUN] Would run (sudo): $*"
         return 0
     fi
     log_debug "Running (sudo): $cmd_desc"
-    # Check if sudo is available without password
+
+    # -n prevents sudo from blocking and asking for a password in automation
     if sudo -n true 2>/dev/null; then
-        local temp_output
-        temp_output=$(mktemp)
-        # Run command with sudo, capture both stdout and stderr using tee
-        # shellcheck disable=SC2024  # sudo doesn't affect redirects, but we use tee to capture
-        if sudo "$@" 2>&1 | tee "$temp_output" >/dev/null; then
-            # Check the exit status of the sudo command (first element of PIPESTATUS)
-            if [ "${PIPESTATUS[0]}" -eq 0 ]; then
-                cat "$temp_output" >> "$LOG_FILE"
-                rm -f "$temp_output"
-                return 0
-            else
-                local status=${PIPESTATUS[0]}
-                cat "$temp_output" >> "$LOG_FILE"
-                rm -f "$temp_output"
-                log_warn "Command failed (exit $status): $*"
-                return "$status"
-            fi
+        if sudo "$@"; then
+            return 0
         else
-            # The pipeline itself failed (rare)
-            local status=$?
-            cat "$temp_output" >> "$LOG_FILE"
-            rm -f "$temp_output"
-            log_warn "Pipeline failed (exit $status): $*"
-            return $status
+            log_warn "Command failed: $*"
+            return 1
         fi
     else
         log_warn "sudo not available or requires password – skipping $cmd_desc"
@@ -124,14 +112,6 @@ run_sudo() {
     fi
 }
 
-# -------------------------------------------------------------------
-# Parse command-line arguments
-# -------------------------------------------------------------------
-PARSED_ARGS=$(getopt -o t:nv -l threshold:,dry-run,verbose,help,version -- "$@")
-if ! some_command; then
-    show_help
-fi
-eval set -- "$PARSED_ARGS"
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
@@ -144,11 +124,7 @@ while true; do
     case "$1" in
         -t|--threshold) THRESHOLD="$2"; shift 2 ;;
         -n|--dry-run)   DRY_RUN=true; shift ;;
-        -v|--verbose)
-            # shellcheck disable=SC2034
-            VERBOSE=true
-            shift
-            ;;
+        -v|--verbose)   VERBOSE=true; shift ;;
         --help)         show_help ;;
         --version)      show_version ;;
         --)             shift; break ;;
@@ -157,14 +133,12 @@ while true; do
 done
 
 # -------------------------------------------------------------------
-# Pre-flight checks
+# Pre-flight checks & Setup
 # -------------------------------------------------------------------
-check_deps df awk du sort head date mkdir mktemp
+check_deps df awk du sort head date mkdir
 
-# Validate threshold
 if ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]] || [ "$THRESHOLD" -lt 0 ] || [ "$THRESHOLD" -gt 100 ]; then
-    log_error "Threshold must be a number between 0 and 100."
-    exit 1
+    die "Threshold must be a number between 0 and 100."
 fi
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -194,67 +168,67 @@ for target in "${TARGETS[@]}"; do
     # Get filesystem type
     fstype=$(df -T "$target" 2>/dev/null | awk 'NR==2 {print $2}') || fstype="unknown"
 
-    log_info "$mount: ${usage}% used (fstype: $fstype)"
-
     # Skip virtual filesystems
     if [[ "$fstype" =~ $IGNORE_FS ]]; then
         log_debug "Skipping $mount (virtual filesystem $fstype)"
         continue
     fi
 
+    log_info "$mount: ${usage}% used (fstype: $fstype)"
+
     if [ "$usage" -ge "$THRESHOLD" ]; then
         log_warn "WARNING: $mount exceeded ${THRESHOLD}% threshold."
 
-        # Prepare email body
+        # Prepare email body. Use -x (stay on one fs) and -d 3 (max depth) for FAST directory sizing
         email_body="Disk space alert for $mount on $(hostname) at $(date)\n"
         email_body+="Usage: ${usage}% (threshold ${THRESHOLD}%)\n\n"
-        email_body+="Top 10 directories by size:\n"
-        email_body+="$(du -h "$target" 2>/dev/null | sort -rh | head -10)\n"
+        email_body+="Top directories by size (max depth 3):\n"
+        email_body+="$(sudo -n du -h -x -d 3 "$target" 2>/dev/null | sort -rh | head -10)\n"
 
         # Cleanup if enabled and not dry run
-        if [ "$CLEANUP" = true ] && [ "$DRY_RUN" = false ]; then
+        if [ "$CLEANUP" = true ]; then
             log_info "Starting cleanup on $mount..."
 
-            # Package manager caches
-            if command -v dnf &>/dev/null; then
-                run_sudo "cleaning DNF cache" dnf clean all
-            elif command -v apt-get &>/dev/null; then
-                run_sudo "cleaning APT cache" apt-get clean
-            elif command -v pacman &>/dev/null; then
-                run_sudo "cleaning pacman cache" pacman -Sc --noconfirm
-            fi
-
-            # User cache (no sudo)
-            log_info "Cleaning ~/.cache..."
             if [ "$DRY_RUN" = false ]; then
-                rm -rf "$HOME/.cache/"* >> "$LOG_FILE" 2>&1
+                # Package manager caches
+                if command -v dnf &>/dev/null; then
+                    run_sudo "cleaning DNF cache" dnf clean all
+                fi
+
+                # Flatpak unused runtimes (huge space saver on Nobara)
+                if command -v flatpak &>/dev/null; then
+                    run_sudo "cleaning unused flatpak runtimes" flatpak uninstall --unused -y
+                fi
+
+                # User cache (Safe targeted cleanup)
+                log_info "Cleaning ~/.cache (thumbnails and 30+ day old files)..."
+                rm -rf "$HOME/.cache/thumbnails/"* 2>/dev/null || true
+                find "$HOME/.cache" -type f -atime +30 -delete 2>/dev/null || true
+
+                # System temp files older than 2 days
+                run_sudo "cleaning /tmp (files older than 2 days)" find /tmp -type f -atime +2 -delete
+
+                # Journal vacuum
+                if command -v journalctl &>/dev/null; then
+                    run_sudo "vacuuming systemd journals" journalctl --vacuum-time=3d
+                fi
+
+                # Get new usage
+                new_usage=$(df --output=pcent "$target" 2>/dev/null | tail -1 | sed 's/%//')
+                email_body+="\nCleanup performed. New usage: ${new_usage}%"
+                log_info "Cleanup completed. New usage: ${new_usage}%"
             else
-                log_debug "[DRY RUN] Would clean ~/.cache"
+                email_body+="\nDRY RUN: No actual changes made."
             fi
-
-            # System temp files older than 1 day
-            run_sudo "cleaning /tmp (files older than 1 day)" find /tmp -type f -atime +1 -delete
-
-            # Journal vacuum
-            if command -v journalctl &>/dev/null; then
-                run_sudo "vacuuming systemd journals" journalctl --vacuum-time=3d
-            fi
-
-            # Get new usage
-            new_usage=$(df --output=pcent "$target" 2>/dev/null | tail -1 | sed 's/%//')
-            email_body+="\nCleanup performed. New usage: ${new_usage}%"
-            log_info "Cleanup completed. New usage: ${new_usage}%"
-        elif [ "$CLEANUP" = false ]; then
-            email_body+="\nNo cleanup performed (cleanup disabled)."
         else
-            email_body+="\nDRY RUN: No actual changes made."
+            email_body+="\nNo cleanup performed (cleanup disabled)."
         fi
 
-        # Send email (unless dry run)
+        # Send email
         if [ "$DRY_RUN" = false ]; then
             send_email "⚠ Disk Space Alert: $mount at ${usage}%" "$email_body"
         else
-            log_info "[DRY RUN] Would send email alert."
+            log_info "[DRY RUN] Would send email alert:\n$email_body"
         fi
     else
         log_info "$mount usage is OK."
