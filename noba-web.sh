@@ -354,11 +354,12 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        /* Sparkline canvas */
         canvas.sparkline {
             width: 100%;
             height: 40px;
-            margin-top: 0.5rem;
+            max-height: 40px;
+            page-break-inside: avoid;
+            break-inside: avoid;
         }
 
         /* Collapsible */
@@ -594,6 +595,8 @@ cat > "$HTML_DIR/index.html" <<'EOF'
         function dashboard() {
             return {
                 // existing properties
+                diskChart: null,
+                tempChart: null,
                 timestamp: '', uptime: '', loadavg: '', memory: '', cpuTemp: '',
                 tempClass: '', backupStatus: '', backupClass: '', backupTime: '',
                 backupLog: '', dnfUpdates: 0, flatpakUpdates: 0, totalUpdates: 0,
@@ -689,9 +692,13 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 },
 
                 drawCharts() {
+                    // Destroy existing charts if they exist
+                    if (this.diskChart) this.diskChart.destroy();
+                    if (this.tempChart) this.tempChart.destroy();
+
                     // Disk Sentinel sparkline
                     if (this.$refs.diskChart && this.diskSentinelHistory.length) {
-                        new Chart(this.$refs.diskChart, {
+                        this.diskChart = new Chart(this.$refs.diskChart, {
                             type: 'line',
                             data: {
                                 labels: this.diskSentinelHistory.map((_, i) => i),
@@ -711,6 +718,58 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                             }
                         });
                     }
+
+                    // Temperature sparkline
+                    if (this.$refs.tempChart && this.tempHistory.length) {
+                        this.tempChart = new Chart(this.$refs.tempChart, {
+                            type: 'line',
+                            data: {
+                                labels: this.tempHistory.map((_, i) => i),
+                                datasets: [{
+                                    data: this.tempHistory,
+                                    borderColor: '#f59e0b',
+                                    backgroundColor: 'rgba(245,158,11,0.1)',
+                                    tension: 0.4,
+                                    pointRadius: 0
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: false } },
+                                scales: { x: { display: false }, y: { display: false } }
+                            }
+                        });
+                    }
+                },
+
+                async runScript(script) {
+                    if (this.runningScript) return;
+                    this.runningScript = true;
+                    this.modalTitle = `Running ${script}...`;
+                    this.modalOutput = 'Starting...';
+                    this.showModal = true;
+
+                    try {
+                        const response = await fetch('/api/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ script })
+                        });
+                        const result = await response.json();
+                        this.modalOutput = result.output;
+                        this.modalTitle = result.success ? '✅ Success' : '❌ Failed';
+                    } catch (e) {
+                        this.modalOutput = 'Error: ' + e.message;
+                        this.modalTitle = '❌ Failed';
+                    }
+                    this.runningScript = false;
+                    await this.refreshStats();
+                }
+            }
+        }
+    </script>
+
                     // Temperature sparkline
                     if (this.$refs.tempChart && this.tempHistory.length) {
                         new Chart(this.$refs.tempChart, {
