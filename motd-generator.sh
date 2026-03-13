@@ -1,67 +1,86 @@
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/noba-lib.sh"
-
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    true
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
-
-show_help() {
-    cat <<EOF
-Usage: $(basename source "$SCRIPT_DIR/noba-lib.sh") [OPTIONS]
-
-Options:
-  --help        Show this help message
-  --version     Show version information
-EOF
-    exit 0
-}
-
-show_version() {
-    echo "$(basename source "$SCRIPT_DIR/noba-lib.sh") version 1.0"
-    exit 0
-}
-
 # motd-generator.sh – Custom Message of the Day with system status
 
-# Load configuration
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
-    true
-    # Override defaults with config values (script-specific)
-    # Example:
-    # VAR=$(get_config ".${script%.sh}.var" "$VAR")
-fi
+set -euo pipefail
 
-set -u
-set -o pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/noba-lib.sh"
 
-# Configuration
+# -------------------------------------------------------------------
+# Default configuration
+# -------------------------------------------------------------------
 QUOTE_FILE="${QUOTE_FILE:-$HOME/.config/quotes.txt}"
 SHOW_UPDATES=true
 SHOW_BACKUP=true
+NO_COLOR=false
 
-# Colors
+# Colors (disabled if NO_COLOR=true)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+# -------------------------------------------------------------------
+# Load user configuration (if any)
+# -------------------------------------------------------------------
+load_config
+if [ "$CONFIG_LOADED" = true ]; then
+    QUOTE_FILE="$(get_config ".motd.quote_file" "$QUOTE_FILE")"
+    # Expand tilde if present
+    QUOTE_FILE="${QUOTE_FILE/#\~/$HOME}"
+    SHOW_UPDATES="$(get_config ".motd.show_updates" "$SHOW_UPDATES")"
+    SHOW_BACKUP="$(get_config ".motd.show_backup" "$SHOW_BACKUP")"
+    # Convert string "true"/"false" to boolean if needed (get_config returns string)
+    [[ "$SHOW_UPDATES" == "false" ]] && SHOW_UPDATES=false
+    [[ "$SHOW_BACKUP" == "false" ]] && SHOW_BACKUP=false
+fi
+
+# -------------------------------------------------------------------
+# Helper functions
+# -------------------------------------------------------------------
+show_version() {
+    echo "motd-generator.sh version 1.0"
+    exit 0
+}
+
+show_help() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Display a colorful Message of the Day with system status.
+
+Options:
+  --no-color       Disable colored output
+  --no-updates     Hide pending updates section
+  --no-backup      Hide backup status section
+  --help           Show this help message
+  --version        Show version information
+EOF
+    exit 0
+}
+
+# Print with or without color based on NO_COLOR
+color_echo() {
+    local color="$1"
+    shift
+    if [ "$NO_COLOR" = true ]; then
+        echo "$*"
+    else
+        echo -e "${color}$*${NC}"
+    fi
+}
 
 print_header() {
-    echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}    Nobara System Status – $(date '+%A, %B %d, %Y %H:%M')${NC}"
-    echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+    color_echo "$BLUE" "════════════════════════════════════════════════════════════"
+    color_echo "$GREEN" "    Nobara System Status – $(date '+%A, %B %d, %Y %H:%M')"
+    color_echo "$BLUE" "════════════════════════════════════════════════════════════"
 }
 
 print_system_info() {
-    echo -e "${YELLOW}System Info:${NC}"
+    color_echo "$YELLOW" "System Info:"
     echo "  Hostname : $(hostname)"
     echo "  Uptime   : $(uptime -p | sed 's/up //')"
     echo "  Load     : $(uptime | awk -F'load average:' '{print $2}')"
@@ -69,7 +88,7 @@ print_system_info() {
 }
 
 print_disk_usage() {
-    echo -e "${YELLOW}Disk Usage:${NC}"
+    color_echo "$YELLOW" "Disk Usage:"
     df -h | grep '^/dev/' | while read -r line; do
         read -r _ size used _ use_percent mount <<< "$line"
         # Skip snap mounts
@@ -84,29 +103,36 @@ print_disk_usage() {
         else
             color="$GREEN"
         fi
-        echo -e "  ${color}${mount}${NC} : ${use_percent} used (${used}/${size})"
+        if [ "$NO_COLOR" = true ]; then
+            echo "  ${mount} : ${use_percent} used (${used}/${size})"
+        else
+            echo -e "  ${color}${mount}${NC} : ${use_percent} used (${used}/${size})"
+        fi
     done
 }
 
 print_backup_status() {
     local backup_log="$HOME/.local/share/backup-to-nas.log"
+    color_echo "$YELLOW" "Backup Status:"
     if [ -f "$backup_log" ]; then
         last_backup=$(tail -5 "$backup_log" | grep -E "Backup finished|ERROR" | tail -1)
         if echo "$last_backup" | grep -q "ERROR"; then
-            echo -e "${RED}Last backup: ✗ FAILED${NC}"
+            color_echo "$RED" "  Last backup: ✗ FAILED"
         elif echo "$last_backup" | grep -q "Backup finished"; then
-            echo -e "${GREEN}Last backup: ✓ OK${NC}"
+            color_echo "$GREEN" "  Last backup: ✓ OK"
         else
-            echo -e "${YELLOW}Last backup: Unknown${NC}"
+            color_echo "$YELLOW" "  Last backup: Unknown"
         fi
-        echo "  $(tail -1 "$backup_log")"
+        # Show last log line (stripped of ANSI)
+        last_line=$(tail -1 "$backup_log" | sed 's/\x1b\[[0-9;]*m//g')
+        echo "  $last_line"
     else
-        echo -e "${YELLOW}No backup log found. Run 'backup-to-nas.sh' to start.${NC}"
+        color_echo "$YELLOW" "  No backup log found. Run 'backup-to-nas.sh' to start."
     fi
 }
 
 print_updates() {
-    echo -e "${YELLOW}Pending Updates:${NC}"
+    color_echo "$YELLOW" "Pending Updates:"
     local any_updates=false
     local dnf_timeout=5
     local flatpak_timeout=5
@@ -118,8 +144,6 @@ print_updates() {
         else
             updates=$(dnf check-update -q 2>/dev/null | wc -l)
         fi
-        # dnf check-update returns 100 when updates available, 0 when none
-        # We just count lines, but if command times out, updates may be empty
         if [ -n "$updates" ] && [ "$updates" -gt 0 ]; then
             echo "  DNF : $updates updates available"
             any_updates=true
@@ -153,17 +177,39 @@ print_quote() {
     if [ -f "$QUOTE_FILE" ]; then
         quote=$(shuf -n 1 "$QUOTE_FILE" 2>/dev/null)
     elif command -v curl &>/dev/null && command -v jq &>/dev/null; then
-        # Use timeout and silent mode to avoid hanging
         quote=$(curl -s --max-time 2 "https://api.quotable.io/random" 2>/dev/null | jq -r '.content + " – " + .author' 2>/dev/null)
         [ "$quote" = "null – null" ] && quote=""
     fi
     if [ -n "$quote" ]; then
-        echo -e "${CYAN}Quote of the day:${NC}"
+        color_echo "$CYAN" "Quote of the day:"
         echo "  $quote"
     fi
 }
 
+# -------------------------------------------------------------------
+# Parse command-line arguments
+# -------------------------------------------------------------------
+PARSED_ARGS=$(getopt -o '' -l no-color,no-updates,no-backup,help,version -- "$@")
+if [ $? -ne 0 ]; then
+    show_help
+fi
+eval set -- "$PARSED_ARGS"
+
+while true; do
+    case "$1" in
+        --no-color)   NO_COLOR=true; shift ;;
+        --no-updates) SHOW_UPDATES=false; shift ;;
+        --no-backup)  SHOW_BACKUP=false; shift ;;
+        --help)       show_help ;;
+        --version)    show_version ;;
+        --)           shift; break ;;
+        *)            break ;;
+    esac
+done
+
+# -------------------------------------------------------------------
 # Main
+# -------------------------------------------------------------------
 print_header
 print_system_info
 echo ""
@@ -178,4 +224,4 @@ if [ "$SHOW_UPDATES" = true ]; then
     echo ""
 fi
 print_quote
-echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+color_echo "$BLUE" "════════════════════════════════════════════════════════════"
