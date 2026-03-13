@@ -6,7 +6,6 @@ trap 'echo "Error at line $LINENO (last command: $BASH_COMMAND)" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
-# shellcheck source=/dev/null
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -127,6 +126,28 @@ if [ ! -f "$TEST_IMAGE" ]; then
     fi
 fi
 
+# Create a file with spaces and special characters for organizer tests
+TEST_SPECIAL="/tmp/Download/test file with spaces and !@#$.txt"
+mkdir -p /tmp/Download
+echo "content" > "$TEST_SPECIAL"
+
+# Create a large number of small files for checksum test
+LARGE_DIR="/tmp/checksum-large"
+mkdir -p "$LARGE_DIR"
+for i in {1..100}; do
+    echo "test$i" > "$LARGE_DIR/file$i.txt"
+done
+
+# Create an invalid YAML config for testing
+INVALID_YAML="/tmp/invalid_config.yaml"
+cat > "$INVALID_YAML" <<EOF
+backup:
+  dest: "/mnt/nas"
+  sources: [ "bad indentation"
+    - missing dash
+disk: [unclosed
+EOF
+
 # -------------------------------------------------------------------
 # Test counters
 # -------------------------------------------------------------------
@@ -135,7 +156,7 @@ FAIL=0
 SKIP=0
 
 # -------------------------------------------------------------------
-# Test each script
+# Test each script (existing loop)
 # -------------------------------------------------------------------
 log_info "Starting tests (timeout: ${TIMEOUT_SECONDS}s, skip slow: $SKIP_SLOW)"
 
@@ -290,10 +311,109 @@ for script in *.sh; do
 done
 
 # -------------------------------------------------------------------
+# Extra edge‑case tests
+# -------------------------------------------------------------------
+log_info "Running extra edge‑case tests..."
+
+# Helper function for edge test reporting
+edge_test() {
+    local name="$1"
+    local result=$2
+    echo -n "Edge test: $name ... "
+    if [ $result -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        PASS=$((PASS+1))
+    else
+        echo -e "${RED}FAIL (exit $result)${NC}"
+        FAIL=$((FAIL+1))
+    fi
+}
+
+# 1. Test invalid option for each script (should fail)
+for script in *.sh; do
+    [[ "$script" == "noba-lib.sh" || "$script" == "test-all.sh" ]] && continue
+    # Skip scripts that don't use getopt (like noba, which is a wrapper)
+    if [[ "$script" == "noba" ]]; then
+        continue
+    fi
+    # Run with --invalid-option and expect failure
+    run_test "$script" "$script" --invalid-option
+    edge_test "$script --invalid-option" $?
+done
+
+# 2. Test missing required arguments
+# backup-to-nas.sh requires --source and --dest
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --dest /tmp
+edge_test "backup-to-nas.sh (missing --source)" $?
+
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp
+edge_test "backup-to-nas.sh (missing --dest)" $?
+
+# organize-downloads.sh has no required args, but we can test with non-existent dir
+run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir /does/not/exist
+edge_test "organize-downloads.sh (non-existent dir)" $?
+
+# 3. Test checksum.sh with large number of files (performance smoke test)
+run_test "checksum.sh" "checksum.sh" "$LARGE_DIR"/*
+edge_test "checksum.sh (100 files)" $?
+
+# 4. Test organize-downloads.sh with file containing spaces and special chars
+# Copy the special file to Downloads (or a temp dir)
+TEST_DOWNLOAD_DIR="/tmp/test-downloads"
+mkdir -p "$TEST_DOWNLOAD_DIR"
+cp "$TEST_SPECIAL" "$TEST_DOWNLOAD_DIR/"
+run_test "organize-downloads.sh" "organize-downloads.sh" --download-dir "$TEST_DOWNLOAD_DIR" --dry-run
+edge_test "organize-downloads.sh (special chars)" $?
+rm -rf "$TEST_DOWNLOAD_DIR"
+
+# 5. Test images-to-pdf.sh with non-image file
+TMP_TEXT=$(mktemp)
+echo "not an image" > "$TMP_TEXT"
+run_test "images-to-pdf.sh" "images-to-pdf.sh" -o /tmp/out.pdf "$TMP_TEXT"
+edge_test "images-to-pdf.sh (invalid input)" $?
+rm -f "$TMP_TEXT" /tmp/out.pdf
+
+# 6. Test config-check.sh with invalid YAML
+# Temporarily set NOBA_CONFIG to point to invalid YAML
+export NOBA_CONFIG="$INVALID_YAML"
+run_test "config-check.sh" "config-check.sh"
+edge_test "config-check.sh (invalid YAML)" $?
+unset NOBA_CONFIG
+
+# 7. Test noba CLI commands
+run_test "noba" "noba" list
+edge_test "noba list" $?
+run_test "noba" "noba" doctor --dry-run
+edge_test "noba doctor --dry-run" $?
+run_test "noba" "noba" run backup --dry-run
+edge_test "noba run backup --dry-run" $?
+# noba config (without --edit) should show config or fail if missing; we have config, so it should succeed
+run_test "noba" "noba" config
+edge_test "noba config" $?
+
+# 8. Test scripts that require sudo (if possible without password)
+if sudo -n true 2>/dev/null; then
+    # We can run a sudo-requiring script with --help or --dry-run, but they usually don't need sudo for that.
+    # For now, we skip because our scripts don't have direct sudo tests.
+    log_info "Sudo available – could add more tests here."
+fi
+
+# 9. Test that dry-run on non-existent destination exits 0 for backup-to-nas.sh
+run_test "backup-to-nas.sh" "backup-to-nas.sh" --source /tmp --dest /does/not/exist --dry-run
+edge_test "backup-to-nas.sh (dry-run with missing dest)" $?
+
+# 10. Test log-rotator.sh with non-existent directory
+run_test "log-rotator.sh" "log-rotator.sh" --log-dir /does/not/exist --dry-run
+edge_test "log-rotator.sh (non-existent dir)" $?
+
+# -------------------------------------------------------------------
 # Cleanup
 # -------------------------------------------------------------------
 rm -rf "/tmp/test-backups"
 rm -f "/tmp/test.png" "/tmp/test.pdf"
+rm -rf "/tmp/Download"
+rm -rf "$LARGE_DIR"
+rm -f "$INVALID_YAML"
 
 # -------------------------------------------------------------------
 # Summary
