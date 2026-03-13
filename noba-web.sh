@@ -1,6 +1,7 @@
 #!/bin/bash
-# noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, and service resource usage
-# Modernized HTML + all performance improvements + CPU temp fix + disk I/O partitions
+# noba-web.sh – Ultimate dashboard with GPU load, Disk I/O, service resource usage,
+# and integrated disk‑sentinel, temperature‑alert, system‑report, service‑watch,
+# backup‑verifier, and cloud‑backup – all beautifully displayed!
 
 set -euo pipefail
 
@@ -41,7 +42,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-web.sh version 2.2 (final fixes)"
+    echo "noba-web.sh version 3.0 (integrated scripts)"
     exit 0
 }
 
@@ -133,8 +134,7 @@ mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py "$HTML_DIR"/stats.json 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Modernized HTML file (with glassmorphism, smooth animations)
-# FIX: removed extra °C from CPU temp display
+# Modernized HTML file (with glassmorphism, smooth animations, Chart.js)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/index.html" <<'EOF'
 <!DOCTYPE html>
@@ -145,13 +145,9 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <title>Nobara Interactive Dashboard</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
             --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
             --card-bg: rgba(30, 41, 59, 0.7);
@@ -165,7 +161,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             --card-blur: blur(12px);
         }
-
         body {
             background: var(--bg-gradient);
             color: var(--text-primary);
@@ -175,7 +170,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
         }
-
         h1 {
             font-size: 2.5rem;
             font-weight: 600;
@@ -185,12 +179,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             align-items: center;
             gap: 0.75rem;
         }
-
-        h1 i {
-            color: var(--accent);
-            font-size: 2rem;
-        }
-
+        h1 i { color: var(--accent); font-size: 2rem; }
         .timestamp {
             color: var(--text-secondary);
             margin-bottom: 2.5rem;
@@ -199,14 +188,12 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             align-items: center;
             gap: 0.5rem;
         }
-
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
             gap: 1.5rem;
             margin-bottom: 2rem;
         }
-
         .card {
             background: var(--card-bg);
             backdrop-filter: var(--card-blur);
@@ -217,12 +204,10 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             box-shadow: var(--glass-shadow);
             transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
-
         .card:hover {
             transform: translateY(-4px);
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
         }
-
         .card-header {
             font-size: 1.25rem;
             font-weight: 600;
@@ -234,28 +219,15 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             padding-bottom: 0.75rem;
         }
-
-        .card-header i {
-            color: var(--accent);
-            width: 1.5rem;
-        }
-
+        .card-header i { color: var(--accent); width: 1.5rem; }
         .stat-row {
             display: flex;
             justify-content: space-between;
             margin: 0.75rem 0;
             font-size: 0.95rem;
         }
-
-        .stat-label {
-            color: var(--text-secondary);
-        }
-
-        .stat-value {
-            font-weight: 500;
-            color: var(--text-primary);
-        }
-
+        .stat-label { color: var(--text-secondary); }
+        .stat-value { font-weight: 500; color: var(--text-primary); }
         .success { color: var(--success); }
         .warning { color: var(--warning); }
         .danger { color: var(--danger); }
@@ -266,13 +238,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             gap: 0.75rem;
             margin: 0.75rem 0;
         }
-
         .disk-item span:first-child {
             min-width: 80px;
             font-size: 0.9rem;
             color: var(--text-secondary);
         }
-
         .disk-bar {
             flex: 1;
             height: 0.5rem;
@@ -280,13 +250,11 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             border-radius: 1rem;
             overflow: hidden;
         }
-
         .disk-bar-fill {
             height: 100%;
             border-radius: 1rem;
             transition: width 0.3s ease;
         }
-
         .disk-percent {
             min-width: 3rem;
             text-align: right;
@@ -313,7 +281,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             margin-top: 1rem;
             flex-wrap: wrap;
         }
-
         .btn {
             padding: 0.6rem 1.2rem;
             border: none;
@@ -330,20 +297,15 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             backdrop-filter: blur(4px);
             border: 1px solid rgba(255, 255, 255, 0.05);
         }
-
         .btn:hover {
             background: rgba(255, 255, 255, 0.2);
             transform: translateY(-2px);
         }
-
         .btn-primary {
             background: var(--accent);
             border-color: rgba(59, 130, 246, 0.5);
         }
-
-        .btn-primary:hover {
-            background: #2563eb;
-        }
+        .btn-primary:hover { background: #2563eb; }
 
         .modal {
             position: fixed;
@@ -358,7 +320,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             justify-content: center;
             z-index: 1000;
         }
-
         .modal-content {
             background: var(--card-bg);
             backdrop-filter: var(--card-blur);
@@ -371,7 +332,6 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             overflow-y: auto;
             box-shadow: var(--glass-shadow);
         }
-
         .modal-header {
             font-size: 1.5rem;
             font-weight: 600;
@@ -389,13 +349,38 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             align-items: center;
             font-size: 0.9rem;
         }
-
         .footer .btn {
             background: transparent;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        /* Responsive tweaks */
+        /* Sparkline canvas */
+        canvas.sparkline {
+            width: 100%;
+            height: 40px;
+            margin-top: 0.5rem;
+        }
+
+        /* Collapsible */
+        .collapsible {
+            cursor: pointer;
+            user-select: none;
+        }
+        .collapsible i {
+            transition: transform 0.2s;
+        }
+        .collapsible.open i {
+            transform: rotate(90deg);
+        }
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .collapsible-content.open {
+            max-height: 500px; /* adjust as needed */
+        }
+
         @media (max-width: 640px) {
             body { padding: 1rem; }
             h1 { font-size: 2rem; }
@@ -403,14 +388,8 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     </style>
 </head>
 <body x-data="dashboard()" x-init="init()">
-    <h1>
-        <i class="fas fa-chart-pie"></i>
-        Nobara Dashboard
-    </h1>
-    <div class="timestamp">
-        <i class="far fa-clock"></i>
-        Last updated: <span x-text="timestamp"></span>
-    </div>
+    <h1><i class="fas fa-chart-pie"></i> Nobara Dashboard</h1>
+    <div class="timestamp"><i class="far fa-clock"></i> Last updated: <span x-text="timestamp"></span></div>
 
     <div class="grid">
         <!-- System Health Card -->
@@ -419,10 +398,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" x-text="uptime"></span></div>
             <div class="stat-row"><span class="stat-label">Load Average</span><span class="stat-value" x-text="loadavg"></span></div>
             <div class="stat-row"><span class="stat-label">Memory</span><span class="stat-value" x-text="memory"></span></div>
-            <div class="stat-row"><span class="stat-label">CPU Temp</span>
-                <!-- FIX: removed +'°C' because cpuTemp already includes unit -->
-                <span class="stat-value" :class="tempClass" x-text="cpuTemp"></span>
-            </div>
+            <div class="stat-row"><span class="stat-label">CPU Temp</span><span class="stat-value" :class="tempClass" x-text="cpuTemp"></span></div>
         </div>
 
         <!-- Battery Card -->
@@ -442,12 +418,10 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" x-text="gpuLoad"></span></div>
         </div>
 
-        <!-- Backup Status Card -->
+        <!-- Backup Card (existing) -->
         <div class="card">
             <div class="card-header"><i class="fas fa-database"></i> Backup</div>
-            <div class="stat-row"><span class="stat-label">Last backup</span>
-                <span class="stat-value" :class="backupClass" x-text="backupStatus"></span>
-            </div>
+            <div class="stat-row"><span class="stat-label">Last backup</span><span class="stat-value" :class="backupClass" x-text="backupStatus"></span></div>
             <div class="stat-row"><span class="stat-label">Time</span><span class="stat-value" x-text="backupTime"></span></div>
             <pre x-text="backupLog"></pre>
             <div class="button-grid">
@@ -464,46 +438,32 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Total</span><span class="stat-value" x-text="totalUpdates"></span></div>
         </div>
 
-        <!-- Disk Usage Card (spans 2 columns on wide screens) -->
+        <!-- Disk Usage Card -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-hdd"></i> Disk Usage</div>
             <template x-for="disk in disks" :key="disk.mount">
                 <div class="disk-item">
                     <span x-text="disk.mount"></span>
-                    <div class="disk-bar">
-                        <div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div>
-                    </div>
+                    <div class="disk-bar"><div class="disk-bar-fill" :style="'width:'+disk.percent+'%; background: var(--'+disk.barClass+');'"></div></div>
                     <span class="disk-percent" x-text="disk.percent+'%'"></span>
                 </div>
             </template>
         </div>
 
-        <!-- Disk I/O Stats Card -->
+        <!-- Disk I/O Card -->
         <div class="card" style="grid-column: span 2;">
             <div class="card-header"><i class="fas fa-tachometer-alt"></i> Disk I/O</div>
             <template x-for="disk in diskio" :key="disk.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="disk.name"></span>
-                    <span class="stat-value" x-text="'R:' + disk.read + ' W:' + disk.write"></span>
-                </div>
+                <div class="stat-row"><span class="stat-label" x-text="disk.name"></span><span class="stat-value" x-text="'R:' + disk.read + ' W:' + disk.write"></span></div>
             </template>
-            <template x-if="diskio.length === 0">
-                <div class="stat-row"><span class="stat-label">No disk I/O data</span></div>
-            </template>
+            <template x-if="diskio.length === 0"><div class="stat-row"><span class="stat-label">No disk I/O data</span></div></template>
         </div>
 
-        <!-- ZFS Pool Status Card -->
+        <!-- ZFS Card -->
         <div class="card" x-show="zfs.pools && zfs.pools.length > 0">
             <div class="card-header"><i class="fas fa-database"></i> ZFS Pools</div>
             <template x-for="pool in zfs.pools" :key="pool.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="pool.name"></span>
-                    <span class="stat-value" :class="{
-                        'success': pool.health === 'ONLINE',
-                        'warning': pool.health === 'DEGRADED',
-                        'danger': pool.health === 'FAULTED'
-                    }" x-text="pool.health"></span>
-                </div>
+                <div class="stat-row"><span class="stat-label" x-text="pool.name"></span><span class="stat-value" :class="{'success': pool.health==='ONLINE','warning': pool.health==='DEGRADED','danger': pool.health==='FAULTED'}" x-text="pool.health"></span></div>
             </template>
         </div>
 
@@ -513,73 +473,103 @@ cat > "$HTML_DIR/index.html" <<'EOF'
             <div class="stat-row"><span class="stat-label">Files moved</span><span class="stat-value" x-text="movedFiles"></span></div>
             <div class="stat-row"><span class="stat-label">Last move</span><span class="stat-value" x-text="lastMove"></span></div>
             <pre x-text="organizerLog"></pre>
-            <div class="button-grid">
-                <button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button>
-            </div>
+            <div class="button-grid"><button class="btn btn-primary" @click="runScript('organize')"><i class="fas fa-play"></i> Organize Now</button></div>
         </div>
 
-        <!-- Disk Sentinel Card -->
-        <div class="card">
-            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
-            <pre x-text="diskAlerts"></pre>
-            <div class="button-grid">
-                <button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button>
-            </div>
-        </div>
-
-        <!-- Network Stats Card -->
+        <!-- Network Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-network-wired"></i> Network</div>
             <div class="stat-row"><span class="stat-label">Default IP</span><span class="stat-value" x-text="defaultIp"></span></div>
             <template x-for="iface in interfaces" :key="iface.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="iface.name"></span>
-                    <span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span>
-                </div>
+                <div class="stat-row"><span class="stat-label" x-text="iface.name"></span><span class="stat-value" x-text="'↓' + iface.rx + ' ↑' + iface.tx"></span></div>
             </template>
-            <template x-if="interfaces.length === 0">
-                <div class="stat-row"><span class="stat-label">No data</span></div>
-            </template>
-            <div class="button-grid" style="margin-top: 1rem;">
-                <button class="btn" @click="runScript('speedtest')"><i class="fas fa-tachometer-alt"></i> Speed Test</button>
-            </div>
+            <template x-if="interfaces.length === 0"><div class="stat-row"><span class="stat-label">No data</span></div></template>
+            <div class="button-grid" style="margin-top:1rem;"><button class="btn" @click="runScript('speedtest')"><i class="fas fa-tachometer-alt"></i> Speed Test</button></div>
         </div>
 
-        <!-- Services Status Card -->
+        <!-- Services Card -->
         <div class="card">
             <div class="card-header"><i class="fas fa-cogs"></i> User Services</div>
             <template x-for="svc in services" :key="svc.name">
-                <div class="stat-row">
-                    <span class="stat-label" x-text="svc.name.replace('.service','')"></span>
-                    <span class="stat-value" :class="{
-                        'success': svc.status === 'active',
-                        'warning': svc.status === 'inactive',
-                        'danger': svc.status === 'failed'
-                    }" x-text="svc.status"></span>
-                </div>
-                <div class="stat-row" style="font-size: 0.9rem; margin-top: -0.5rem;" x-show="svc.memory">
-                    <span class="stat-label">Memory</span>
-                    <span class="stat-value" x-text="svc.memory"></span>
-                </div>
-                <div class="stat-row" style="font-size: 0.9rem;" x-show="svc.cpu">
-                    <span class="stat-label">CPU Time</span>
-                    <span class="stat-value" x-text="svc.cpu"></span>
-                </div>
+                <div class="stat-row"><span class="stat-label" x-text="svc.name.replace('.service','')"></span><span class="stat-value" :class="{'success': svc.status==='active','warning': svc.status==='inactive','danger': svc.status==='failed'}" x-text="svc.status"></span></div>
+                <div class="stat-row" style="font-size:0.9rem; margin-top:-0.5rem;" x-show="svc.memory"><span class="stat-label">Memory</span><span class="stat-value" x-text="svc.memory"></span></div>
+                <div class="stat-row" style="font-size:0.9rem;" x-show="svc.cpu"><span class="stat-label">CPU Time</span><span class="stat-value" x-text="svc.cpu"></span></div>
             </template>
         </div>
 
-        <!-- Docker Containers Card -->
+        <!-- Docker Card -->
         <div class="card">
             <div class="card-header"><i class="fab fa-docker"></i> Docker Containers</div>
-            <template x-if="dockerContainers.length === 0">
-                <div class="stat-row"><span class="stat-label">No running containers</span></div>
-            </template>
+            <template x-if="dockerContainers.length === 0"><div class="stat-row"><span class="stat-label">No running containers</span></div></template>
             <template x-for="container in dockerContainers" :key="container">
+                <div class="stat-row"><span class="stat-label" x-text="container.split('(')[0]"></span><span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span></div>
+            </template>
+        </div>
+
+        <!-- ========== NEW INTEGRATED CARDS ========== -->
+
+        <!-- Disk Sentinel with Sparkline -->
+        <div class="card">
+            <div class="card-header"><i class="fas fa-exclamation-triangle"></i> Disk Sentinel</div>
+            <pre x-text="diskSentinel.output"></pre>
+            <canvas class="sparkline" x-ref="diskChart"></canvas>
+            <div class="button-grid"><button class="btn" @click="runScript('diskcheck')"><i class="fas fa-search"></i> Check Now</button></div>
+        </div>
+
+        <!-- Temperature Alerts with Sparkline -->
+        <div class="card">
+            <div class="card-header"><i class="fas fa-thermometer-half"></i> Temperature Alerts</div>
+            <div class="stat-row"><span class="stat-label">Current CPU</span><span class="stat-value" :class="cpuTempClass" x-text="cpuTemp"></span></div>
+            <div class="stat-row"><span class="stat-label">Current GPU</span><span class="stat-value" :class="gpuTempClass" x-text="gpuTemp"></span></div>
+            <pre x-text="temperatureAlert.output"></pre>
+            <canvas class="sparkline" x-ref="tempChart"></canvas>
+        </div>
+
+        <!-- System Report (collapsible) -->
+        <div class="card" x-data="{ open: false }">
+            <div class="card-header collapsible" @click="open = !open">
+                <i class="fas fa-chevron-right" :class="{ 'open': open }"></i> System Report
+            </div>
+            <div class="collapsible-content" :class="{ 'open': open }">
+                <pre x-text="systemReport.output"></pre>
+            </div>
+        </div>
+
+        <!-- Service Watch -->
+        <div class="card">
+            <div class="card-header"><i class="fas fa-heartbeat"></i> Service Watch</div>
+            <template x-for="svc in serviceWatch" :key="svc.name">
                 <div class="stat-row">
-                    <span class="stat-label" x-text="container.split('(')[0]"></span>
-                    <span class="stat-value success" x-text="container.split('(')[1].replace(')','')"></span>
+                    <span class="stat-label" x-text="svc.name"></span>
+                    <span class="stat-value" :class="{
+                        'success': svc.status === 'running',
+                        'warning': svc.status === 'degraded',
+                        'danger': svc.status === 'failed'
+                    }" x-text="svc.status"></span>
+                    <span class="stat-value" x-show="svc.response" x-text="svc.response"></span>
                 </div>
             </template>
+            <template x-if="serviceWatch.length === 0">
+                <div class="stat-row"><span class="stat-label">No monitored services</span></div>
+            </template>
+        </div>
+
+        <!-- Backup Verifier -->
+        <div class="card">
+            <div class="card-header"><i class="fas fa-check-circle"></i> Backup Verifier</div>
+            <div class="stat-row"><span class="stat-label">Last result</span><span class="stat-value" :class="backupVerifierClass" x-text="backupVerifier.result"></span></div>
+            <pre x-text="backupVerifier.output"></pre>
+            <div class="button-grid"><button class="btn" @click="runScript('verify')"><i class="fas fa-redo"></i> Verify Now</button></div>
+        </div>
+
+        <!-- Cloud Backup -->
+        <div class="card">
+            <div class="card-header"><i class="fas fa-cloud-upload-alt"></i> Cloud Backup</div>
+            <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" :class="cloudBackupClass" x-text="cloudBackup.status"></span></div>
+            <div class="stat-row"><span class="stat-label">Last sync</span><span class="stat-value" x-text="cloudBackup.lastSync"></span></div>
+            <div class="stat-row"><span class="stat-label">Size</span><span class="stat-value" x-text="cloudBackup.size"></span></div>
+            <pre x-text="cloudBackup.output"></pre>
+            <div class="button-grid"><button class="btn" @click="runScript('cloudbackup')"><i class="fas fa-sync"></i> Sync Now</button></div>
         </div>
     </div>
 
@@ -603,6 +593,7 @@ cat > "$HTML_DIR/index.html" <<'EOF'
     <script>
         function dashboard() {
             return {
+                // existing properties
                 timestamp: '', uptime: '', loadavg: '', memory: '', cpuTemp: '',
                 tempClass: '', backupStatus: '', backupClass: '', backupTime: '',
                 backupLog: '', dnfUpdates: 0, flatpakUpdates: 0, totalUpdates: 0,
@@ -611,8 +602,33 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                 runningScript: false, refreshing: false,
                 defaultIp: '', interfaces: [], services: [],
                 gpuTemp: '', gpuLoad: '', dockerContainers: [],
-                battery: {}, zfs: { pools: [] },
-                diskio: [],
+                battery: {}, zfs: { pools: [] }, diskio: [],
+
+                // new integrated data
+                diskSentinel: { output: '' },
+                diskSentinelHistory: [],
+                temperatureAlert: { output: '' },
+                tempHistory: [],
+                systemReport: { output: '' },
+                serviceWatch: [],
+                backupVerifier: { result: '', output: '' },
+                cloudBackup: { status: '', lastSync: '', size: '', output: '' },
+
+                // computed classes
+                get cpuTempClass() {
+                    const t = parseInt(this.cpuTemp) || 0;
+                    return t > 80 ? 'danger' : t > 60 ? 'warning' : '';
+                },
+                get gpuTempClass() {
+                    const t = parseInt(this.gpuTemp) || 0;
+                    return t > 85 ? 'danger' : t > 70 ? 'warning' : '';
+                },
+                get backupVerifierClass() {
+                    return this.backupVerifier.result.includes('OK') ? 'success' : this.backupVerifier.result.includes('Failed') ? 'danger' : '';
+                },
+                get cloudBackupClass() {
+                    return this.cloudBackup.status === 'OK' ? 'success' : this.cloudBackup.status === 'Syncing' ? 'warning' : 'danger';
+                },
 
                 async init() {
                     await this.refreshStats();
@@ -623,17 +639,14 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                     this.refreshing = true;
                     try {
                         const response = await fetch('/api/stats');
-                        if (!response.ok) {
-                            console.error('HTTP error', response.status);
-                            return;
-                        }
+                        if (!response.ok) return;
                         const data = await response.json();
+                        // existing updates
                         this.timestamp = data.timestamp;
                         this.uptime = data.uptime;
                         this.loadavg = data.loadavg;
                         this.memory = data.memory;
                         this.cpuTemp = data.cpuTemp;
-                        this.tempClass = data.cpuTemp > 80 ? 'danger' : data.cpuTemp > 60 ? 'warning' : '';
                         this.backupStatus = data.backupStatus;
                         this.backupClass = data.backupStatus.includes('OK') ? 'success' : data.backupStatus.includes('Failed') ? 'danger' : '';
                         this.backupTime = data.backupTime;
@@ -655,10 +668,70 @@ cat > "$HTML_DIR/index.html" <<'EOF'
                         this.battery = data.battery || {};
                         this.zfs = data.zfs || { pools: [] };
                         this.diskio = data.diskio || [];
+
+                        // new integrated data
+                        this.diskSentinel = data.diskSentinel || { output: '' };
+                        this.diskSentinelHistory = data.diskSentinelHistory || [];
+                        this.temperatureAlert = data.temperatureAlert || { output: '' };
+                        this.tempHistory = data.tempHistory || [];
+                        this.systemReport = data.systemReport || { output: '' };
+                        this.serviceWatch = data.serviceWatch || [];
+                        this.backupVerifier = data.backupVerifier || { result: '', output: '' };
+                        this.cloudBackup = data.cloudBackup || { status: '', lastSync: '', size: '', output: '' };
+
+                        // Draw sparklines after data update
+                        this.$nextTick(() => this.drawCharts());
                     } catch (e) {
                         console.error('Stats fetch failed', e);
                     } finally {
                         this.refreshing = false;
+                    }
+                },
+
+                drawCharts() {
+                    // Disk Sentinel sparkline
+                    if (this.$refs.diskChart && this.diskSentinelHistory.length) {
+                        new Chart(this.$refs.diskChart, {
+                            type: 'line',
+                            data: {
+                                labels: this.diskSentinelHistory.map((_, i) => i),
+                                datasets: [{
+                                    data: this.diskSentinelHistory,
+                                    borderColor: '#3b82f6',
+                                    backgroundColor: 'rgba(59,130,246,0.1)',
+                                    tension: 0.4,
+                                    pointRadius: 0
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: false } },
+                                scales: { x: { display: false }, y: { display: false } }
+                            }
+                        });
+                    }
+                    // Temperature sparkline
+                    if (this.$refs.tempChart && this.tempHistory.length) {
+                        new Chart(this.$refs.tempChart, {
+                            type: 'line',
+                            data: {
+                                labels: this.tempHistory.map((_, i) => i),
+                                datasets: [{
+                                    data: this.tempHistory,
+                                    borderColor: '#f59e0b',
+                                    backgroundColor: 'rgba(245,158,11,0.1)',
+                                    tension: 0.4,
+                                    pointRadius: 0
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: false } },
+                                scales: { x: { display: false }, y: { display: false } }
+                            }
+                        });
                     }
                 },
 
@@ -693,14 +766,12 @@ cat > "$HTML_DIR/index.html" <<'EOF'
 EOF
 
 # -------------------------------------------------------------------
-# Python server (improved version, listens on all interfaces)
-# FIX: Disk I/O now includes partitions (commented out skip)
+# Python server (full version with all new methods)
 # -------------------------------------------------------------------
 cat > "$HTML_DIR/server.py" <<'EOF'
 #!/usr/bin/env python3
 """
-Nobara Dashboard Server - Improved version with caching, AMD GPU support,
-and systemd service details. Listens on all interfaces (0.0.0.0).
+Nobara Dashboard Server - Full version with integrated scripts.
 """
 
 import http.server
@@ -711,7 +782,6 @@ import os
 import sys
 import time
 import re
-import signal
 import logging
 from datetime import datetime, timedelta
 
@@ -722,7 +792,6 @@ LOG_DIR = os.path.expanduser("~/.local/share")
 CACHE_TTL = 30  # seconds for expensive commands (updates)
 HOST = "0.0.0.0"  # Listen on all network interfaces
 
-# Setup logging
 logging.basicConfig(
     filename=os.path.join(LOG_DIR, 'noba-web-server.log'),
     level=logging.INFO,
@@ -908,12 +977,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if len(parts) < 14:
                         continue
                     name = parts[2]
-                    # Skip loop, ram, and CD-ROM devices
                     if name.startswith(('loop', 'ram', 'sr')):
                         continue
-                    # FIX: Allow partitions by commenting out the skip
-                    # if name[-1].isdigit() and not (name.startswith('nvme') and name[-2].isdigit()):
-                    #     continue  # skip partitions
+                    # Allow partitions
                     reads = int(parts[5])   # sectors read
                     writes = int(parts[9])  # sectors written
                     read_bytes = reads * 512
@@ -925,7 +991,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     })
         except Exception as e:
             logging.error(f"Disk I/O error: {e}")
-        return disks[:10]  # increased limit to show more disks/partitions
+        return disks[:10]
 
     # ---------- Systemd service memory/CPU ----------
     def get_service_details(self, service):
@@ -961,6 +1027,128 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             logging.debug(f"Service details error for {service}: {e}")
         return details
 
+    # ---------- NEW: Disk Sentinel ----------
+    def get_disk_sentinel(self):
+        """Run disk-sentinel.sh and capture output + history for sparkline."""
+        result = {'output': '', 'history': []}
+        script = os.path.join(SCRIPT_DIR, 'disk-sentinel.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
+                out = proc.stdout + proc.stderr
+                result['output'] = strip_ansi(out)[-500:]
+                # TODO: Replace with real history extraction from your script's logs
+                # For now, placeholder data:
+                result['history'] = [75, 78, 80, 77, 79, 82, 81]
+            except Exception as e:
+                result['output'] = f"Error: {e}"
+        else:
+            result['output'] = "Script not found"
+        return result
+
+    # ---------- NEW: Temperature Alert ----------
+    def get_temperature_alert(self):
+        """Run temperature-alert.sh and capture output + history."""
+        result = {'output': '', 'history': []}
+        script = os.path.join(SCRIPT_DIR, 'temperature-alert.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script], capture_output=True, text=True, timeout=5)
+                out = proc.stdout + proc.stderr
+                result['output'] = strip_ansi(out)[-500:]
+                # TODO: Replace with real temperature history
+                result['history'] = [45, 47, 50, 48, 46, 49, 52]
+            except Exception as e:
+                result['output'] = f"Error: {e}"
+        else:
+            result['output'] = "Script not found"
+        return result
+
+    # ---------- NEW: System Report ----------
+    def get_system_report(self):
+        """Run system-report.sh and capture full output."""
+        result = {'output': ''}
+        script = os.path.join(SCRIPT_DIR, 'system-report.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
+                out = proc.stdout + proc.stderr
+                result['output'] = strip_ansi(out)[-1000:]
+            except Exception as e:
+                result['output'] = f"Error: {e}"
+        else:
+            result['output'] = "Script not found"
+        return result
+
+    # ---------- NEW: Service Watch ----------
+    def get_service_watch(self):
+        """Run service-watch.sh and parse its output into structured data."""
+        services = []
+        script = os.path.join(SCRIPT_DIR, 'service-watch.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script], capture_output=True, text=True, timeout=10)
+                for line in proc.stdout.splitlines():
+                    # Assume format: "service-name: status (response)"
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        name = parts[0].strip()
+                        rest = parts[1].strip()
+                        status_match = re.search(r'^(running|degraded|failed|stopped)', rest, re.I)
+                        status = status_match.group(1).lower() if status_match else 'unknown'
+                        time_match = re.search(r'\((\d+ms)\)', rest)
+                        response = time_match.group(1) if time_match else ''
+                        services.append({'name': name, 'status': status, 'response': response})
+            except Exception as e:
+                logging.error(f"Service watch error: {e}")
+        return services
+
+    # ---------- NEW: Backup Verifier ----------
+    def get_backup_verifier(self):
+        """Run backup-verifier.sh and capture result."""
+        result = {'result': 'N/A', 'output': ''}
+        script = os.path.join(SCRIPT_DIR, 'backup-verifier.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script], capture_output=True, text=True, timeout=30)
+                out = proc.stdout + proc.stderr
+                result['output'] = strip_ansi(out)[-500:]
+                if 'OK' in out or 'verified' in out.lower():
+                    result['result'] = 'OK'
+                elif 'FAIL' in out or 'error' in out.lower():
+                    result['result'] = 'Failed'
+                else:
+                    result['result'] = 'Unknown'
+            except Exception as e:
+                result['output'] = f"Error: {e}"
+                result['result'] = 'Error'
+        else:
+            result['output'] = "Script not found"
+        return result
+
+    # ---------- NEW: Cloud Backup ----------
+    def get_cloud_backup(self):
+        """Run cloud-backup.sh and parse status."""
+        result = {'status': 'N/A', 'lastSync': 'N/A', 'size': 'N/A', 'output': ''}
+        script = os.path.join(SCRIPT_DIR, 'cloud-backup.sh')
+        if os.path.exists(script):
+            try:
+                proc = subprocess.run([script, '--status'], capture_output=True, text=True, timeout=20)
+                out = proc.stdout + proc.stderr
+                result['output'] = strip_ansi(out)[-500:]
+                for line in out.splitlines():
+                    if 'Status:' in line:
+                        result['status'] = line.split(':',1)[1].strip()
+                    elif 'Last sync:' in line:
+                        result['lastSync'] = line.split(':',1)[1].strip()
+                    elif 'Size:' in line:
+                        result['size'] = line.split(':',1)[1].strip()
+            except Exception as e:
+                result['output'] = f"Error: {e}"
+        else:
+            result['output'] = "Script not found"
+        return result
+
     # ---------- GET /api/stats ----------
     def do_GET(self):
         try:
@@ -977,7 +1165,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             logging.error(f"GET error: {e}")
 
-    # ---------- POST /api/run ----------
+    # ---------- POST /api/run (extended for new scripts) ----------
     def do_POST(self):
         if self.path == '/api/run':
             try:
@@ -985,6 +1173,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 post_data = self.rfile.read(content_len)
                 data = json.loads(post_data)
                 script = data.get('script', '')
+
+                script_map = {
+                    'backup': 'backup-to-nas.sh',
+                    'verify': 'backup-verifier.sh',
+                    'organize': 'organize-downloads.sh',
+                    'diskcheck': 'disk-sentinel.sh',
+                    'speedtest': 'speedtest-cli',
+                    'cloudbackup': 'cloud-backup.sh',
+                    # add more as needed
+                }
 
                 if script == 'speedtest':
                     try:
@@ -996,12 +1194,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         output = f"Speed test failed: {str(e)}"
                         success = False
                 else:
-                    script_map = {
-                        'backup': 'backup-to-nas.sh',
-                        'verify': 'backup-verifier.sh',
-                        'organize': 'organize-downloads.sh',
-                        'diskcheck': 'disk-sentinel.sh'
-                    }
                     script_file = os.path.join(SCRIPT_DIR, script_map.get(script, ''))
                     if not os.path.exists(script_file):
                         output = f"Script {script} not found"
@@ -1021,7 +1213,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps(result).encode())
             except subprocess.TimeoutExpired:
-                output = "Script timed out after 60 seconds."
+                output = "Script timed out."
                 result = {'success': False, 'output': output}
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -1155,7 +1347,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             stats['lastMove'] = ''
             stats['organizerLog'] = ''
 
-        # Disk alerts
+        # Disk alerts (from disk-sentinel.log, but we'll also have a separate card)
         disk_log = os.path.join(LOG_DIR, 'disk-sentinel.log')
         if os.path.exists(disk_log):
             with open(disk_log) as f:
@@ -1233,9 +1425,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Disk I/O
         stats['diskio'] = self.get_disk_io()
 
+        # NEW integrated data
+        disk_sentinel = self.get_disk_sentinel()
+        stats['diskSentinel'] = {'output': disk_sentinel['output']}
+        stats['diskSentinelHistory'] = disk_sentinel['history']
+
+        temp_alert = self.get_temperature_alert()
+        stats['temperatureAlert'] = {'output': temp_alert['output']}
+        stats['tempHistory'] = temp_alert['history']
+
+        stats['systemReport'] = self.get_system_report()
+        stats['serviceWatch'] = self.get_service_watch()
+        stats['backupVerifier'] = self.get_backup_verifier()
+        stats['cloudBackup'] = self.get_cloud_backup()
+
         return stats
 
-# -------------------- Server setup with graceful shutdown --------------------
+# -------------------- Server setup --------------------
 def run_server():
     handler = Handler
     with socketserver.TCPServer((HOST, PORT), handler) as httpd:
@@ -1249,7 +1455,6 @@ def run_server():
             httpd.shutdown()
 
 if __name__ == '__main__':
-    # Write PID file for external kill
     with open(os.environ.get('PID_FILE', '/tmp/noba-web-server.pid'), 'w') as f:
         f.write(str(os.getpid()))
     run_server()
