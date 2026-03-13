@@ -1,6 +1,6 @@
 #!/bin/bash
 # backup-to-nas.sh – Backup important directories to NAS with retention, space check, and email report
-# Revised version with fixes and improvements
+# Version: 2.2.0
 
 set -euo pipefail
 
@@ -29,15 +29,10 @@ MOUNT_POINT=""
 # -------------------------------------------------------------------
 # Load user configuration (if any)
 # -------------------------------------------------------------------
-load_config
-if [ "$CONFIG_LOADED" = true ]; then
+if command -v get_config &>/dev/null; then
     sources_from_config=$(get_config_array ".backup.sources")
-    log_debug "Raw sources from config: '$sources_from_config'"
     if [ -n "$sources_from_config" ]; then
         mapfile -t SOURCES <<< "$sources_from_config"
-        log_debug "SOURCES array after mapfile: ${SOURCES[*]}"
-    else
-        log_debug "get_config_array returned empty – no sources in config."
     fi
 
     DEST="$(get_config ".backup.dest" "$DEST")"
@@ -52,7 +47,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "backup-to-nas.sh version 2.1"
+    echo "backup-to-nas.sh version 2.2.0"
     exit 0
 }
 
@@ -60,7 +55,7 @@ show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Backup specified directories to a NAS share with retention and space checks.
+Backup specified directories to a NAS share using incremental hardlinks.
 
 Options:
   --source DIR       Source directory to back up (can be repeated)
@@ -92,6 +87,7 @@ check_space() {
         fi
     done
 
+    # Add margin
     total_size_kb=$((total_size_kb + (total_size_kb * SPACE_MARGIN_PERCENT / 100)))
     local required_bytes=$((total_size_kb * 1024))
 
@@ -119,8 +115,12 @@ check_space() {
         return 1
     fi
 
-    if [ "$free_bytes" -lt "$required_bytes" ]; then
-        log_error "Insufficient space – need at least $required_hr, only $free_hr available."
+    # Only strictly enforce required space if we don't have a previous backup to hardlink against
+    local latest_backup
+    latest_backup=$(find "$DEST" -maxdepth 1 -type d -name "????????-??????" | sort | tail -n 1 || true)
+
+    if [ -z "$latest_backup" ] && [ "$free_bytes" -lt "$required_bytes" ]; then
+        log_error "Insufficient space for initial full backup – need at least $required_hr, only $free_hr available."
         return 1
     fi
 
@@ -163,51 +163,42 @@ while true; do
 done
 
 # -------------------------------------------------------------------
-# Early dry-run exit if destination unavailable (for testing)
+# Validations & Setup
 # -------------------------------------------------------------------
 if [ "$DRY_RUN" = true ] && [ ! -d "$DEST" ]; then
     log_info "Dry run: destination $DEST not available – skipping actual checks."
     exit 0
 fi
 
-# -------------------------------------------------------------------
-# Validate required arguments and dependencies
-# -------------------------------------------------------------------
 if [ ${#SOURCES[@]} -eq 0 ]; then
-    log_error "At least one --source must be specified."
-    show_help
+    die "At least one --source must be specified."
 fi
 if [ -z "$DEST" ]; then
-    log_error "Destination (--dest) is required."
-    show_help
+    die "Destination (--dest) is required."
 fi
 
-check_deps rsync
+check_deps rsync df find du
 
-# Derive mount point from DEST
 MOUNT_POINT=$(df -P "$DEST" 2>/dev/null | tail -1 | awk '{print $6}')
 if [ -z "$MOUNT_POINT" ]; then
-    log_error "Cannot determine mount point for $DEST – is it a valid path?"
-    exit 1
+    die "Cannot determine mount point for $DEST – is it a valid path?"
 fi
 
-# -------------------------------------------------------------------
-# Prepare log directory and file
-# -------------------------------------------------------------------
+# Prepare logging
 mkdir -p "$(dirname "$LOG_FILE")"
 touch "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-# -------------------------------------------------------------------
 # Acquire lock
-# -------------------------------------------------------------------
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
-    log_error "Another backup instance is already running (lock: $LOCK_FILE)."
-    exit 1
+    die "Another backup instance is already running (lock: $LOCK_FILE)."
 fi
 LOCK_FD=200
-trap cleanup EXIT
+
+# Safely append trap
+existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
+trap "${existing_trap:+$existing_trap; }cleanup" EXIT
 
 # -------------------------------------------------------------------
 # Start backup
@@ -217,20 +208,26 @@ log_info "Destination: $DEST"
 log_info "Sources: ${SOURCES[*]}"
 log_info "Retention: $RETENTION_DAYS days"
 log_info "Dry run: $DRY_RUN"
-log_info "Verbose: $VERBOSE"
 
 if [ ! -d "$DEST" ]; then
-    log_error "Destination directory $DEST does not exist – is the NAS mounted?"
-    exit 1
+    die "Destination directory $DEST does not exist – is the NAS mounted?"
 fi
 
 if ! check_space; then
-    log_error "Space check failed – aborting."
-    exit 1
+    die "Space check failed – aborting."
 fi
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_PATH="$DEST/$TIMESTAMP"
+
+# Find latest backup for hardlinking (Time Machine style)
+LATEST_BACKUP=$(find "$DEST" -maxdepth 1 -type d -name "????????-??????" | sort | tail -n 1 || true)
+if [ -n "$LATEST_BACKUP" ]; then
+    log_info "Found previous backup: $(basename "$LATEST_BACKUP"). Using for incremental hardlinks."
+else
+    log_info "No previous backup found. Performing full initial backup."
+fi
+
 if [ "$DRY_RUN" = false ]; then
     mkdir -p "$BACKUP_PATH"
 else
@@ -240,34 +237,42 @@ fi
 ERROR_OCCURRED=false
 START_TIME=$SECONDS
 
+# Setup core rsync options array
+RSYNC_OPTS=("-a" "--delete")
+if [ "$VERBOSE" = true ]; then RSYNC_OPTS+=("-v" "--progress"); fi
+if [ "$DRY_RUN" = true ]; then RSYNC_OPTS+=("--dry-run"); fi
+
 for src in "${SOURCES[@]}"; do
     base=$(basename "$src")
+    extra_opts=()
+
+    # Apply hardlinks if we have a previous backup
+    if [ -n "$LATEST_BACKUP" ]; then
+        extra_opts+=("--link-dest=$LATEST_BACKUP/$base")
+    fi
+
     if [ "$base" = ".config" ]; then
-        dest_path="$BACKUP_PATH/config/"
-        extra_opts=(
-            --exclude='*cache*'
-            --exclude='*thumbnails*'
-            --exclude='*Trash*'
-            --exclude='*session*'
-            --exclude='*/sockets/'
-            --exclude='*lock'
-            --exclude='*.tmp'
-            --no-links
+        dest_path="$BACKUP_PATH/config"
+        extra_opts+=(
+            "--exclude=*cache*"
+            "--exclude=*thumbnails*"
+            "--exclude=*Trash*"
+            "--exclude=*session*"
+            "--exclude=*/sockets/"
+            "--exclude=*lock"
+            "--exclude=*.tmp"
+            "--no-links"
         )
     else
-        dest_path="$BACKUP_PATH/"
-        extra_opts=()
+        dest_path="$BACKUP_PATH/$base"
     fi
 
     log_info "Backing up $src to $dest_path"
 
-    if [ "$DRY_RUN" = true ]; then
-        rsync_dry="--dry-run"
-    else
-        rsync_dry=""
-    fi
+    # Ensure source has trailing slash so contents sync properly into the named dest_path
+    src_slashed="${src%/}/"
 
-    if ! rsync -avhP --delete "${extra_opts[@]}" $rsync_dry "$src" "$dest_path"; then
+    if ! rsync "${RSYNC_OPTS[@]}" "${extra_opts[@]}" "$src_slashed" "$dest_path"; then
         log_error "rsync failed for $src"
         ERROR_OCCURRED=true
     fi
@@ -275,116 +280,77 @@ done
 
 DURATION=$((SECONDS - START_TIME))
 
+# -------------------------------------------------------------------
 # Prune old backups
+# -------------------------------------------------------------------
 if [ "$DRY_RUN" = false ] && [ -d "$DEST" ]; then
     log_info "Pruning backups older than $RETENTION_DAYS days..."
-    find "$DEST" -maxdepth 1 -type d -name "????????-??????" | while read -r old_backup; do
+
+    # Use standard while loop to avoid subshell variable loss if needed later
+    while read -r old_backup; do
+        [[ -z "$old_backup" ]] && continue
         folder_date=$(basename "$old_backup" | cut -d- -f1)
         if folder_seconds=$(date -d "$folder_date" +%s 2>/dev/null); then
             current_seconds=$(date +%s)
             age_days=$(( (current_seconds - folder_seconds) / 86400 ))
             if [ "$age_days" -ge "$RETENTION_DAYS" ]; then
-                log_info "Removing old backup: $old_backup"
+                log_info "Removing old backup: $old_backup ($age_days days old)"
                 rm -rf "$old_backup"
             fi
         else
             log_warn "Cannot parse date from folder name: $old_backup – skipping"
         fi
-    done
+    done <<< "$(find "$DEST" -maxdepth 1 -type d -name "????????-??????" | sort)"
 else
     log_info "Dry run or destination missing – skipping prune."
 fi
 
-# Collect statistics
-FILES_COUNT=$(grep -E '^Number of files: ' "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $4}' || echo "N/A")
-if [ -z "$FILES_COUNT" ] || [ "$FILES_COUNT" = "N/A" ]; then
-    FILES_COUNT="N/A"
-fi
-
+# -------------------------------------------------------------------
+# Reporting
+# -------------------------------------------------------------------
 if [ "$DRY_RUN" = false ] && [ -d "$BACKUP_PATH" ]; then
     SIZE=$(du -sh "$BACKUP_PATH" 2>/dev/null | cut -f1 || echo "unknown")
 else
     SIZE="N/A (dry run)"
 fi
 
-# Generate email report
-EMAIL_BODY=$(mktemp)
-trap 'rm -f "$EMAIL_BODY"' EXIT
+EMAIL_BODY=$(make_temp_dir_auto)/email_report.txt
 
 if [ "$ERROR_OCCURRED" = true ]; then
     subject_prefix="❌ BACKUP FAILED"
-    status_class="error"
 else
     subject_prefix="✅ BACKUP SUCCESSFUL"
-    status_class="success"
 fi
 
 cat > "$EMAIL_BODY" <<EOF
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-        .header { background-color: #f4f4f4; padding: 10px; border-radius: 5px; }
-        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 20px 0; }
-        .stat-card { background-color: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }
-        .stat-label { font-size: 0.9em; color: #666; }
-        .stat-value { font-size: 1.5em; font-weight: bold; }
-        .error { color: #d32f2f; }
-        .success { color: #388e3c; }
-        .footer { margin-top: 30px; font-size: 0.9em; color: #777; }
-    </style>
-</head>
-<body>
-<div class="container">
-    <div class="header">
-        <h2 class="$status_class">$subject_prefix</h2>
-    </div>
-    <p>Backup completed at <strong>$(date '+%Y-%m-%d %H:%M:%S')</strong></p>
-    <p>Backup folder: <code>$TIMESTAMP</code></p>
-    <p>Retention: last $RETENTION_DAYS days kept</p>
-    <div class="stats">
-        <div class="stat-card">
-            <div class="stat-label">Duration</div>
-            <div class="stat-value">${DURATION}s</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Files Transferred</div>
-            <div class="stat-value">${FILES_COUNT}</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Backup Size</div>
-            <div class="stat-value">${SIZE}</div>
-        </div>
-    </div>
-    <p><strong>Sources backed up:</strong></p>
-    <ul>
-EOF
-for src in "${SOURCES[@]}"; do
-    echo "        <li>$src</li>" >> "$EMAIL_BODY"
-done
-cat >> "$EMAIL_BODY" <<EOF
-    </ul>
-    <p>Full log is attached.</p>
-    <div class="footer">
-        <p>This is an automated message from your backup system.</p>
-    </div>
-</div>
-</body>
-</html>
+$subject_prefix
+
+Backup completed at: $(date '+%Y-%m-%d %H:%M:%S')
+Destination Folder:  $TIMESTAMP
+Retention Policy:    $RETENTION_DAYS days
+
+----------------------------------------
+📊 STATS
+----------------------------------------
+Duration:     ${DURATION}s
+Backup Size:  ${SIZE} (Note: Size reflects hardlink usage)
+
+----------------------------------------
+📁 SOURCES BACKED UP
+----------------------------------------
+$(printf ' - %s\n' "${SOURCES[@]}")
+
+----------------------------------------
+📝 Full log attached.
+This is an automated message from your backup system.
 EOF
 
-# Only send email if not dry-run
 if [ "$DRY_RUN" = false ]; then
     send_email_report "$subject_prefix - $(date '+%Y-%m-%d')" "$EMAIL_BODY"
 fi
 
-rm -f "$EMAIL_BODY"
 log_info "========== Backup finished at $(date) =========="
 
-# Call notification script only if not in dry-run mode, and ignore any failure
 if [ "$DRY_RUN" = false ] && command -v backup-notify.sh &>/dev/null; then
     backup-notify.sh || true
 fi
