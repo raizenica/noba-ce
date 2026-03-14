@@ -1,9 +1,6 @@
-#!/bin/bash
 # noba-completion.sh – Fast Bash completion for Nobara automation scripts
-# Version: 2.2.0
-
-# NOTE: Do NOT source external libraries or parse YAML in a completion script.
-# It runs on every <TAB> press and must execute in milliseconds.
+# Version: 2.2.1
+# NOTE: Do NOT use set -e/-u here. This is sourced into the user's interactive shell.
 
 _noba_completions() {
     local cur prev cmd scripts opts

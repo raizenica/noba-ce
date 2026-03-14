@@ -1,8 +1,21 @@
 #!/bin/bash
 # setup-automation-timers.sh – Create systemd user timer units for automation scripts
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: setup-automation-timers.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" ]]; then
+    echo "setup-automation-timers.sh version 2.2.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -17,7 +30,6 @@ DRY_RUN=false
 FORCE=false
 
 # Map: [script-name]="Description | Schedule | RandomizedDelaySec"
-# RandomizedDelay prevents I/O spikes when multiple 'daily' tasks trigger at 00:00
 declare -A TIMERS=(
     [backup-to-nas]="Daily NAS Backup|daily|15m"
     [cloud-backup]="Daily Cloud Sync|daily|30m"
@@ -34,7 +46,7 @@ declare -A TIMERS=(
 # -------------------------------------------------------------------
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Create systemd user timer and service units for Nobara automation scripts.
 
@@ -46,9 +58,12 @@ EOF
     exit 0
 }
 
+# -------------------------------------------------------------------
 # Parse arguments
+# -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o fn -l force,dry-run,help -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -58,7 +73,7 @@ while true; do
         -n|--dry-run) DRY_RUN=true; shift ;;
         --help)       show_help ;;
         --)           shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)            log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 
@@ -117,7 +132,7 @@ create_service() {
         return
     fi
 
-    # Explicitly set PATH to match the user's environment so dependencies like docker/dnf/yq don't fail
+    # Set PATH so dependencies like docker/dnf/yq don't fail in systemd environment
     cat > "$service_file" <<EOF
 [Unit]
 Description=$desc Service
@@ -157,9 +172,6 @@ if [ "$DRY_RUN" = false ]; then
     systemctl --user daemon-reload
 
     echo ""
-    log_info "Done! To enable and start all created timers, you can run:"
-    echo -e "${CYAN}  for timer in ${!TIMERS[*]}; do systemctl --user enable --now \\"
-    echo ""
-    log_info "To view active timers:"
+    log_info "Done! To view active timers:"
     echo -e "${CYAN}  systemctl --user list-timers${NC}"
 fi

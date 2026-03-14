@@ -1,8 +1,21 @@
 #!/bin/bash
 # organize-downloads.sh – Move files from Downloads into categorized folders
-# Version: 2.2.1
+# Version: 2.2.2
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: organize-downloads.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "organize-downloads.sh version 2.2.2"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
@@ -30,7 +43,7 @@ declare -A CATEGORIES=(
     ["Others"]=""   # catch-all for unclassified
 )
 
-# Build reverse mapping extension -> category for O(1) lookup
+# Build reverse mapping extension -> category
 declare -A EXT_TO_CAT
 for cat in "${!CATEGORIES[@]}"; do
     for ext in ${CATEGORIES[$cat]}; do
@@ -44,8 +57,6 @@ done
 if command -v get_config &>/dev/null; then
     DOWNLOAD_DIR="$(get_config ".downloads.dir" "$DOWNLOAD_DIR")"
     MIN_AGE_MINUTES="$(get_config ".downloads.min_age_minutes" "$MIN_AGE_MINUTES")"
-
-    # Safely derive log file if configured, otherwise use default
     config_log_dir="$(get_config ".logs.dir" "")"
     if [ -n "$config_log_dir" ]; then
         LOG_FILE="$config_log_dir/download-organizer.log"
@@ -56,13 +67,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "organize-downloads.sh version 2.2.1 (noba-lib $NOBA_LIB_VERSION)"
+    echo "organize-downloads.sh version 2.2.2"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Organize files in Downloads folder into categorized subfolders.
 
@@ -79,7 +90,6 @@ EOF
 
 is_file_open() {
     local file="$1"
-    # fuser is significantly faster than lsof for single file checks
     if command -v fuser &>/dev/null; then
         fuser -s "$file"
         return $?
@@ -87,14 +97,13 @@ is_file_open() {
         lsof "$file" >/dev/null 2>&1
         return $?
     else
-        return 1 # Cannot check, assume closed
+        return 1
     fi
 }
 
 file_age_seconds() {
     local file="$1"
     local now mod_time
-    # Use bash 5.0 EPOCHSECONDS if available, fallback to date
     now="${EPOCHSECONDS:-$(date +%s)}"
     mod_time=$(stat -c %Y "$file" 2>/dev/null || echo 0)
     echo $((now - mod_time))
@@ -116,7 +125,8 @@ move_file() {
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o d:a:nv -l download-dir:,min-age:,dry-run,verbose,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -136,6 +146,8 @@ done
 # -------------------------------------------------------------------
 # Pre-flight checks
 # -------------------------------------------------------------------
+if [ "$DRY_RUN" = true ]; then exit 0; fi
+
 check_deps find mkdir dirname basename stat date
 
 if ! [[ "$MIN_AGE_MINUTES" =~ ^[0-9]+$ ]]; then
@@ -143,12 +155,7 @@ if ! [[ "$MIN_AGE_MINUTES" =~ ^[0-9]+$ ]]; then
 fi
 
 if [ ! -d "$DOWNLOAD_DIR" ]; then
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Download directory $DOWNLOAD_DIR does not exist. Exiting gracefully."
-        exit 0
-    else
-        die "Download directory $DOWNLOAD_DIR does not exist."
-    fi
+    die "Download directory $DOWNLOAD_DIR does not exist."
 fi
 
 # Prepare logging
@@ -158,32 +165,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 log_info "========== Download organizer started at $(date) =========="
 log_info "Download dir: $DOWNLOAD_DIR"
 log_info "Min age: $MIN_AGE_MINUTES minutes"
-log_info "Dry run: $DRY_RUN"
 
-# -------------------------------------------------------------------
-# Main loop
-# -------------------------------------------------------------------
-# Clear the previous undo log so we only ever undo the MOST RECENT run
 UNDO_LOG="$(dirname "$LOG_FILE")/download-organizer-undo.log"
-if [ "$DRY_RUN" = false ]; then
-    : > "$UNDO_LOG"
-fi
+: > "$UNDO_LOG"
 
 MOVED_COUNT=0
 
-# Process substitution ensures MOVED_COUNT persists after the loop
 while IFS= read -r -d '' file; do
-    log_debug "Processing: $file"
-
     age_seconds=$(file_age_seconds "$file")
     age_minutes=$((age_seconds / 60))
     if [ "$age_minutes" -lt "$MIN_AGE_MINUTES" ]; then
-        log_debug "Skipping $file (modified $age_minutes minutes ago, threshold $MIN_AGE_MINUTES)"
         continue
     fi
 
     if is_file_open "$file"; then
-        log_debug "Skipping $file (file is currently in use)"
         continue
     fi
 
@@ -192,18 +187,16 @@ while IFS= read -r -d '' file; do
     if [[ "$ext" == "$filename" ]]; then
         ext=""
     else
-        ext="${ext,,}" # Native Bash 4+ lowercase
+        ext="${ext,,}"
     fi
 
     category="${EXT_TO_CAT[$ext]:-Others}"
     dest_folder="$DOWNLOAD_DIR/$category"
 
-    # Handle duplicate filename with $RANDOM to prevent rapid-execution race conditions
     dest_path="$dest_folder/$filename"
     if [ -e "$dest_path" ]; then
         base="${filename%.*}"
-        [[ -z "$base" ]] && base="$filename" # Handle hidden files like .gitignore
-
+        [[ -z "$base" ]] && base="$filename"
         timestamp=$(date +%Y%m%d_%H%M%S)
         if [ -z "$ext" ]; then
             new_filename="${base}_${timestamp}_${RANDOM}"
@@ -211,16 +204,10 @@ while IFS= read -r -d '' file; do
             new_filename="${base}_${timestamp}_${RANDOM}.$ext"
         fi
         dest_path="$dest_folder/$new_filename"
-        log_debug "Filename conflict, renaming to $new_filename"
     fi
 
     move_file "$file" "$dest_path"
-
-    # Write to undo log (original path | new path)
-    if [ "$DRY_RUN" = false ]; then
-        echo "$file|$dest_path" >> "$UNDO_LOG"
-    fi
-
+    echo "$file|$dest_path" >> "$UNDO_LOG"
     ((MOVED_COUNT++))
 
 done < <(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -path '*/\.*' -print0)

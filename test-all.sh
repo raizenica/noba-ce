@@ -116,7 +116,8 @@ run_edge_test() {
 # Parse arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o t:snv -l timeout:,skip-slow,dry-run,verbose,help,version -- "$@"); then
-    show_help
+    log_error "Failed to parse arguments. Use --help for usage."
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 

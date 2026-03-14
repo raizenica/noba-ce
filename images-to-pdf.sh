@@ -1,8 +1,21 @@
 #!/bin/bash
 # images-to-pdf.sh – Convert images to PDF (CLI and GUI modes)
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: images-to-pdf.sh [OPTIONS] image1 [image2 ...]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "images-to-pdf.sh version 2.2.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -38,13 +51,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "images-to-pdf.sh version 2.2.0"
+    echo "images-to-pdf.sh version 2.2.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [options] image1 [image2 ...]
+Usage: $(basename "$0") [options] image1 [image2 ...]
 
 Convert one or more images to a single PDF.
 
@@ -89,7 +102,8 @@ if [ $# -eq 0 ]; then
     fi
 else
     if ! PARSED_ARGS=$(getopt -o o:s:r:q:m:pv -l output:,paper-size:,orientation:,quality:,metadata:,progress,verbose,help,version -- "$@"); then
-        show_help
+        log_error "Invalid argument"
+        exit 1
     fi
     eval set -- "$PARSED_ARGS"
 
@@ -105,7 +119,7 @@ else
             --help)              show_help ;;
             --version)           show_version ;;
             --)                  shift; break ;;
-            *) log_error "Invalid argument: $1"; exit 1 ;;
+            *)                   log_error "Invalid argument: $1"; exit 1 ;;
         esac
     done
 

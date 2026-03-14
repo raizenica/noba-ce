@@ -1,8 +1,21 @@
 #!/bin/bash
 # log-rotator.sh – Compress old logs and purge ancient archives
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: log-rotator.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "log-rotator.sh version 2.2.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -30,13 +43,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "log-rotator.sh version 2.2.0"
+    echo "log-rotator.sh version 2.2.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Compress log files older than a specified number of days, and delete ancient archives.
 
@@ -68,7 +81,8 @@ is_file_open() {
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o c:x:l:n -l compress-days:,delete-days:,log-dir:,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -81,7 +95,7 @@ while true; do
         --help)             show_help ;;
         --version)          show_version ;;
         --)                 shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)                  log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 

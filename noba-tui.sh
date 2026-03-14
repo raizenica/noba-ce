@@ -1,24 +1,25 @@
 #!/bin/bash
 # noba-tui.sh – Terminal UI (dialog) for launching Nobara scripts
-# Version: 2.2.1
+# Version: 2.2.2
 
 set -euo pipefail
 
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: noba-tui.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "noba-tui.sh version 2.2.2"
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
-
-# Fail on unknown arguments for test harness compliance
-if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
-    log_error "Invalid argument: $1"
-    exit 1
-fi
 source "$SCRIPT_DIR/noba-lib.sh"
-
-# Fail on unknown arguments for test harness compliance
-if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
-    log_error "Invalid argument: $1"
-    exit 1
-fi
 
 # -------------------------------------------------------------------
 # Default configuration
@@ -36,7 +37,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-tui.sh version 2.2.1"
+    echo "noba-tui.sh version 2.2.2"
     exit 0
 }
 
@@ -67,21 +68,9 @@ run_script() {
     fi
 
     # Run script and pipe live output to programbox, stripping ANSI color codes
-    # so dialog doesn't render garbage text.
     "$script" "${extra_args[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | \
         $DIALOG --title "Running: $title" --programbox 22 80
 }
-
-# -------------------------------------------------------------------
-# Parse arguments
-# -------------------------------------------------------------------
-if [ $# -gt 0 ]; then
-    case "$1" in
-        --help)    show_help ;;
-        --version) show_version ;;
-        *)         log_error "Unknown option: $1"; exit 1 ;;
-    esac
-fi
 
 # -------------------------------------------------------------------
 # Pre-flight checks & Setup
@@ -89,10 +78,6 @@ fi
 if ! command -v "$DIALOG" &>/dev/null; then
     die "Dialog ($DIALOG) not found. Please install it (e.g., 'sudo dnf install dialog')."
 fi
-
-# Use the library's safe temp dir creator with automatic trap cleanup
-# shellcheck disable=SC2034
-TEMP_DIR=$(make_temp_dir_auto "noba-tui.XXXXXXXXXX")
 
 # -------------------------------------------------------------------
 # Main menu

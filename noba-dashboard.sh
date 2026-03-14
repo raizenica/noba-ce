@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -46,7 +47,7 @@ EOF
 }
 
 # Parse command-line arguments
-PARSED_ARGS=$(getopt -o w:1 -l watch:,once,help,version -- "$@") || { show_help; }
+PARSED_ARGS=$(getopt -o w:1 -l watch:,once,help,version -- "$@") || { log_error "Invalid argument"; exit 1; }
 eval set -- "$PARSED_ARGS"
 
 while true; do

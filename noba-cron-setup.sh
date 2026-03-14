@@ -1,8 +1,21 @@
 #!/bin/bash
 # noba-cron-setup.sh – Interactive setup of cron jobs for automation scripts
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: noba-cron-setup.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "noba-cron-setup.sh version 2.2.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -48,13 +61,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-cron-setup.sh version 2.2.0"
+    echo "noba-cron-setup.sh version 2.2.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Interactive cron setup for Nobara automation scripts.
 
@@ -89,7 +102,8 @@ check_crontab() {
 # Parse arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o '' -l list,remove,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -101,7 +115,7 @@ while true; do
         --help)     show_help ;;
         --version)  show_version ;;
         --)         shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)          log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 

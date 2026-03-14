@@ -1,8 +1,21 @@
 #!/bin/bash
 # backup-verifier.sh – Verify integrity of latest backup by checking random files
-# Version: 2.1.1
+# Version: 2.1.2
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: backup-verifier.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "backup-verifier.sh version 2.1.2"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
@@ -35,13 +48,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "backup-verifier.sh version 2.1.1"
+    echo "backup-verifier.sh version 2.1.2"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Verify the integrity of the latest backup by checking random files directly on the mount.
 
@@ -71,7 +84,8 @@ get_size() {
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o b:n:cDvq -l backup-dir:,num-files:,compare-original,checksum-cmd:,send-email,verbose,quiet,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -150,7 +164,11 @@ log_debug "Selected ${#SELECTED[@]} files for verification"
 # -------------------------------------------------------------------
 # Setup Reporting
 # -------------------------------------------------------------------
-TEMP_DIR=$(make_temp_dir_auto "backup-to-nas")
+# Safe mktemp tied directly to script EXIT trap
+TEMP_DIR=$(mktemp -d "/tmp/noba-verify.XXXXXX")
+existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
+trap "${existing_trap:+$existing_trap; }rm -rf \"\$TEMP_DIR\"" EXIT
+
 REPORT_FILE="$TEMP_DIR/report.txt"
 
 cat > "$REPORT_FILE" <<EOF

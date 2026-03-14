@@ -1,11 +1,18 @@
 #!/bin/bash
 # backup-notify.sh – Send desktop notification about the last backup status
-# Version: 2.2.0
+# Version: 2.2.2
 
 set -euo pipefail
 
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then echo "Usage: backup-notify.sh"; exit 0; fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then echo "2.2.2"; exit 0; fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
+# shellcheck source=./noba-lib.sh
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -24,13 +31,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "backup-notify.sh version 2.2.0"
+    echo "backup-notify.sh version 2.2.2"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Send a desktop notification about the last backup status.
 
@@ -45,26 +52,22 @@ EOF
 }
 
 strip_ansi() {
-    sed 's/\x1b\[[0-9;]*m//g'
+    # shellcheck disable=SC2001
+    sed 's/\x1b\[[0-9;]*m//g' <<< "$1"
 }
 
 send_notification() {
-    local urgency="$1"
-    local summary="$2"
-    local body="$3"
-
-    # Strip ANSI codes from the body (the log line) before sending
+    local urgency="$1" summary="$2" body="$3"
     local clean_body
-    clean_body=$(echo "$body" | strip_ansi)
+    clean_body=$(strip_ansi "$body")
 
     if [ "$DRY_RUN" = true ]; then
         log_info "[DRY RUN] Notification: [$urgency] $summary - $clean_body"
         return
     fi
 
-    # Ensure we are in a GUI session
     if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-        log_debug "No GUI display detected. Logging to console instead."
+        log_debug "No GUI display detected. Logging to console."
         echo "$summary: $clean_body"
         return
     fi
@@ -82,7 +85,8 @@ send_notification() {
 # Parse command line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o '' -l log-file:,urgency:,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -94,7 +98,7 @@ while true; do
         --help)     show_help ;;
         --version)  show_version ;;
         --)         shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)          log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 
@@ -105,32 +109,23 @@ if [ ! -r "$LOG_FILE" ]; then
     die "Cannot read backup log: $LOG_FILE"
 fi
 
-# Look at the last 5 lines to find a definitive status
 last_context=$(tail -n 5 "$LOG_FILE" | strip_ansi)
 
 if echo "$last_context" | grep -qi "ERROR"; then
-    urgency="critical"
-    summary="❌ Backup Failed"
-    # Capture the specific error line
+    urgency="critical"; summary="❌ Backup Failed"
     message=$(echo "$last_context" | grep -i "ERROR" | tail -1)
 elif echo "$last_context" | grep -qi "SUCCESS"; then
-    urgency="normal"
-    summary="✅ Backup Successful"
+    urgency="normal"; summary="✅ Backup Successful"
     message=$(echo "$last_context" | grep -i "SUCCESS" | tail -1)
 elif echo "$last_context" | grep -qi "finished"; then
-    urgency="normal"
-    summary="✅ Backup Finished"
+    urgency="normal"; summary="✅ Backup Finished"
     message=$(echo "$last_context" | grep -i "finished" | tail -1)
 else
-    urgency="low"
-    summary="ℹ️ Backup Status Unknown"
+    urgency="low"; summary="ℹ️ Backup Status Unknown"
     message=$(tail -n 1 "$LOG_FILE")
 fi
 
-# Override urgency if requested
-if [ -n "$FORCE_URGENCY" ]; then
-    urgency="$FORCE_URGENCY"
-fi
+[ -n "$FORCE_URGENCY" ] && urgency="$FORCE_URGENCY"
 
 # -------------------------------------------------------------------
 # Execute

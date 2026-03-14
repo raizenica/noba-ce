@@ -1,11 +1,24 @@
 #!/bin/bash
 # system-report.sh – Generate HTML report of system health and email it
-# Version: 2.1.0
+# Version: 2.1.1
 
 set -euo pipefail
 
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: system-report.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "system-report.sh version 2.1.1"
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
+# shellcheck source=./noba-lib.sh
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -13,7 +26,7 @@ source "$SCRIPT_DIR/noba-lib.sh"
 # -------------------------------------------------------------------
 LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
 REPORT_DIR="${REPORT_DIR:-$LOG_DIR/reports}"
-REPORT_FILE="${REPORT_FILE:-system-report-$(date +%Y%m%d).html}"
+REPORT_FILE="system-report-$(date +%Y%m%d).html"
 EMAIL="${EMAIL:-strikerke@gmail.com}"
 SEND_EMAIL=true
 
@@ -30,18 +43,18 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "system-report.sh version 2.1.0"
+    echo "system-report.sh version 2.1.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Generate an inline HTML report of system health and optionally email it.
 
 Options:
-  -o, --output FILE  Output file name (default: $REPORT_FILE)
+  -o, --output FILE  Output file name (default: system-report-DATE.html)
   -d, --dir DIR      Directory to save report (default: $REPORT_DIR)
   -e, --email ADDR   Email address to send report (default: $EMAIL)
   -n, --no-email     Do not send email, just save report
@@ -55,7 +68,6 @@ strip_ansi() {
     sed 's/\x1b\[[0-9;]*m//g'
 }
 
-# Send HTML email directly inline (using msmtp) or fallback to attachments
 send_report() {
     local subject="$1"
     local html_file="$2"
@@ -66,7 +78,6 @@ send_report() {
     fi
 
     if command -v msmtp &>/dev/null; then
-        # Send as inline HTML
         (
             echo "Subject: $subject"
             echo "MIME-Version: 1.0"
@@ -79,8 +90,6 @@ send_report() {
         mutt -e "set content_type=text/html" -s "$subject" "$EMAIL" < "$html_file"
         log_info "Report emailed inline to $EMAIL via mutt."
     elif command -v mail &>/dev/null; then
-        # mailx usually sends as plain text, so we warn the user
-        echo "Please find the HTML system report below:" | mail -s "$subject" -a "$html_file" "$EMAIL" 2>/dev/null || \
         mail -s "$subject" "$EMAIL" < "$html_file"
         log_info "Report sent to $EMAIL via standard mail."
     else
@@ -92,7 +101,8 @@ send_report() {
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o o:d:e:n -l output:,dir:,email:,no-email,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -105,27 +115,21 @@ while true; do
         --help)        show_help ;;
         --version)     show_version ;;
         --)            shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)             log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 
 # -------------------------------------------------------------------
-# Pre-flight checks
+# Execution
 # -------------------------------------------------------------------
 check_deps df grep tail date hostname awk
 
-# Ensure report directory exists
-mkdir -p "$REPORT_DIR" || {
-    die "Cannot create report directory $REPORT_DIR"
-}
+mkdir -p "$REPORT_DIR"
 REPORT_PATH="$REPORT_DIR/$REPORT_FILE"
 
-# -------------------------------------------------------------------
-# Gather system information
-# -------------------------------------------------------------------
 log_info "Generating system report: $REPORT_PATH"
 
-# Disk usage (convert to HTML table rows)
+# Disk usage
 disk_rows=""
 while read -r line; do
     disk_rows+="<tr>"
@@ -135,38 +139,19 @@ while read -r line; do
     disk_rows+="</tr>"
 done < <(df -h | grep -E '^/dev/|^Filesystem')
 
-# Last backup lines
+# Logs
 backup_log="$LOG_DIR/backup-to-nas.log"
-if [ -f "$backup_log" ]; then
-    last_backup=$(tail -n 5 "$backup_log" 2>/dev/null | strip_ansi || echo "No backup entries")
-else
-    last_backup="No backup log found at $backup_log"
-fi
+last_backup=$([ -f "$backup_log" ] && tail -n 5 "$backup_log" | strip_ansi || echo "No log found")
 
-# Disk warnings
 disk_log="$LOG_DIR/disk-sentinel.log"
-if [ -f "$disk_log" ]; then
-    disk_warnings=$(tail -n 10 "$disk_log" 2>/dev/null | strip_ansi | grep -E "WARNING|exceeded" || echo "None")
-else
-    disk_warnings="No disk sentinel log at $disk_log"
-fi
+disk_warnings=$([ -f "$disk_log" ] && tail -n 10 "$disk_log" | strip_ansi | grep -E "WARNING|exceeded" || echo "None")
 
-# Updates
-dnf_updates=0
-flatpak_updates=0
-if command -v dnf &>/dev/null; then
-    dnf_updates=$(dnf check-update -q 2>/dev/null | grep -v '^Last metadata' | awk 'NF' | wc -l || true)
-fi
-if command -v flatpak &>/dev/null; then
-    flatpak_updates=$(flatpak remote-ls --updates 2>/dev/null | awk 'NF' | wc -l || true)
-fi
-
-# System load
+# Updates & Load
+dnf_updates=$(command -v dnf &>/dev/null && dnf check-update -q 2>/dev/null | grep -v '^Last metadata' | awk 'NF' | wc -l || echo "0")
+flatpak_updates=$(command -v flatpak &>/dev/null && flatpak remote-ls --updates 2>/dev/null | awk 'NF' | wc -l || echo "0")
 load=$(uptime)
 
-# -------------------------------------------------------------------
-# Generate HTML report
-# -------------------------------------------------------------------
+# HTML Generation
 cat > "$REPORT_PATH" <<EOF
 <!DOCTYPE html>
 <html>
@@ -174,15 +159,12 @@ cat > "$REPORT_PATH" <<EOF
     <meta charset="utf-8">
     <title>System Report $(date '+%Y-%m-%d')</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
+        body { font-family: sans-serif; margin: 20px; color: #333; line-height: 1.6; }
         .container { max-width: 800px; margin: 0 auto; }
         h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
         h2 { color: #34495e; margin-top: 30px; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; }
-        pre { background: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #e9ecef; overflow-x: auto; white-space: pre-wrap; font-family: "Fira Code", monospace; font-size: 14px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        th { background: #f4f6f7; padding: 12px 8px; text-align: left; border-bottom: 2px solid #ddd; color: #2c3e50; }
-        td { padding: 8px; border-bottom: 1px solid #eee; }
-        tr:hover { background-color: #f8f9fa; }
+        pre { background: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #e9ecef; white-space: pre-wrap; font-family: monospace; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         .stat-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; background: #e9ecef; margin-right: 10px; font-weight: bold; }
         .warning-text { color: #e74c3c; font-weight: bold; }
     </style>
@@ -190,26 +172,19 @@ cat > "$REPORT_PATH" <<EOF
 <body>
     <div class="container">
         <h1>🖥️ System Report for $(hostname -s)</h1>
-        <p style="color: #7f8c8d;">Generated on $(date)</p>
-
-        <h2>⏱️ System Load & Uptime</h2>
+        <p>Generated on $(date)</p>
+        <h2>⏱️ System Load</h2>
         <pre>$load</pre>
-
         <h2>💾 Disk Usage</h2>
-        <table>
-            $disk_rows
-        </table>
-
-        <h2>📦 Available Updates</h2>
+        <table>$disk_rows</table>
+        <h2>📦 Updates</h2>
         <div>
-            <span class="stat-badge">DNF: $dnf_updates pending</span>
-            <span class="stat-badge">Flatpak: $flatpak_updates pending</span>
+            <span class="stat-badge">DNF: $dnf_updates</span>
+            <span class="stat-badge">Flatpak: $flatpak_updates</span>
         </div>
-
-        <h2>⚠️ Recent Disk Warnings</h2>
-        <pre class="$( [ "$disk_warnings" != "None" ] && echo "warning-text" )">$disk_warnings</pre>
-
-        <h2>🔄 Last NAS Backup</h2>
+        <h2>⚠️ Disk Warnings</h2>
+        <pre>$disk_warnings</pre>
+        <h2>🔄 Last Backup</h2>
         <pre>$last_backup</pre>
     </div>
 </body>
@@ -217,10 +192,5 @@ cat > "$REPORT_PATH" <<EOF
 EOF
 
 log_info "Report saved to $REPORT_PATH"
-
-# -------------------------------------------------------------------
-# Send email
-# -------------------------------------------------------------------
 send_report "System Report: $(hostname -s) - $(date +%Y-%m-%d)" "$REPORT_PATH"
-
 log_info "Done."

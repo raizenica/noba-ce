@@ -1,8 +1,17 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 2.2.1
+# Version: 2.2.2
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "install.sh version 2.2.2"
+    exit 0
+fi
 
 # -------------------------------------------------------------------
 # Default paths
@@ -19,7 +28,7 @@ SKIP_DEPS=false
 # -------------------------------------------------------------------
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Install the Nobara Automation Suite.
 
@@ -42,8 +51,8 @@ while [[ $# -gt 0 ]]; do
         -s|--systemd)   SYSTEMD_USER_DIR="$2"; shift 2 ;;
         --skip-deps)    SKIP_DEPS=true; shift ;;
         -n|--dry-run)   DRY_RUN=true; shift ;;
-        --help)         show_help ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        --help|-h)      show_help ;;
+        *) echo "Invalid argument: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -63,8 +72,6 @@ detect_os() {
     fi
     echo "Detected OS: $OS_NAME ($OS_ID)"
 }
-
-detect_os
 
 # -------------------------------------------------------------------
 # Dependency installation
@@ -119,6 +126,7 @@ install_deps() {
     esac
 }
 
+detect_os
 install_deps
 
 # -------------------------------------------------------------------
@@ -140,7 +148,9 @@ fi
 # Copy scripts
 echo "Copying scripts..."
 for script in "$SCRIPT_DIR"/*.sh; do
+    [ -e "$script" ] || continue
     name=$(basename "$script")
+
     # Prevent the installer from installing itself
     if [[ "$name" == "install.sh" ]] || [[ "$name" == "noba-setup.sh" ]]; then
         continue

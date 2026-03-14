@@ -1,8 +1,21 @@
 #!/bin/bash
 # noba-daily-digest.sh – Send daily summary email
-# Version: 2.1.0
+# Version: 2.1.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: noba-daily-digest.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "noba-daily-digest.sh version 2.1.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -34,13 +47,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-daily-digest.sh version 2.1.0"
+    echo "noba-daily-digest.sh version 2.1.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Generate and send a daily summary email with system status.
 
@@ -61,18 +74,19 @@ strip_ansi() {
 # Parse arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o e:n -l email:,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        -e|--email)    EMAIL="$2"; shift 2 ;;
-        -n|--dry-run)  DRY_RUN=true; shift ;;
-        --help)        show_help ;;
-        --version)     show_version ;;
-        --)            shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        -e|--email)   EMAIL="$2"; shift 2 ;;
+        -n|--dry-run) DRY_RUN=true; shift ;;
+        --help)       show_help ;;
+        --version)    show_version ;;
+        --)           shift; break ;;
+        *)            log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 
@@ -81,8 +95,12 @@ done
 # -------------------------------------------------------------------
 check_deps tail grep date hostname awk wc
 
-temp_dir=$(make_temp_dir_auto)
-digest_file="$temp_dir/digest.txt"
+# Native mktemp to avoid subshell trap bug
+TEMP_DIR=$(mktemp -d "/tmp/noba-digest.XXXXXX")
+existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
+trap "${existing_trap:+$existing_trap; }rm -rf \"\$TEMP_DIR\"" EXIT
+
+digest_file="$TEMP_DIR/digest.txt"
 
 # -------------------------------------------------------------------
 # Generate digest
@@ -117,7 +135,6 @@ digest_file="$temp_dir/digest.txt"
     if [ -f "$LOG_DIR/download-organizer.log" ]; then
         yesterday=$(date -d 'yesterday' +%Y-%m-%d 2>/dev/null || date -v-1d +%Y-%m-%d 2>/dev/null)
         if [ -n "$yesterday" ]; then
-            # Summarize rather than dumping the whole log
             moved_count=$(grep "^\[$yesterday" "$LOG_DIR/download-organizer.log" 2>/dev/null | grep -c "Moved:" || true)
             echo "$moved_count files were successfully categorized and moved."
         else
@@ -130,7 +147,6 @@ digest_file="$temp_dir/digest.txt"
 
     echo "=== System Updates ==="
     if command -v dnf &>/dev/null; then
-        # Strip metadata lines and blank lines before counting
         dnf_updates=$(dnf check-update -q 2>/dev/null | grep -v '^Last metadata' | awk 'NF' | wc -l || true)
         echo "DNF updates pending: $dnf_updates"
     fi

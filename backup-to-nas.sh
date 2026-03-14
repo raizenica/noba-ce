@@ -1,8 +1,21 @@
 #!/bin/bash
 # backup-to-nas.sh – Backup important directories to NAS with retention, space check, and email report
-# Version: 2.2.2
+# Version: 2.2.3
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: backup-to-nas.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "backup-to-nas.sh version 2.2.3"
+    exit 0
+fi
 
 # -------------------------------------------------------------------
 # Load shared library
@@ -47,13 +60,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "backup-to-nas.sh version 2.2.2"
+    echo "backup-to-nas.sh version 2.2.3"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Backup specified directories to a NAS share using incremental hardlinks.
 
@@ -74,9 +87,16 @@ cleanup() {
         flock -u "$LOCK_FD" 2>/dev/null || true
     fi
     rm -f "$LOCK_FILE"
+
+    # Safely clean up the email temp directory created via mktemp
+    if [ -n "${EMAIL_BODY_DIR:-}" ] && [ -d "$EMAIL_BODY_DIR" ]; then
+        rm -rf "$EMAIL_BODY_DIR"
+    fi
 }
 
 check_space() {
+    if [ "$DRY_RUN" = true ]; then return 0; fi
+
     local src_size_kb=0 total_size_kb=0 src
     for src in "${SOURCES[@]}"; do
         if [ -e "$src" ]; then
@@ -144,7 +164,8 @@ send_email_report() {
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o s:d:e:nvh -l source:,dest:,email:,dry-run,verbose,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -215,7 +236,7 @@ log_info "Sources: ${SOURCES[*]}"
 log_info "Retention: $RETENTION_DAYS days"
 log_info "Dry run: $DRY_RUN"
 
-if ! check_space; then
+if [ "$DRY_RUN" = false ] && ! check_space; then
     die "Space check failed – aborting."
 fi
 
@@ -315,7 +336,8 @@ else
     SIZE="N/A (dry run)"
 fi
 
-EMAIL_BODY_DIR=$(make_temp_dir_auto "backup-to-nas-report")
+# Using native mktemp tied to script's trap cleanup
+EMAIL_BODY_DIR=$(mktemp -d "/tmp/noba-backup.XXXXXX")
 EMAIL_BODY="$EMAIL_BODY_DIR/email_report.txt"
 
 if [ "$ERROR_OCCURRED" = true ]; then

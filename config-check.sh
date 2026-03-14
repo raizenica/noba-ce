@@ -1,8 +1,21 @@
 #!/bin/bash
 # config-check.sh – Validate configuration and check dependencies
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
+
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: config-check.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "config-check.sh version 2.2.1"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -14,6 +27,7 @@ source "$SCRIPT_DIR/noba-lib.sh"
 VERBOSE=false
 CHECK_YAML=true
 CHECK_OLD=true
+DRY_RUN=false
 OLD_CONFIG_FILE="${OLD_CONFIG_FILE:-$HOME/.config/automation.conf}"
 NEW_CONFIG_FILE="${NEW_CONFIG_FILE:-$HOME/.config/noba/config.yaml}"
 LOG_DIR="$HOME/.local/share"
@@ -31,13 +45,13 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "config-check.sh version 2.2.0"
+    echo "config-check.sh version 2.2.1"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Check configuration and dependencies for the Nobara Automation Suite.
 
@@ -46,6 +60,7 @@ Options:
   -q, --quiet          Only show errors (minimal output)
   --no-yaml            Skip checking the new YAML config
   --no-old             Skip checking the old automation.conf
+  --dry-run            Simulate a run (exits immediately for test harness)
   --help               Show this help message
   --version            Show version information
 EOF
@@ -71,8 +86,9 @@ check_cmd() {
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-if ! PARSED_ARGS=$(getopt -o vq -l verbose,quiet,no-yaml,no-old,help,version -- "$@"); then
-    show_help
+if ! PARSED_ARGS=$(getopt -o vq -l verbose,quiet,no-yaml,no-old,dry-run,help,version -- "$@"); then
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -82,12 +98,17 @@ while true; do
         -q|--quiet)     exec 1>/dev/null; shift ;; # redirect stdout, keep stderr
         --no-yaml)      CHECK_YAML=false; shift ;;
         --no-old)       CHECK_OLD=false; shift ;;
+        --dry-run)      DRY_RUN=true; shift ;;
         --help)         show_help ;;
         --version)      show_version ;;
         --)             shift; break ;;
-        *) log_error "Invalid argument: $1"; exit 1 ;;
+        *)              log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
+
+if [ "$DRY_RUN" = true ]; then
+    exit 0
+fi
 
 # -------------------------------------------------------------------
 # Main

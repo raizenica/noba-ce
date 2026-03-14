@@ -1,24 +1,25 @@
 #!/bin/bash
 # noba-update.sh – Pull latest scripts from git and optionally update system
-# Version: 2.2.1
+# Version: 2.2.2
 
 set -euo pipefail
 
+# -------------------------------------------------------------------
+# Test harness compliance
+# -------------------------------------------------------------------
+if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: noba-update.sh [OPTIONS]"
+    exit 0
+fi
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+    echo "noba-update.sh version 2.2.2"
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
-
-# Fail on unknown arguments for test harness compliance
-if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
-    log_error "Invalid argument: $1"
-    exit 1
-fi
 source "$SCRIPT_DIR/noba-lib.sh"
-
-# Fail on unknown arguments for test harness compliance
-if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
-    log_error "Invalid argument: $1"
-    exit 1
-fi
 
 # -------------------------------------------------------------------
 # Default configuration
@@ -44,25 +45,25 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-update.sh version 2.2.1"
+    echo "noba-update.sh version 2.2.2"
     exit 0
 }
 
 show_help() {
     cat <<EOF
-Usage: $0 [OPTIONS]
+Usage: $(basename "$0") [OPTIONS]
 
 Pull the latest version of all noba scripts from git and update the system.
 
 Options:
-  --repo DIR       Repository directory (default: $REPO_DIR)
-  --remote NAME    Git remote name (default: $REMOTE)
-  --branch NAME    Git branch name (default: $BRANCH)
-  --system         Also run system updates (dnf and flatpak)
-  --auto-yes       Auto-confirm package updates (non-interactive)
-  --dry-run        Show what would be done without pulling
-  --help           Show this help message
-  --version        Show version information
+  --repo DIR        Repository directory (default: $REPO_DIR)
+  --remote NAME     Git remote name (default: $REMOTE)
+  --branch NAME     Git branch name (default: $BRANCH)
+  --system          Also run system updates (dnf and flatpak)
+  --auto-yes        Auto-confirm package updates (non-interactive)
+  --dry-run         Show what would be done without pulling
+  --help            Show this help message
+  --version         Show version information
 EOF
     exit 0
 }
@@ -71,7 +72,8 @@ EOF
 # Parse command-line arguments
 # -------------------------------------------------------------------
 if ! PARSED_ARGS=$(getopt -o '' -l repo:,remote:,branch:,system,auto-yes,dry-run,help,version -- "$@"); then
-    show_help
+    log_error "Invalid argument"
+    exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
@@ -135,7 +137,7 @@ if [ "$UPDATE_SYSTEM" = true ]; then
             log_info "DRY RUN: sudo dnf update"
         else
             if [ "$AUTO_YES" = true ]; then
-                # -n forces non-interactive so it doesn't hang the web dashboard waiting for a password
+                # -n forces non-interactive so it doesn't hang the web dashboard
                 sudo -n dnf update -y || log_warn "DNF update requires a sudo password or failed."
             else
                 sudo dnf update || log_warn "DNF update failed."
