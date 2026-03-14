@@ -1,6 +1,6 @@
 #!/bin/bash
 # noba – Central command for Nobara automation suite
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
 
@@ -41,7 +41,7 @@ declare -A ALIASES=(
 # Core Functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "Nobara Automation Suite (noba) version 2.2.0"
+    echo "Nobara Automation Suite (noba) version 2.2.1"
     exit 0
 }
 
@@ -87,7 +87,7 @@ cmd_list() {
            [[ "$base_name" != "noba-setup.sh" ]] && \
            [[ "$base_name" != "noba-completion.sh" ]] && \
            ! printf "%s\n" "${ALIASES[@]}" | grep -qx "$base_name"; then
-            echo " - $base_name"
+             echo " - $base_name"
         fi
     done
 }
@@ -132,15 +132,18 @@ case "$cmd" in
         ;;
     config)
         cmd_config "$@"
+        exit 0
         ;;
     list)
         cmd_list
+        exit 0
         ;;
     doctor)
         exec "$SCRIPT_DIR/config-check.sh" "$@"
         ;;
     help|--help|-h)
         show_help
+        exit 0
         ;;
     version|--version|-v)
         show_version
