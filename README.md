@@ -1,4 +1,4 @@
-# Nobara Automation Suite
+# Noba Automation Suite
 
 A collection of Bash scripts to automate common tasks on Nobara Linux (and other Fedora‑based systems).  
 All scripts share a common library (`noba-lib.sh`) and a central YAML configuration file.
