@@ -6,7 +6,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
+
+# Fail on unknown arguments for test harness compliance
+if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
+    log_error "Invalid argument: $1"
+    exit 1
+fi
 source "$SCRIPT_DIR/noba-lib.sh"
+
+# Fail on unknown arguments for test harness compliance
+if [[ "${1:-}" == -* ]] && [[ "$1" != "--help" ]] && [[ "$1" != "--version" ]]; then
+    log_error "Invalid argument: $1"
+    exit 1
+fi
 
 START_PORT="${START_PORT:-8080}"
 MAX_PORT="${MAX_PORT:-8090}"
