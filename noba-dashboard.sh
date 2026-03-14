@@ -1,11 +1,11 @@
 #!/bin/bash
 # noba-dashboard.sh – Detailed terminal dashboard for Nobara automation
-# Version: 2.0.0
+# Version: 2.0.1
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
+# shellcheck source=./noba-lib.sh
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -26,7 +26,7 @@ REFRESH_INTERVAL="$(get_config ".dashboard.refresh_interval" "$REFRESH_INTERVAL"
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-dashboard.sh version 2.0.0 (noba-lib version $NOBA_LIB_VERSION)"
+    echo "noba-dashboard.sh version 2.0.1 (noba-lib version $NOBA_LIB_VERSION)"
     exit 0
 }
 
@@ -86,14 +86,18 @@ fi
 
 # Print a section header using library colors
 section() {
-    printf "${CYAN}─── %s ───────────────────────────────────────────────────${NC}\n" "$1"
+    printf "%b─── %s ───────────────────────────────────────────────────%b\n" "$CYAN" "$1" "$NC"
 }
 
 # System info
 system_info() {
     section "System"
     printf "  Hostname : %s\n" "$(hostname)"
-    printf "  Uptime   : %s\n" "$(uptime -p | sed 's/up //')"
+
+    local raw_uptime
+    raw_uptime=$(uptime -p)
+    printf "  Uptime   : %s\n" "${raw_uptime//up /}"
+
     printf "  Load     : %s\n" "$(uptime | awk -F'load average:' '{print $2}')"
     local mem_total mem_used mem_percent
     mem_total=$(free -b | awk '/^Mem:/ {print $2}')
@@ -120,7 +124,7 @@ disk_usage() {
         else
             color="$GREEN"
         fi
-        printf "  ${color}%-20s${NC} : %s used (%s/%s)\n" "$mount" "$use_percent" "$used" "$size"
+        printf "  %b%-20s%b : %s used (%s/%s)\n" "$color" "$mount" "$NC" "$use_percent" "$used" "$size"
     done
 }
 
@@ -132,22 +136,24 @@ backup_status() {
         return
     fi
 
-    local last_complete last_line timestamp
+    local last_complete last_line timestamp status
     last_complete=$(grep -E "Backup finished" "$BACKUP_LOG" 2>/dev/null | tail -1 || true)
+
     if [[ -n "$last_complete" ]]; then
         timestamp=$(echo "$last_complete" | sed -n 's/.*at \(.*\) =.*/\1/p')
         if [[ -n "$timestamp" ]]; then
-            printf "  Last backup: ${GREEN}%s${NC}\n" "$timestamp"
+            printf "  Last backup: %b%s%b\n" "$GREEN" "$timestamp" "$NC"
         else
-            printf "  Last backup: ${GREEN}recently${NC} (no timestamp)\n"
+            printf "  Last backup: %brecently%b (no timestamp)\n" "$GREEN" "$NC"
         fi
-        printf "  Status      : ${GREEN}✓ OK${NC}\n"
+        printf "  Status     : %b✓ OK%b\n" "$GREEN" "$NC"
     else
         if [[ -s "$BACKUP_LOG" ]]; then
             last_line="$(strip_ansi "$(tail -1 "$BACKUP_LOG" 2>/dev/null)")"
         else
             last_line=""
         fi
+
         if [[ -n "$last_line" ]]; then
             if grep -qi "error" <<< "$last_line"; then
                 status="${RED}✗ ERROR${NC}"
@@ -160,7 +166,7 @@ backup_status() {
             status="${YELLOW}? UNKNOWN${NC}"
             last_line="(empty log)"
         fi
-        printf "  Last run    : %s\n" "$status"
+        printf "  Last run    : %b\n" "$status"
         printf "  Last log line: %s\n" "$last_line"
     fi
 }
@@ -182,7 +188,7 @@ organizer_status() {
     fi
     if [[ -f "$UNDO_LOG" && -s "$UNDO_LOG" ]]; then
         undo_count=$(wc -l < "$UNDO_LOG")
-        printf "  ${YELLOW}Undo log: %s pending actions${NC}\n" "$undo_count"
+        printf "  %bUndo log: %s pending actions%b\n" "$YELLOW" "$undo_count" "$NC"
     fi
 }
 
@@ -255,6 +261,7 @@ updates_status() {
 
 # Strip ANSI codes (reuse from library? Not there, so define locally)
 strip_ansi() {
+    # shellcheck disable=SC2001
     sed 's/\x1b\[[0-9;]*m//g' <<< "$1"
 }
 
@@ -264,9 +271,9 @@ render_dashboard() {
         clear 2>/dev/null || true
     fi
 
-    printf "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}\n"
-    printf "${BLUE}║                 NOBA DASHBOARD – %s              ║${NC}\n" "$(date '+%Y-%m-%d %H:%M')"
-    printf "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}\n"
+    printf "%b╔════════════════════════════════════════════════════════════╗%b\n" "$BLUE" "$NC"
+    printf "%b║                  NOBA DASHBOARD – %s               ║%b\n" "$BLUE" "$(date '+%Y-%m-%d %H:%M')" "$NC"
+    printf "%b╚════════════════════════════════════════════════════════════╝%b\n" "$BLUE" "$NC"
 
     system_info
     echo ""
@@ -282,7 +289,7 @@ render_dashboard() {
     echo ""
     updates_status
 
-    printf "${BLUE}────────────────────────────────────────────────────────────${NC}\n"
+    printf "%b────────────────────────────────────────────────────────────%b\n" "$BLUE" "$NC"
 }
 
 # -------------------------------------------------------------------

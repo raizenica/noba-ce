@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
 
@@ -55,6 +55,7 @@ detect_os() {
         # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID="$ID"
+        # shellcheck disable=SC2153
         OS_NAME="$NAME"
     else
         OS_ID="unknown"
@@ -219,9 +220,11 @@ if [ "$DRY_RUN" = false ] && [ -f "$INSTALL_DIR/noba-completion.sh" ]; then
     if grep -qF "$COMPLETION_STR" "$BASHRC" 2>/dev/null; then
         echo "Bash completions already wired in $BASHRC."
     else
-        echo "" >> "$BASHRC"
-        echo "# Nobara Automation Suite Completions" >> "$BASHRC"
-        echo "$COMPLETION_STR" >> "$BASHRC"
+        {
+            echo ""
+            echo "# Nobara Automation Suite Completions"
+            echo "$COMPLETION_STR"
+        } >> "$BASHRC"
         echo "Added Bash completions to $BASHRC."
     fi
 fi

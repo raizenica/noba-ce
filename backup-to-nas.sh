@@ -317,7 +317,7 @@ else
     SIZE="N/A (dry run)"
 fi
 
-EMAIL_BODY=$(make_temp_dir_auto)/email_report.txt
+EMAIL_BODY=$(make_temp_dir_auto "backup-to-nas")/email_report.txt
 
 if [ "$ERROR_OCCURRED" = true ]; then
     subject_prefix="❌ BACKUP FAILED"

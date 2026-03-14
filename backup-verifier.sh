@@ -150,7 +150,7 @@ log_debug "Selected ${#SELECTED[@]} files for verification"
 # -------------------------------------------------------------------
 # Setup Reporting
 # -------------------------------------------------------------------
-TEMP_DIR=$(make_temp_dir_auto)
+TEMP_DIR=$(make_temp_dir_auto "backup-to-nas")
 REPORT_FILE="$TEMP_DIR/report.txt"
 
 cat > "$REPORT_FILE" <<EOF
