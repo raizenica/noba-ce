@@ -1,11 +1,11 @@
 #!/bin/bash
 # noba-tui.sh – Terminal UI (dialog) for launching Nobara scripts
-# Version: 2.2.0
+# Version: 2.2.1
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
+# shellcheck source=./noba-lib.sh
 source "$SCRIPT_DIR/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -24,7 +24,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-tui.sh version 2.2.0"
+    echo "noba-tui.sh version 2.2.1"
     exit 0
 }
 
@@ -67,7 +67,7 @@ if [ $# -gt 0 ]; then
     case "$1" in
         --help)    show_help ;;
         --version) show_version ;;
-        *)         log_error "Unknown option: $1"; show_help ;;
+        *)         log_error "Unknown option: $1"; exit 1 ;;
     esac
 fi
 
@@ -86,7 +86,8 @@ TEMP_DIR=$(make_temp_dir_auto "noba-tui.XXXXXXXXXX")
 # Main menu
 # -------------------------------------------------------------------
 while true; do
-    choice=$($DIALOG --clear --title "Nobara Automation Suite" \
+    # If user presses ESC or Cancel, exit loop directly via the if statement
+    if ! choice=$($DIALOG --clear --title "Nobara Automation Suite" \
         --cancel-label "Exit" \
         --menu "Choose a script to execute:" 22 65 15 \
         "Backup"      "Run backup-to-nas.sh" \
@@ -104,10 +105,7 @@ while true; do
         "CronSetup"   "Run noba-cron-setup.sh" \
         "MOTD"        "Show motd-generator.sh" \
         "Web"         "Start noba-web.sh dashboard" \
-        "Quit"        "Exit TUI" 3>&1 1>&2 2>&3 3>&-)
-
-    # If user presses ESC or Cancel, exit loop
-    if [ $? -ne 0 ]; then
+        "Quit"        "Exit TUI" 3>&1 1>&2 2>&3 3>&-); then
         break
     fi
 

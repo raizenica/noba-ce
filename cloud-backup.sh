@@ -18,6 +18,7 @@ RCLONE_OPTS="-v --checksum --progress --fast-list"
 DRY_RUN=false
 LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
 LOG_FILE="$LOG_DIR/cloud-backup.log"
+# shellcheck disable=SC1090
 STATE_FILE="$LOG_DIR/cloud-backup.state"
 LOCK_FILE="/tmp/cloud-backup.lock"
 
