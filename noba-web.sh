@@ -49,7 +49,7 @@ find_free_port() {
     local start="$1" max="$2" port
     if command -v ss &>/dev/null; then
         for port in $(seq "$start" "$max"); do
-            if ! ss -tuln 2>/dev/null | grep -q ":$port[[:space:]]"; then echo "$port"; return 0; fi
+            if ! ss -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then echo "$port"; return 0; fi
         done
     elif command -v lsof &>/dev/null; then
         for port in $(seq "$start" "$max"); do
