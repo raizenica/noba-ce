@@ -158,7 +158,7 @@ if [ "$DRY_RUN" = false ]; then
 
     echo ""
     log_info "Done! To enable and start all created timers, you can run:"
-    echo -e "${CYAN}  for timer in ${!TIMERS[@]}; do systemctl --user enable --now \$timer.timer; done${NC}"
+    echo -e "${CYAN}  for timer in ${!TIMERS[*]}; do systemctl --user enable --now \\"
     echo ""
     log_info "To view active timers:"
     echo -e "${CYAN}  systemctl --user list-timers${NC}"
