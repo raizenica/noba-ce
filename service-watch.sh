@@ -91,7 +91,7 @@ while true; do
         --help)         show_help ;;
         --version)      show_version ;;
         --)             shift; break ;;
-        *)              break ;;
+        *) log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 

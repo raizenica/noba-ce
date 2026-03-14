@@ -126,7 +126,7 @@ while true; do
         --help)             usage ;;
         --version)          show_version ;;
         --)                 shift; break ;;
-        *)                  break ;;
+        *) log_error "Invalid argument: $1"; exit 1 ;;
     esac
 done
 
