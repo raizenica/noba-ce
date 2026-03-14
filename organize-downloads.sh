@@ -15,6 +15,7 @@ DOWNLOAD_DIR="${DOWNLOAD_DIR:-$HOME/Downloads}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/download-organizer.log}"
 MIN_AGE_MINUTES=5
 DRY_RUN=false
+# shellcheck disable=SC2034
 VERBOSE=false
 
 # Category definitions

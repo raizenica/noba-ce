@@ -17,6 +17,7 @@ DEFAULT_TARGETS=("/" "/home")
 CLEANUP="${CLEANUP:-true}"
 EMAIL="${EMAIL:-strikerke@gmail.com}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/disk-sentinel.log}"
+# shellcheck disable=SC2034
 DRY_RUN=false
 # Filesystem types to ignore (regex)
 IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc|overlay)$"

@@ -17,6 +17,7 @@ EMAIL="${EMAIL:-strikerke@gmail.com}"
 CHECKSUM_CMD="md5sum"
 DRY_RUN=false
 QUIET=false
+# shellcheck disable=SC2034
 VERBOSE=false
 COMPARE_ORIGINAL=false
 SEND_EMAIL=false
