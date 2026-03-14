@@ -1,6 +1,6 @@
 #!/bin/bash
 # disk-sentinel.sh – Monitor disk space and alert when threshold exceeded
-# Version: 2.2.1
+# Version: 2.2.2
 
 set -euo pipefail
 
@@ -18,8 +18,7 @@ CLEANUP="${CLEANUP:-true}"
 EMAIL="${EMAIL:-strikerke@gmail.com}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/disk-sentinel.log}"
 DRY_RUN=false
-# shellcheck disable=SC2034
-VERBOSE=false
+export VERBOSE=false
 # Filesystem types to ignore (regex)
 IGNORE_FS="^(proc|sysfs|tmpfs|devpts|securityfs|fusectl|debugfs|pstore|hugetlbfs|mqueue|configfs|devtmpfs|binfmt_misc|overlay)$"
 
@@ -50,7 +49,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "disk-sentinel.sh version 2.2.1"
+    echo "disk-sentinel.sh version 2.2.2"
     exit 0
 }
 
@@ -126,7 +125,7 @@ while true; do
     case "$1" in
         -t|--threshold) THRESHOLD="$2"; shift 2 ;;
         -n|--dry-run)   DRY_RUN=true; shift ;;
-        -v|--verbose)   VERBOSE=true; shift ;;
+        -v|--verbose)   export VERBOSE=true; shift ;;
         --help)         show_help ;;
         --version)      show_version ;;
         --)             shift; break ;;
