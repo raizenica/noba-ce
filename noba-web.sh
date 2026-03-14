@@ -1136,10 +1136,62 @@ _cache = TTLCache()
 
 # ── Global streaming state (lock-protected) ───────────────────────────────────
 _state_lock  = threading.Lock()
+
+
+
+
+
 _cpu_history = deque(maxlen=20)
 _cpu_prev    = None          # (total, idle)
 _net_prev    = None          # (rx_bytes, tx_bytes)
 _net_prev_t  = None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def run(cmd, timeout=3, cache_key=None, cache_ttl=30, ignore_rc=False):
@@ -1214,6 +1266,9 @@ def get_net_io():
 
 def ping_host(ip):
     ip = ip.strip()
+
+
+
     try:
         t0 = time.time()
         r  = subprocess.run(['ping', '-c', '1', '-W', '1', ip],
@@ -1225,6 +1280,9 @@ def ping_host(ip):
 
 def get_service_status(svc):
     svc = svc.strip()
+
+
+
     for scope, is_user in ((['--user'], True), ([], False)):
         cmd = ['systemctl'] + scope + ['show', '-p', 'ActiveState,LoadState', svc]
         out = run(cmd, timeout=2)
@@ -1238,6 +1296,12 @@ def get_service_status(svc):
                     return 'timer-active', is_user
             return state, is_user
     return 'not-found', False
+
+
+
+
+
+
 
 def get_battery():
     bats = glob.glob('/sys/class/power_supply/BAT*')
@@ -1295,6 +1359,9 @@ def get_containers():
 def get_pihole(url, token):
     if not url:
         return None
+
+
+
     base = url if url.startswith('http') else 'http://' + url
     base = base.rstrip('/').replace('/admin', '')
 
@@ -1317,6 +1384,7 @@ def get_pihole(url, token):
         dom  = data.get('gravity', {}).get('domains_being_blocked', 0)
         return {'queries': q, 'blocked': b, 'percent': round(p, 1),
                 'status': s, 'domains': f'{dom:,}'}
+
     except Exception:
         pass
 
@@ -1331,6 +1399,8 @@ def get_pihole(url, token):
             'status':  data.get('status', 'enabled'),
             'domains': f"{data.get('domains_being_blocked', 0):,}"
         }
+
+
     except Exception:
         return None
 
@@ -1374,6 +1444,7 @@ def collect_stats(qs):
     cpu_pct = get_cpu_percent()
     stats['cpuPercent'] = cpu_pct
     stats['cpuHistory'] = list(_cpu_history)
+
 
     # Network I/O
     rx_bps, tx_bps = get_net_io()
