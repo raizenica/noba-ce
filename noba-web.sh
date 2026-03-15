@@ -1,18 +1,20 @@
 #!/bin/bash
-# noba-web.sh – Nobara Command Center v8.2.0
-# New: Simple token authentication with login page.
-# Improvements over v8.1.0:
-#   - Added --set-password to configure credentials.
-#   - Login modal, token storage in localStorage.
-#   - Backend validates token for all endpoints.
+# noba-web.sh – Nobara Command Center v8.3.0
+# New: Logout button, persistent settings in YAML config (~/.config/noba/config.yaml)
+# Also creates a starter YAML on first run or when --set-password is used.
+# Improvements over v8.2.0:
+#   - Added logout functionality
+#   - Settings are now saved to YAML file and survive browser resets
+#   - Settings are shared with other noba scripts
+#   - Creates default YAML if missing
 
 set -euo pipefail
-set -x                          # print every command before executing
+# set -x                          # comment this out for production
 trap 'rc=$?; echo "Exiting with code $rc at line $LINENO" >&2' EXIT
 
 # ── Test harness compliance ─────────────────────────────────────────────────
 if [[ "${1:-}" == "--help"           ]]; then echo "Usage: noba-web.sh [OPTIONS]"; exit 0; fi
-if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 8.2.0"; exit 0; fi
+if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 8.3.0"; exit 0; fi
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +38,99 @@ VERBOSE=false
 HOST="${HOST:-0.0.0.0}"
 SET_PASSWORD=false
 
-show_version() { echo "noba-web.sh version 8.2.0"; exit 0; }
+# Path to main noba YAML config
+NOBA_YAML="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
+
+# Function to create a minimal default YAML if it doesn't exist
+create_default_yaml() {
+    if [[ ! -f "$NOBA_YAML" ]]; then
+        log_info "Creating default YAML config at $NOBA_YAML"
+        mkdir -p "$(dirname "$NOBA_YAML")"
+        cat > "$NOBA_YAML" <<EOF
+# Nobara Automation Suite configuration
+email: "your@email.com"
+
+backup:
+  dest: "/mnt/backup"
+  sources:
+    - "/home/raizen/Documents"
+    - "/home/raizen/Pictures"
+    - "/home/raizen/.config"
+  retention_days: 7
+  space_margin_percent: 10
+  min_free_space_gb: 5
+
+disk:
+  threshold: 85
+  targets:
+    - "/"
+    - "/home"
+  cleanup_enabled: true
+
+downloads:
+  dir: "/home/raizen/Downloads"
+  min_age_minutes: 5
+  dated_subfolders: true
+
+checksum:
+  default_algo: "sha256"
+
+images2pdf:
+  default_paper_size: "A4"
+  default_orientation: "portrait"
+  default_quality: 92
+
+logs:
+  dir: "/home/raizen/.local/share/noba"
+  log_rotation:
+    days: 30
+
+update:
+  repo_dir: "/home/raizen/.local/bin"
+  remote: "origin"
+  branch: "main"
+
+motd:
+  quote_file: "/home/raizen/.config/quotes.txt"
+  show_updates: true
+  show_backup: true
+
+services:
+  monitor:
+    - sshd
+    - docker
+    - NetworkManager
+  notify: true
+
+cron:
+  scripts:
+    - backup-to-nas.sh
+    - disk-sentinel.sh
+    - organize-downloads.sh
+
+cloud:
+  remote: "mycloud:backups/raizen"
+  rclone_ops: "-v --checksum --progress"
+
+web:
+  start_port: 8080
+  max_port: 8090
+  service_list:
+    - backup-to-nas.service
+    - organize-downloads.service
+    - noba-web.service
+    - syncthing.service
+  piholeUrl: "dnsa01.vannieuwenhove.org"
+  piholeToken: ""
+  monitoredServices: "backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service"
+  radarIps: "192.168.100.1, 1.1.1.1, 8.8.8.8"
+  bookmarksStr: "TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server, TrueNAS (vdhnas)|http://vdhnas.vannieuwenhove.org|fa-server, Pi-Hole|http://dnsa01.vannieuwenhove.org/admin|fa-shield-alt, Home Assistant|http://homeassistant.local:8123|fa-home, ROMM|http://romm.local|fa-gamepad, Prowlarr|http://localhost:9696|fa-search, ASUS Router|http://192.168.100.1|fa-network-wired"
+EOF
+        log_success "Default YAML created. Please edit it to match your setup."
+    fi
+}
+
+show_version() { echo "noba-web.sh version 8.3.0"; exit 0; }
 
 show_help() {
     cat <<EOF
@@ -123,12 +217,14 @@ with open(sys.argv[1], 'w') as f:
     f.write(f'{sys.argv[3]}:{salt}:{hash}')
 " "$HOME/.config/noba-web/auth.conf" "$password" "$username"
     echo "Credentials saved to ~/.config/noba-web/auth.conf"
+    # Also create default YAML if missing
+    create_default_yaml
     exit 0
 fi
 
 if [[ "$KILL_ONLY" == true ]]; then kill_server; exit 0; fi
 
-check_deps python3
+check_deps python3 yq
 
 # Check Python version (need >=3.7 for subprocess.run(capture_output=True))
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
@@ -143,7 +239,10 @@ log_info "Using port $PORT"
 mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py 2>/dev/null || true
 
-# ── Write index.html (full, with login modal) ───────────────────────────────
+# Ensure YAML exists (create default if missing)
+create_default_yaml
+
+# ── Write index.html (full, with logout button and updated JS) ───────────────
 cat > "$HTML_DIR/index.html" <<'HTMLEOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -508,6 +607,10 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                 <div class="live-dot" :class="refreshing ? 'syncing' : ''"></div>
                 <span x-text="refreshing ? 'Syncing...' : timestamp"></span>
             </div>
+            <!-- Logout button -->
+            <button class="icon-btn" @click="logout" title="Logout" x-show="authenticated">
+                <i class="fas fa-sign-out-alt"></i>
+            </button>
         </div>
     </header>
 
@@ -1008,6 +1111,7 @@ function dashboard() {
         async init() {
             this.initSortable();
             if (this.authenticated) {
+                await this.fetchSettings();   // load persistent settings from server
                 await this.fetchLog();
                 this.connectSSE();
                 setInterval(() => { if(this.vis.logs) this.fetchLog(); }, 12000);
@@ -1048,7 +1152,31 @@ function dashboard() {
             } catch {} finally { this.refreshing = false; }
         },
 
-        saveSettings() {
+        // Fetch settings from server
+        async fetchSettings() {
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/settings', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (res.ok) {
+                    const settings = await res.json();
+                    // Merge into reactive properties (fallback to existing values)
+                    this.piholeUrl = settings.piholeUrl || this.piholeUrl;
+                    this.piholeToken = settings.piholeToken || this.piholeToken;
+                    this.monitoredServices = settings.monitoredServices || this.monitoredServices;
+                    this.radarIps = settings.radarIps || this.radarIps;
+                    this.bookmarksStr = settings.bookmarksStr || this.bookmarksStr;
+                    // Save to localStorage for quick access
+                    this.saveSettings();
+                }
+            } catch (e) {
+                console.warn('Could not fetch settings from server', e);
+            }
+        },
+
+        // Save settings to localStorage and also POST to server
+        async saveSettings() {
             localStorage.setItem('noba-theme',      this.theme);
             localStorage.setItem('noba-pihole',     this.piholeUrl);
             localStorage.setItem('noba-pihole-tok', this.piholeToken);
@@ -1056,6 +1184,28 @@ function dashboard() {
             localStorage.setItem('noba-services',   this.monitoredServices);
             localStorage.setItem('noba-radar',      this.radarIps);
             localStorage.setItem('noba-vis',        JSON.stringify(this.vis));
+
+            if (this.authenticated) {
+                const token = localStorage.getItem('noba-token');
+                try {
+                    await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
+                        body: JSON.stringify({
+                            piholeUrl: this.piholeUrl,
+                            piholeToken: this.piholeToken,
+                            monitoredServices: this.monitoredServices,
+                            radarIps: this.radarIps,
+                            bookmarksStr: this.bookmarksStr
+                        })
+                    });
+                } catch (e) {
+                    console.warn('Could not save settings to server', e);
+                }
+            }
         },
 
         applySettings() {
@@ -1157,7 +1307,8 @@ function dashboard() {
                 if (res.ok && data.token) {
                     localStorage.setItem('noba-token', data.token);
                     this.authenticated = true;
-                    this.init();  // re-initialize data fetching
+                    await this.fetchSettings();   // load settings from server
+                    this.init();                  // re-initialize data fetching
                 } else {
                     this.loginError = data.error || 'Login failed';
                 }
@@ -1166,6 +1317,13 @@ function dashboard() {
             } finally {
                 this.loginLoading = false;
             }
+        },
+
+        logout() {
+            localStorage.removeItem('noba-token');
+            this.authenticated = false;
+            if (this._es) this._es.close();
+            if (this._poll) clearInterval(this._poll);
         },
 
         addToast(msg, type='info') {
@@ -1180,11 +1338,11 @@ function dashboard() {
 </html>
 HTMLEOF
 
-# ── Write server.py with improvements and authentication ─────────────────────
+# ── Write server.py with YAML settings support ───────────────────────────────
 cat > "$HTML_DIR/server.py" <<'PYEOF'
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v8.2.0
-New: Simple token authentication.
+"""Nobara Command Center – Backend v8.3.0
+New: Logout, persistent settings in YAML config (~/.config/noba/config.yaml)
 """
 import http.server
 import socketserver
@@ -1217,12 +1375,13 @@ LOG_DIR    = os.path.expanduser('~/.local/share')
 PID_FILE   = os.environ.get('PID_FILE',  '/tmp/noba-web-server.pid')
 ACTION_LOG = '/tmp/noba-action.log'
 AUTH_CONFIG = os.path.expanduser('~/.config/noba-web/auth.conf')
+NOBA_YAML   = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
 
 # Ensure log directory exists
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
 except Exception:
-    pass  # if it fails, we'll fall back to console logging
+    pass
 
 # Setup logging – fallback to console if file fails
 log_file = os.path.join(LOG_DIR, 'noba-web-server.log')
@@ -1291,18 +1450,81 @@ def validate_token(token):
     return False
 
 def authenticate_request(headers, query=None):
-    # Try Authorization header first
     auth_header = headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         token = auth_header[7:]
         if validate_token(token):
             return True
-    # Fallback to token in query string (for SSE)
     if query and 'token' in query:
         token = query['token'][0]
         if validate_token(token):
             return True
     return False
+
+# ── YAML settings helpers (using yq) ─────────────────────────────────────────
+def read_yaml_settings():
+    """Read web settings from YAML config under 'web:' key."""
+    default = {
+        'piholeUrl': '',
+        'piholeToken': '',
+        'monitoredServices': 'backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service',
+        'radarIps': '192.168.100.1, 1.1.1.1, 8.8.8.8',
+        'bookmarksStr': 'TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server, TrueNAS (vdhnas)|http://vdhnas.vannieuwenhove.org|fa-server, Pi-Hole|http://dnsa01.vannieuwenhove.org/admin|fa-shield-alt, Home Assistant|http://homeassistant.local:8123|fa-home, ROMM|http://romm.local|fa-gamepad, Prowlarr|http://localhost:9696|fa-search, ASUS Router|http://192.168.100.1|fa-network-wired'
+    }
+    if not os.path.exists(NOBA_YAML):
+        return default
+    try:
+        # Use yq to extract web.* values as JSON
+        cmd = ['yq', 'eval', '-o=json', '.web', NOBA_YAML]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if r.returncode == 0 and r.stdout.strip():
+            web = json.loads(r.stdout)
+            # Merge with defaults (only keys we care about)
+            for k in default:
+                if k in web:
+                    default[k] = web[k]
+        return default
+    except Exception as e:
+        logger.warning(f"Failed to read YAML settings: {e}")
+        return default
+
+def write_yaml_settings(settings):
+    """Write web settings to YAML config under 'web:' key."""
+    try:
+        # Create a temporary YAML snippet with the web settings
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
+            tmp.write("web:\n")
+            for k, v in settings.items():
+                # For strings that might need quoting
+                if isinstance(v, str):
+                    if any(c in v for c in '\n:#'):
+                        # Use JSON string representation which is valid YAML
+                        v = json.dumps(v)
+                tmp.write(f"  {k}: {v}\n")
+            tmp_path = tmp.name
+
+        if os.path.exists(NOBA_YAML):
+            # Merge with existing file using yq
+            cmd = ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)', NOBA_YAML, tmp_path]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            if r.returncode == 0:
+                merged = r.stdout
+                with open(NOBA_YAML, 'w') as f:
+                    f.write(merged)
+            else:
+                raise Exception("yq merge failed")
+        else:
+            # No existing file, just use the snippet
+            os.makedirs(os.path.dirname(NOBA_YAML), exist_ok=True)
+            with open(NOBA_YAML, 'w') as f:
+                f.write(open(tmp_path).read())
+
+        os.unlink(tmp_path)
+        return True
+    except Exception as e:
+        logger.exception(f"Failed to write YAML settings: {e}")
+        return False
 
 # ── Input validation ─────────────────────────────────────────────────────────
 def validate_service_name(name):
@@ -1337,8 +1559,8 @@ _cache = TTLCache()
 # ── Global state (lock-protected) ───────────────────────────────────────────
 _state_lock  = threading.Lock()
 _cpu_history = deque(maxlen=20)
-_cpu_prev    = None          # (total, idle)
-_net_prev    = None          # (rx_bytes, tx_bytes)
+_cpu_prev    = None
+_net_prev    = None
 _net_prev_t  = None
 _shutdown_flag = threading.Event()
 
@@ -1346,7 +1568,6 @@ _shutdown_flag = threading.Event()
 def sigterm_handler(signum, frame):
     logger.info("Received SIGTERM, shutting down...")
     _shutdown_flag.set()
-    # Shutdown the server from a separate thread because we are in a signal handler
     threading.Thread(target=lambda: server.shutdown()).start()
 signal.signal(signal.SIGTERM, sigterm_handler)
 
@@ -1373,14 +1594,14 @@ def human_bps(bps):
         bps /= 1024
     return f'{bps:.1f} TB/s'
 
-# ── Stats collectors (identical to v8.0.0 but with validation) ─────────────
+# ── Stats collectors (unchanged from v8.2.0) ─────────────────────────────────
 def get_cpu_percent():
     global _cpu_prev
     with _state_lock:
         try:
             with open('/proc/stat') as f:
                 fields = list(map(int, f.readline().split()[1:]))
-            idle  = fields[3] + fields[4]   # idle + iowait
+            idle  = fields[3] + fields[4]
             total = sum(fields)
             if _cpu_prev is None:
                 _cpu_prev = (total, idle)
@@ -1512,7 +1733,7 @@ def get_pihole(url, token):
     base = base.rstrip('/').replace('/admin', '')
 
     def _get(endpoint, extra_headers=None):
-        hdrs = {'User-Agent': 'noba-web/8.2.0', 'Accept': 'application/json'}
+        hdrs = {'User-Agent': 'noba-web/8.3.0', 'Accept': 'application/json'}
         if extra_headers:
             hdrs.update(extra_headers)
         req = urllib.request.Request(base + endpoint, headers=hdrs)
@@ -1721,7 +1942,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory='.', **kwargs)
 
     def log_message(self, fmt, *args):
-        pass  # silence access log
+        pass
 
     def _json(self, data, status=200):
         body = json.dumps(data).encode()
@@ -1753,6 +1974,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 logger.exception('Error in /api/stats')
                 self._json({'error': str(e)}, 500)
 
+        elif path == '/api/settings':
+            # Return web settings from YAML
+            settings = read_yaml_settings()
+            self._json(settings)
+
         elif path == '/api/stream':
             self.send_response(200)
             self.send_header('Content-Type',  'text/event-stream')
@@ -1765,13 +1991,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     msg  = f'data: {json.dumps(data)}\n\n'.encode()
                     self.wfile.write(msg)
                     self.wfile.flush()
-                    # sleep in small chunks to notice shutdown early
                     for _ in range(5):
                         if _shutdown_flag.is_set():
                             return
                         time.sleep(1)
             except (BrokenPipeError, ConnectionResetError, OSError):
-                pass  # client disconnected
+                pass
             except Exception as e:
                 logger.warning(f'SSE stream error: {e}')
 
@@ -1839,7 +2064,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(401, 'Unauthorized')
             return
 
-        if path == '/api/run':
+        if path == '/api/settings':
+            # Save web settings to YAML
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body   = json.loads(self.rfile.read(length))
+                if write_yaml_settings(body):
+                    self._json({'status': 'ok'})
+                else:
+                    self._json({'error': 'Failed to write settings'}, 500)
+            except Exception as e:
+                logger.exception('Error in /api/settings POST')
+                self._json({'error': str(e)}, 500)
+
+        elif path == '/api/run':
             try:
                 length = int(self.headers.get('Content-Length', 0))
                 body   = json.loads(self.rfile.read(length))
@@ -1907,7 +2145,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
-    daemon_threads      = True   # SSE threads die with the main process
+    daemon_threads      = True
 
 
 # Global server reference for signal handler
@@ -1946,7 +2184,7 @@ chmod +x "$HTML_DIR/server.py"
 # ── Launch with health check ─────────────────────────────────────────────────
 kill_server
 
-export PORT HOST PID_FILE="$SERVER_PID_FILE" NOBA_SCRIPT_DIR="$SCRIPT_DIR"
+export PORT HOST PID_FILE="$SERVER_PID_FILE" NOBA_SCRIPT_DIR="$SCRIPT_DIR" NOBA_CONFIG="$NOBA_YAML"
 cd "$HTML_DIR"
 : > "$LOG_FILE"
 
