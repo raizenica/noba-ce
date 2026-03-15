@@ -51,11 +51,11 @@ create_default_yaml() {
 email: "your@email.com"
 
 backup:
-  dest: "/mnt/backup"
+  dest: "$HOME/backups"
   sources:
-    - "/home/raizen/Documents"
-    - "/home/raizen/Pictures"
-    - "/home/raizen/.config"
+    - "$HOME/Documents"
+    - "$HOME/Pictures"
+    - "$HOME/.config"
   retention_days: 7
   space_margin_percent: 10
   min_free_space_gb: 5
@@ -68,7 +68,7 @@ disk:
   cleanup_enabled: true
 
 downloads:
-  dir: "/home/raizen/Downloads"
+  dir: "$HOME/Downloads"
   min_age_minutes: 5
   dated_subfolders: true
 
@@ -81,17 +81,17 @@ images2pdf:
   default_quality: 92
 
 logs:
-  dir: "/home/raizen/.local/share/noba"
+  dir: "$HOME/.local/share/noba"
   log_rotation:
     days: 30
 
 update:
-  repo_dir: "/home/raizen/.local/bin"
+  repo_dir: "$HOME/.local/bin"
   remote: "origin"
   branch: "main"
 
 motd:
-  quote_file: "/home/raizen/.config/quotes.txt"
+  quote_file: "$HOME/.config/quotes.txt"
   show_updates: true
   show_backup: true
 
@@ -109,7 +109,7 @@ cron:
     - organize-downloads.sh
 
 cloud:
-  remote: "mycloud:backups/raizen"
+  remote: "mycloud:backups/$USER"
   rclone_ops: "-v --checksum --progress"
 
 web:
@@ -126,7 +126,7 @@ web:
   radarIps: "192.168.100.1, 1.1.1.1, 8.8.8.8"
   bookmarksStr: "TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server, TrueNAS (vdhnas)|http://vdhnas.vannieuwenhove.org|fa-server, Pi-Hole|http://dnsa01.vannieuwenhove.org/admin|fa-shield-alt, Home Assistant|http://homeassistant.local:8123|fa-home, ROMM|http://romm.local|fa-gamepad, Prowlarr|http://localhost:9696|fa-search, ASUS Router|http://192.168.100.1|fa-network-wired"
 EOF
-        log_success "Default YAML created. Please edit it to match your setup."
+        log_success "Default YAML created. Please edit it to match your setup: $NOBA_YAML"
     fi
 }
 
@@ -208,14 +208,21 @@ if [[ "$SET_PASSWORD" == true ]]; then
     read -p "Username: " username
     read -s -p "Password: " password
     echo
+    read -s -p "Confirm password: " password2
+    echo
+    if [[ "$password" != "$password2" ]]; then
+        echo "Passwords do not match."
+        exit 1
+    fi
     mkdir -p "$HOME/.config/noba-web"
-    python3 -c "
+    # Use umask to create file with 600 permissions
+    (umask 077; python3 -c "
 import hashlib, secrets, sys
 salt = secrets.token_hex(16)
 hash = hashlib.sha256((salt + sys.argv[2]).encode()).hexdigest()
 with open(sys.argv[1], 'w') as f:
     f.write(f'{sys.argv[3]}:{salt}:{hash}')
-" "$HOME/.config/noba-web/auth.conf" "$password" "$username"
+" "$HOME/.config/noba-web/auth.conf" "$password" "$username")
     echo "Credentials saved to ~/.config/noba-web/auth.conf"
     # Also create default YAML if missing
     create_default_yaml
@@ -225,6 +232,12 @@ fi
 if [[ "$KILL_ONLY" == true ]]; then kill_server; exit 0; fi
 
 check_deps python3 yq
+
+# Verify yq is the Go version (mikefarah/yq)
+if ! yq --version 2>/dev/null | grep -q "mikefarah"; then
+    log_error "The 'yq' command must be the Go version (mikefarah/yq). Please install it from https://github.com/mikefarah/yq"
+    exit 1
+fi
 
 # Check Python version (need >=3.7 for subprocess.run(capture_output=True))
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
@@ -1319,7 +1332,17 @@ function dashboard() {
             }
         },
 
-        logout() {
+        async logout() {
+            const token = localStorage.getItem('noba-token');
+            if (token) {
+                try {
+                    await fetch('/api/logout?token=' + encodeURIComponent(token), {
+                        method: 'POST'
+                    });
+                } catch (e) {
+                    console.warn('Logout request failed', e);
+                }
+            }
             localStorage.removeItem('noba-token');
             this.authenticated = false;
             if (this._es) this._es.close();
@@ -2057,6 +2080,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.exception('Error in /api/login')
                 self._json({'error': str(e)}, 500)
+            return
+
+        # Public logout endpoint (no auth required, but we check token in query/header)
+        if path == '/api/logout':
+            # Try to get token from Authorization header or query string
+            token = None
+            auth_header = self.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+            else:
+                # Check query string for token
+                parsed = urlparse(self.path)
+                qs = parse_qs(parsed.query)
+                if 'token' in qs:
+                    token = qs['token'][0]
+            if token and token in tokens:
+                del tokens[token]
+                self._json({'status': 'ok'})
+            else:
+                # Still return 200 even if token not found (idempotent)
+                self._json({'status': 'ok'})
             return
 
         # All other POST endpoints require authentication
