@@ -60,8 +60,6 @@ log_debug() {
     [[ "${VERBOSE:-false}" == true ]] && \
         printf "%b[%s] [DEBUG]%b %s\n" "$CYAN" "$(_timestamp)" "$NC" "$*"
 }
-log_verbose() {
-    [[ "${VERBOSE:-false}" == true ]] && \
         printf "%b[%s] [VERBOSE]%b %s\n" "$CYAN" "$(_timestamp)" "$NC" "$*"
 }
 die() {
@@ -321,7 +319,10 @@ if [[ -f "$HOME/.config/noba/noba-lib.local.sh" ]]; then
     source "$HOME/.config/noba/noba-lib.local.sh"
 fi
 
-log_verbose() {
-    [[ "${VERBOSE:-false}" == true ]] && \
         printf "%b[%s] [VERBOSE]%b %s\n" "$CYAN" "$(_timestamp)" "$NC" "$*"
+}
+log_verbose() {
+    if [[ "${VERBOSE:-false}" == true ]]; then
+        printf "%b[%s] [VERBOSE]%b %s\n" "$CYAN" "$(_timestamp)" "$NC" "$*"
+    fi
 }
