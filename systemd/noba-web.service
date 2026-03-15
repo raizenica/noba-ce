@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=forking
-ExecStart=/home/raizen/.local/bin/noba-web.sh
-ExecStop=/home/raizen/.local/bin/noba-web.sh --kill
+ExecStart=/home/raizen/.local/libexec/noba/noba-web.sh
+ExecStop=/home/raizen/.local/libexec/noba/noba-web.sh --kill
 PIDFile=/tmp/noba-web-server.pid
 Restart=on-failure
 RestartSec=10
