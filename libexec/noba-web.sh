@@ -2284,6 +2284,14 @@ log_success "Dashboard live → http://${HOST}:${PORT}"
 
 if [[ "$VERBOSE" == true ]]; then
     log_info "Tailing log file (Ctrl+C to stop)..."
-    tail -f "$LOG_FILE"
+    tail -f "$LOG_FILE" &
+    TAIL_PID=$!
 fi
-exit 0
+
+# Block and wait for the Python server (keeps systemd happy)
+wait "$SERVER_PID"
+EXIT_CODE=$?
+
+# Cleanup if stopped
+[[ -n "${TAIL_PID:-}" ]] && kill "$TAIL_PID" 2>/dev/null || true
+exit $EXIT_CODE
