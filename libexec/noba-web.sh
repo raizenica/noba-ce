@@ -19,7 +19,7 @@ if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
-source "$SCRIPT_DIR/noba-lib.sh"
+source "$SCRIPT_DIR/../lib/noba-lib.sh"
 
 # ── Load optional config file ───────────────────────────────────────────────
 CONFIG_FILE="${HOME}/.config/noba-web.conf"

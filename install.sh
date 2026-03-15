@@ -1,83 +1,37 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 3.0.0
-#
-# Bugs fixed vs 2.x:
-#   BUG-1  '. /etc/os-release' in detect_os() ran in the same shell and clobbered
-#          any $NAME or $ID variables already set in the environment (e.g. from a
-#          parent process or export). Now sourced inside a subshell via $() so
-#          the caller's environment is never mutated.
-#   BUG-2  Script glob '$SCRIPT_DIR/*.sh' without nullglob — if no files match,
-#          the literal unexpanded string is passed through the loop; the
-#          '[ -e "$script" ] || continue' guard caught it by accident. Also,
-#          the glob copied ALL .sh files in the source dir including any stray
-#          scripts not belonging to the suite. Replaced with an explicit
-#          SUITE_SCRIPTS whitelist so only known files are installed.
-#   BUG-3  Systemd unit glob '*.{timer,service}' without nullglob passed literal
-#          unexpanded strings into the loop when no units existed. The inner
-#          '[ -f "$unit" ]' guard caught it, but only by accident.
-#          shopt -s nullglob now set for the duration of glob loops.
-#   BUG-4  Default config hardcoded 'strikerke@gmail.com' — every install sent
-#          email alerts to someone else's inbox. Now uses ${EMAIL:-} (from
-#          environment) with an empty fallback and a post-install reminder.
-#   BUG-5  Default config included cloud.rclone_opts — a raw string that was
-#          eval'd by cloud-backup.sh v2 (a security issue fixed in v3). Since
-#          v3 builds the options array explicitly, this key is now omitted from
-#          the generated config to avoid confusion.
-#   BUG-6  (see BUG-2) — explicit SUITE_SCRIPTS whitelist fixes stray-file
-#          installation; only declared scripts are copied.
-#   BUG-7  Bash completions were appended to ~/.bashrc regardless of the user's
-#          shell. Now detects $SHELL and targets ~/.bashrc, ~/.zshrc, or
-#          ~/.config/fish/conf.d/ appropriately; skips if shell is unsupported.
-#   BUG-8  No rollback on partial failure. If cp failed mid-loop under set -e,
-#          a partially-installed state was left with no record of what was done.
-#          A trap now records installed files in a manifest and cleans up on
-#          non-zero exit. --uninstall reads the manifest to reverse an install.
-#   BUG-9  systemctl --user daemon-reload was silently swallowed by '|| true'
-#          in containers / non-systemd environments. Now checks whether systemd
-#          is actually running before attempting the reload, and prints an
-#          informative message when it isn't.
-#   BUG-10 '--help' was not in the test-harness compliance block at the top,
-#          requiring the full argument-parsing loop to run before help was shown.
-#          Added to the early-exit block for consistency with the rest of the suite.
-#
-# New in 3.0.0:
-#   --uninstall          Remove a previously installed suite (reads manifest)
-#   --prefix             Convenience alias for --dir
-#   --no-completion      Skip shell completion setup
-#   --no-systemd         Skip systemd unit installation
-#   --email ADDR         Pre-fill email in generated config
-#   Manifest file        Records every installed file for clean uninstall
-#   Post-install summary Prints a checklist of what needs doing next
+# Version: 3.1.0
 
 set -euo pipefail
 
 # ── Test harness compliance ────────────────────────────────────────────────────
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
-# BUG-10 FIX: --help in early-exit block
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Usage: install.sh [OPTIONS]"; exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "install.sh version 3.0.0"; exit 0
+    echo "install.sh version 3.1.0"; exit 0
 fi
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+PREFIX="${PREFIX:-$HOME/.local}"
+BIN_DIR="${BIN_DIR:-$PREFIX/bin}"
+LIBEXEC_DIR="${LIBEXEC_DIR:-$PREFIX/libexec/noba}"
+MAN_DIR="${MAN_DIR:-$PREFIX/share/man/man1}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/noba}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
 SKIP_DEPS=false
 UNINSTALL=false
 NO_COMPLETION=false
 NO_SYSTEMD=false
-USER_EMAIL="${EMAIL:-}"    # BUG-4 FIX: use env var, no hardcoded address
+USER_EMAIL="${EMAIL:-}"
 
 MANIFEST_FILE="${MANIFEST_FILE:-$HOME/.local/share/noba-install.manifest}"
 
-# ── BUG-2/6 FIX: explicit whitelist of suite scripts ─────────────────────────
-# Only these files are installed; stray .sh files in SCRIPT_DIR are ignored.
+# ── Whitelist of suite scripts ─────────────────────────────────────────────────
 SUITE_SCRIPTS=(
     backup-to-nas.sh
     backup-verifier.sh
@@ -87,11 +41,9 @@ SUITE_SCRIPTS=(
     config-check.sh
     disk-sentinel.sh
     images-to-pdf.sh
-    noba-lib.sh
     noba-web.sh
     organize-downloads.sh
 )
-# Optional scripts (warn if missing, don't fail)
 OPTIONAL_SCRIPTS=(
     noba-tui.sh
     noba-dashboard.sh
@@ -113,11 +65,11 @@ show_help() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Install the Nobara Automation Suite to your local bin directory.
+Install the Nobara Automation Suite.
 
 Options:
-  -d, --dir DIR          Installation directory (default: $INSTALL_DIR)
-      --prefix DIR       Alias for --dir
+  -d, --dir DIR          Bin directory for wrapper (default: $BIN_DIR)
+      --prefix DIR       Base installation prefix (default: $PREFIX)
   -c, --config DIR       Configuration directory (default: $CONFIG_DIR)
   -s, --systemd DIR      Systemd user unit directory (default: $SYSTEMD_USER_DIR)
       --email ADDR       Pre-fill email address in generated config
@@ -132,7 +84,7 @@ EOF
     exit 0
 }
 
-# ── BUG-8 FIX: manifest-based install tracking and rollback ───────────────────
+# ── Manifest-based install tracking and rollback ──────────────────────────────
 INSTALLED_FILES=()
 
 record_install() {
@@ -190,19 +142,14 @@ do_uninstall() {
     exit 0
 }
 
-# ── BUG-1 FIX: detect OS without clobbering environment ──────────────────────
-# Source /etc/os-release in a subshell and print key=value pairs for safe eval
 detect_os() {
-    # Use a subshell so $NAME, $ID etc. in the parent environment are never touched
     OS_ID=$(bash -c '. /etc/os-release 2>/dev/null && echo "$ID"' || echo "unknown")
     OS_NAME=$(bash -c '. /etc/os-release 2>/dev/null && echo "$NAME"' || echo "Unknown Linux")
     OS_VERSION=$(bash -c '. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-}"' || echo "")
 }
 
-# ── Dependency installation ────────────────────────────────────────────────────
 install_deps() {
     [[ "$SKIP_DEPS" == true ]] && { say "Skipping dependency installation."; return 0; }
-
     local deps=()
     case "$OS_ID" in
         fedora|nobara|rhel|centos|rocky|almalinux)
@@ -222,13 +169,11 @@ install_deps() {
                 say "Installing via apt..."
                 sudo apt-get update -qq
                 sudo apt-get install -y "${deps[@]}"
-                # rclone: apt package is often outdated; prefer official install script
                 if ! command -v rclone &>/dev/null; then
                     say "Installing rclone via official script..."
                     curl -fsSL https://rclone.org/install.sh | sudo bash || \
                         say_warn "rclone install failed — install manually from https://rclone.org"
                 fi
-                # yq: not in standard apt repos
                 if ! command -v yq &>/dev/null; then
                     if command -v snap &>/dev/null; then
                         sudo snap install yq
@@ -263,10 +208,9 @@ install_deps() {
     esac
 }
 
-# ── BUG-7 FIX: shell-aware completion setup ───────────────────────────────────
 setup_completion() {
     [[ "$NO_COMPLETION" == true ]] && return 0
-    [[ ! -f "$INSTALL_DIR/noba-completion.sh" ]] && return 0
+    [[ ! -f "$LIBEXEC_DIR/noba-completion.sh" ]] && return 0
 
     local shell_name rc_file
     shell_name=$(basename "${SHELL:-bash}")
@@ -274,7 +218,7 @@ setup_completion() {
     case "$shell_name" in
         bash)
             rc_file="$HOME/.bashrc"
-            local marker="source $INSTALL_DIR/noba-completion.sh"
+            local marker="source $LIBEXEC_DIR/noba-completion.sh"
             if grep -qF "$marker" "$rc_file" 2>/dev/null; then
                 say_ok "Bash completions already in $rc_file"
             elif [[ "$DRY_RUN" == true ]]; then
@@ -286,7 +230,7 @@ setup_completion() {
             ;;
         zsh)
             rc_file="$HOME/.zshrc"
-            local marker="source $INSTALL_DIR/noba-completion.sh"
+            local marker="source $LIBEXEC_DIR/noba-completion.sh"
             if grep -qF "$marker" "$rc_file" 2>/dev/null; then
                 say_ok "Zsh completions already in $rc_file"
             elif [[ "$DRY_RUN" == true ]]; then
@@ -305,19 +249,18 @@ setup_completion() {
             else
                 mkdir -p "$(dirname "$fish_conf")"
                 echo "# Nobara Automation Suite" > "$fish_conf"
-                echo "bass source $INSTALL_DIR/noba-completion.sh" >> "$fish_conf"
+                echo "bass source $LIBEXEC_DIR/noba-completion.sh" >> "$fish_conf"
                 say_ok "Fish completions written to $fish_conf"
                 say_warn "Fish requires 'bass' plugin to source bash completions."
             fi
             ;;
         *)
             say_warn "Unrecognised shell '$shell_name' — skipping completion setup."
-            say_warn "Manually add: source $INSTALL_DIR/noba-completion.sh"
+            say_warn "Manually add: source $LIBEXEC_DIR/noba-completion.sh"
             ;;
     esac
 }
 
-# ── BUG-9 FIX: check systemd is actually running before reloading ─────────────
 reload_systemd() {
     [[ "$NO_SYSTEMD" == true ]] && return 0
     [[ "$DRY_RUN"  == true ]] && { dry "Would run: systemctl --user daemon-reload"; return 0; }
@@ -327,7 +270,6 @@ reload_systemd() {
         return 0
     fi
 
-    # Check if the user session bus is reachable
     if ! systemctl --user is-system-running &>/dev/null \
        && ! systemctl --user status &>/dev/null 2>&1 | grep -q -v "Failed to connect"; then
         say_warn "systemd user session not available (container/non-systemd env)."
@@ -345,7 +287,11 @@ reload_systemd() {
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -d|--dir|--prefix) INSTALL_DIR="$2"; shift 2 ;;
+        -d|--dir)          BIN_DIR="$2";             shift 2 ;;
+           --prefix)       PREFIX="$2"
+                           BIN_DIR="$PREFIX/bin"
+                           LIBEXEC_DIR="$PREFIX/libexec/noba"
+                           MAN_DIR="$PREFIX/share/man/man1"; shift 2 ;;
         -c|--config)       CONFIG_DIR="$2";          shift 2 ;;
         -s|--systemd)      SYSTEMD_USER_DIR="$2";    shift 2 ;;
            --email)        USER_EMAIL="$2";          shift 2 ;;
@@ -355,51 +301,62 @@ while [[ $# -gt 0 ]]; do
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
         -h|--help)         show_help ;;
-        -v|--version)      echo "install.sh version 3.0.0"; exit 0 ;;
+        -v|--version)      echo "install.sh version 3.1.0"; exit 0 ;;
         *) say_err "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
-# ── Uninstall mode ─────────────────────────────────────────────────────────────
 [[ "$UNINSTALL" == true ]] && do_uninstall
 
 # ── Begin install ─────────────────────────────────────────────────────────────
-header "Nobara Automation Suite Installer v3.0.0"
+header "Nobara Automation Suite Installer v3.1.0"
 
 detect_os
 say "OS: $OS_NAME ($OS_ID${OS_VERSION:+ $OS_VERSION})"
-say "Install dir:  $INSTALL_DIR"
+say "Bin dir:      $BIN_DIR"
+say "Libexec dir:  $LIBEXEC_DIR"
 say "Config dir:   $CONFIG_DIR"
 say "Systemd dir:  $SYSTEMD_USER_DIR"
 [[ "$DRY_RUN" == true ]] && say_warn "DRY RUN — no files will be written"
 
-# ── Dependencies ───────────────────────────────────────────────────────────────
 header "Dependencies"
 install_deps
 
-# ── Create directories ─────────────────────────────────────────────────────────
 header "Creating directories"
 if [[ "$DRY_RUN" == true ]]; then
-    dry "mkdir -p $INSTALL_DIR $CONFIG_DIR $SYSTEMD_USER_DIR"
+    dry "mkdir -p $BIN_DIR $LIBEXEC_DIR/lib $CONFIG_DIR $SYSTEMD_USER_DIR $MAN_DIR"
 else
-    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
+    mkdir -p "$BIN_DIR" "$LIBEXEC_DIR/lib" "$CONFIG_DIR" "$SYSTEMD_USER_DIR" "$MAN_DIR"
     say_ok "Directories ready"
 fi
 
-# ── Copy scripts (BUG-2/6 FIX: whitelist only) ────────────────────────────────
-header "Installing scripts"
+header "Installing components"
+
+# 1. Install Library
+src="$SCRIPT_DIR/lib/noba-lib.sh"
+dst="$LIBEXEC_DIR/lib/noba-lib.sh"
+if [[ -f "$src" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp lib/noba-lib.sh → $LIBEXEC_DIR/lib/"; else
+        cp "$src" "$dst"
+        chmod +x "$dst"
+        record_install "$dst"
+        say_ok "Library installed"
+    fi
+else
+    say_err "Missing library file: $src"
+    exit 1
+fi
+
+# 2. Install Automation Scripts
 for name in "${SUITE_SCRIPTS[@]}"; do
-    src="$SCRIPT_DIR/$name"
-    dst="$INSTALL_DIR/$name"
+    src="$SCRIPT_DIR/libexec/$name"
+    dst="$LIBEXEC_DIR/$name"
     if [[ ! -f "$src" ]]; then
-        say_warn "Not found in source, skipping: $name"
+        say_warn "Not found in source, skipping: libexec/$name"
         continue
     fi
-    if [[ "$DRY_RUN" == true ]]; then
-        dry "cp $name → $INSTALL_DIR/"
-    else
+    if [[ "$DRY_RUN" == true ]]; then dry "cp libexec/$name → $LIBEXEC_DIR/"; else
         cp "$src" "$dst"
-        # Library files don't need +x, but having it set is harmless and consistent
         chmod +x "$dst"
         record_install "$dst"
         say_ok "$name"
@@ -407,12 +364,10 @@ for name in "${SUITE_SCRIPTS[@]}"; do
 done
 
 for name in "${OPTIONAL_SCRIPTS[@]}"; do
-    src="$SCRIPT_DIR/$name"
-    dst="$INSTALL_DIR/$name"
+    src="$SCRIPT_DIR/libexec/$name"
+    dst="$LIBEXEC_DIR/$name"
     [[ -f "$src" ]] || continue
-    if [[ "$DRY_RUN" == true ]]; then
-        dry "cp $name → $INSTALL_DIR/ (optional)"
-    else
+    if [[ "$DRY_RUN" == true ]]; then dry "cp libexec/$name → $LIBEXEC_DIR/ (optional)"; else
         cp "$src" "$dst"
         chmod +x "$dst"
         record_install "$dst"
@@ -420,36 +375,39 @@ for name in "${OPTIONAL_SCRIPTS[@]}"; do
     fi
 done
 
-# Copy noba CLI wrapper if present
-if [[ -f "$SCRIPT_DIR/noba" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then
-        dry "cp noba → $INSTALL_DIR/"
-    else
-        cp "$SCRIPT_DIR/noba" "$INSTALL_DIR/noba"
-        chmod +x "$INSTALL_DIR/noba"
-        record_install "$INSTALL_DIR/noba"
+# 3. Install CLI Wrapper
+if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp bin/noba → $BIN_DIR/"; else
+        cp "$SCRIPT_DIR/bin/noba" "$BIN_DIR/noba"
+        chmod +x "$BIN_DIR/noba"
+        record_install "$BIN_DIR/noba"
         say_ok "noba (CLI wrapper)"
     fi
 fi
 
-# ── Default config (BUG-4/5 FIX) ──────────────────────────────────────────────
+# 4. Install Man Page
+if [[ -f "$SCRIPT_DIR/docs/noba.1" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba.1 → $MAN_DIR/"; else
+        cp "$SCRIPT_DIR/docs/noba.1" "$MAN_DIR/noba.1"
+        record_install "$MAN_DIR/noba.1"
+        say_ok "noba.1 (man page)"
+    fi
+fi
+
 header "Configuration"
 if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
     say_ok "Config already exists — skipping generation."
 elif [[ "$DRY_RUN" == true ]]; then
     dry "Would create default config at $CONFIG_DIR/config.yaml"
 else
-    # BUG-4 FIX: no hardcoded personal email — use env var or leave blank
-    # BUG-5 FIX: cloud.rclone_opts removed (v3 builds options explicitly)
     cat > "$CONFIG_DIR/config.yaml" <<YAML
 # Nobara Automation Suite — Configuration
 # Edit this file to match your environment.
 
-# Email address for alerts (backup failures, disk warnings)
 email: "${USER_EMAIL}"
 
 logs:
-  dir: "$HOME/.local/share"
+  dir: "$HOME/.local/share/noba"
 
 backup:
   dest: "/mnt/vnnas/backups/raizen"
@@ -461,11 +419,7 @@ backup:
     - "$HOME/.config"
 
 cloud:
-  # rclone remote name — run 'rclone config' to set up
   remote: "mycloud:backups/raizen"
-  # Optional: bandwidth, retries, transfers
-  # bandwidth: "10M"
-  # retries: 3
 
 disk:
   threshold: 85
@@ -490,20 +444,17 @@ YAML
     fi
 fi
 
-# ── Shell completions (BUG-7 FIX) ────────────────────────────────────────────
 header "Shell completions"
 setup_completion
 
-# ── Systemd units (BUG-3 FIX: nullglob) ──────────────────────────────────────
 header "Systemd user units"
 if [[ -d "$SCRIPT_DIR/systemd" ]]; then
-    # BUG-3 FIX: nullglob so empty glob doesn't iterate
     shopt -s nullglob
     unit_count=0
     for unit in "$SCRIPT_DIR"/systemd/*.timer "$SCRIPT_DIR"/systemd/*.service; do
         name=$(basename "$unit")
         if [[ "$DRY_RUN" == true ]]; then
-            dry "cp $name → $SYSTEMD_USER_DIR/"
+            dry "cp systemd/$name → $SYSTEMD_USER_DIR/"
         else
             cp "$unit" "$SYSTEMD_USER_DIR/$name"
             record_install "$SYSTEMD_USER_DIR/$name"
@@ -520,17 +471,13 @@ else
     say "No systemd/ directory in source — skipping unit installation."
 fi
 
-# BUG-9 FIX: check systemd availability before reloading
 reload_systemd
 
-# ── Write manifest (BUG-8 FIX) ───────────────────────────────────────────────
 if [[ "$DRY_RUN" == false && ${#INSTALLED_FILES[@]} -gt 0 ]]; then
     write_manifest
-    # Success: disarm the rollback trap
     trap - EXIT
 fi
 
-# ── Post-install summary ───────────────────────────────────────────────────────
 header "Installation complete"
 if [[ "$DRY_RUN" == false ]]; then
     say "Files installed  : ${#INSTALLED_FILES[@]}"
@@ -555,7 +502,7 @@ if [[ "$DRY_RUN" == false ]]; then
         say "      systemctl --user enable --now backup-to-nas.timer"
     fi
 
-    say "  • Check dependencies: config-check.sh"
+    say "  • Check dependencies: noba run config-check"
     say "  • Edit config:        $CONFIG_DIR/config.yaml"
     say "  • To uninstall:       $(basename "$0") --uninstall"
 fi

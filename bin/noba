@@ -1,24 +1,28 @@
 #!/bin/bash
 # noba – Central command for Nobara automation suite
-# Version: 2.2.2
+# Version: 3.1.0
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the installation prefix relative to the location of this wrapper
+WRAPPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREFIX="$(dirname "$WRAPPER_DIR")"
+
+# Define where the actual scripts live
+LIBEXEC_DIR="$PREFIX/libexec/noba"
 
 # Source library for logging and config parsing
-if [ -f "$SCRIPT_DIR/noba-lib.sh" ]; then
-    # shellcheck source=./noba-lib.sh
-    source "$SCRIPT_DIR/noba-lib.sh"
+if [ -f "$LIBEXEC_DIR/lib/noba-lib.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$LIBEXEC_DIR/lib/noba-lib.sh"
 else
-    echo -e "\033[0;31m[ERROR]\033[0m Cannot find noba-lib.sh in $SCRIPT_DIR" >&2
+    echo -e "\033[0;31m[ERROR]\033[0m Cannot find noba-lib.sh in $LIBEXEC_DIR/lib" >&2
     exit 1
 fi
 
 # -------------------------------------------------------------------
 # Alias Mapping
 # -------------------------------------------------------------------
-# Map short, easy-to-type commands to their actual script filenames
 declare -A ALIASES=(
     ["backup"]="backup-to-nas.sh"
     ["verify"]="backup-verifier.sh"
@@ -42,12 +46,12 @@ declare -A ALIASES=(
 # Core Functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "Nobara Automation Suite (noba) version 2.2.2"
+    echo "Nobara Automation Suite (noba) version 3.1.0"
     exit 0
 }
 
 show_help() {
-    cat <<EOF
+    cat <<HELP_EOF
 Usage: noba <command> [options]
 
 Core Commands:
@@ -65,7 +69,7 @@ Script Execution:
   noba disk-sentinel.sh --verbose
 
 For script-specific help, use: noba <command> --help
-EOF
+HELP_EOF
 }
 
 cmd_list() {
@@ -74,23 +78,35 @@ cmd_list() {
     printf " %-15s | %s\n" "ALIAS" "SCRIPT"
     printf " %-15s | %s\n" "---------------" "------------------------"
 
-    # Sort and print aliases
     for alias in $(echo "${!ALIASES[@]}" | tr ' ' '\n' | sort); do
         printf " %-15s | %s\n" "$alias" "${ALIASES[$alias]}"
     done
 
     echo ""
     echo "Other scripts in directory (can be run directly via 'noba <script.sh>'):"
-    for script in "$SCRIPT_DIR"/*.sh; do
-        base_name=$(basename "$script")
-        # Ignore core/library scripts and scripts already in the alias list
-        if [[ "$base_name" != "noba-lib.sh" ]] && \
-           [[ "$base_name" != "noba-setup.sh" ]] && \
-           [[ "$base_name" != "noba-completion.sh" ]] && \
-           ! printf "%s\n" "${ALIASES[@]}" | grep -qx "$base_name"; then
-             echo " - $base_name"
-        fi
-    done
+    if [ -d "$LIBEXEC_DIR" ]; then
+        for script in "$LIBEXEC_DIR"/*.sh; do
+            [ -f "$script" ] || continue
+            base_name=$(basename "$script")
+            if [[ "$base_name" != "noba-lib.sh" ]] && \
+               [[ "$base_name" != "noba-setup.sh" ]] && \
+               [[ "$base_name" != "noba-completion.sh" ]]; then
+                
+                is_alias=false
+                for val in "${ALIASES[@]}"; do
+                    if [[ "$val" == "$base_name" ]]; then
+                        is_alias=true
+                        break
+                    fi
+                done
+                if [ "$is_alias" = false ]; then
+                    echo " - $base_name"
+                fi
+            fi
+        done
+    else
+        echo " (No internal scripts found in $LIBEXEC_DIR)"
+    fi
 }
 
 cmd_config() {
@@ -101,12 +117,10 @@ cmd_config() {
     fi
 
     if [ $# -eq 0 ]; then
-        # Show config
         log_info "Displaying current configuration ($conf_file):"
         echo "---------------------------------------------------"
         cat "$conf_file"
     elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
-        # Edit with default editor
         ${EDITOR:-nano} "$conf_file"
     else
         log_error "Unknown option: $1"
@@ -126,10 +140,9 @@ fi
 cmd="$1"
 shift
 
-# Route Core Commands
 case "$cmd" in
     setup)
-        exec "$SCRIPT_DIR/setup-automation-timers.sh" "$@"
+        exec "$LIBEXEC_DIR/setup-automation-timers.sh" "$@"
         ;;
     config)
         cmd_config "$@"
@@ -140,7 +153,7 @@ case "$cmd" in
         exit 0
         ;;
     doctor)
-        exec "$SCRIPT_DIR/config-check.sh" "$@"
+        exec "$LIBEXEC_DIR/config-check.sh" "$@"
         ;;
     help|--help|-h)
         show_help
@@ -150,7 +163,6 @@ case "$cmd" in
         show_version
         ;;
     run)
-        # Legacy catch for if you accidentally type `noba run backup`
         if [ $# -eq 0 ]; then
             log_error "No script specified. Usage: noba <script>"
             exit 1
@@ -160,17 +172,13 @@ case "$cmd" in
         ;;
 esac
 
-# Route Script Execution (Implicit Run)
 script_target=""
 
-# Check if it's a known alias
 if [[ -n "${ALIASES[$cmd]:-}" ]]; then
     script_target="${ALIASES[$cmd]}"
-# Check if they typed the exact .sh file name
-elif [ -f "$SCRIPT_DIR/$cmd" ] && [[ "$cmd" == *.sh ]]; then
+elif [ -f "$LIBEXEC_DIR/$cmd" ] && [[ "$cmd" == *.sh ]]; then
     script_target="$cmd"
-# Check if they typed the name without .sh
-elif [ -f "$SCRIPT_DIR/$cmd.sh" ]; then
+elif [ -f "$LIBEXEC_DIR/$cmd.sh" ]; then
     script_target="$cmd.sh"
 else
     log_error "Unknown command or script: $cmd"
@@ -178,13 +186,11 @@ else
     exit 1
 fi
 
-# Execute the target script
-full_path="$SCRIPT_DIR/$script_target"
+full_path="$LIBEXEC_DIR/$script_target"
 
 if [ ! -x "$full_path" ]; then
     log_warn "Script '$script_target' is not executable. Fixing permissions..."
-    chmod +x "$full_path" || die "Failed to make '$script_target' executable."
+    chmod +x "$full_path" || echo -e "\033[0;31m[ERROR]\033[0m Failed to make '$script_target' executable." >&2
 fi
 
-# Replace the wrapper process entirely with the target script
 exec "$full_path" "$@"
