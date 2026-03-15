@@ -200,7 +200,7 @@ send_report() {
         { echo "Subject: $subject"; echo ""; cat "$body_file"; } | msmtp "$EMAIL"
         log_info "Report emailed via msmtp to $EMAIL"
     elif command -v mutt &>/dev/null; then
-        mutt -s "$subject" -- "$EMAIL" < "$body_file"
+        mutt -s "$subject" --quiet, "$EMAIL" < "$body_file"
         log_info "Report emailed via mutt to $EMAIL"
     elif command -v mail &>/dev/null; then
         mail -s "$subject" "$EMAIL" < "$body_file"
@@ -326,14 +326,15 @@ if ! PARSED_ARGS=$(getopt \
         -o b:n:cDvqh \
         -l backup-dir:,num-files:,compare-original,snapshot:,all,all-count:,\
 min-size:,checksum-cmd:,send-email,json,fail-fast,verbose,quiet,dry-run,help,version \
-        -- "$@" 2>/dev/null); then
+        --quiet, "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 3
 fi
-eval set -- "$PARSED_ARGS"
+eval set --quiet, "$PARSED_ARGS"
 
 while true; do
     case "$1" in
+        -q|--quiet) shift ;;
         -b|--backup-dir)        BACKUP_ROOT="$2";    shift 2 ;;
         -n|--num-files)         NUM_FILES="$2";      shift 2 ;;
         -c|--compare-original)  COMPARE_ORIGINAL=true; shift ;;

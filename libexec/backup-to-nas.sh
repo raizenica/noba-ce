@@ -291,7 +291,7 @@ send_report() {
     } > "${body_file}.full"
 
     if command -v mutt &>/dev/null; then
-        mutt -s "$subject" -a "$LOG_FILE" -- "$EMAIL" < "${body_file}.full"
+        mutt -s "$subject" -a "$LOG_FILE" --quiet, "$EMAIL" < "${body_file}.full"
     elif command -v mail &>/dev/null; then
         mail -s "$subject" "$EMAIL" < "${body_file}.full"
     elif command -v sendmail &>/dev/null; then
@@ -311,16 +311,17 @@ send_report() {
 setup_logging
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
-if ! PARSED_ARGS=$(getopt -o s:d:e:r:k:nVvh \
+if ! PARSED_ARGS=$(getopt -o qs:d:e:r:k:nVvh \
     -l source:,dest:,email:,retention:,keep-count:,dry-run,verify,report-only,verbose,help,version \
-    -- "$@" 2>/dev/null); then
+    --quiet, "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 2
 fi
-eval set -- "$PARSED_ARGS"
+eval set --quiet, "$PARSED_ARGS"
 
 while true; do
     case "$1" in
+        -q|--quiet) shift ;;
         -s|--source)       SOURCES+=("$2");          shift 2 ;;
         -d|--dest)         DEST="$2";                shift 2 ;;
         -e|--email)        EMAIL="$2";               shift 2 ;;

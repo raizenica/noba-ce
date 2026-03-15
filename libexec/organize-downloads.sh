@@ -222,7 +222,7 @@ print_summary() {
 
     while IFS= read -r cat; do
         printf '  %-18s  %d\n' "$cat" "${_counts[$cat]}"
-        (( total += _counts[cat] )) || true
+        total=$((total + _counts[$cat])) || true
     done < <(printf '%s\n' "${!_counts[@]}" | sort)
 
     printf '  %-18s  %s\n' "──────────────────" "─────"
@@ -234,7 +234,7 @@ print_summary() {
 _EXT_OVERRIDES=""
 _TARGET_OVERRIDES=""
 
-if ! PARSED_ARGS=$(getopt -o d:a:nsvuh -l download-dir:,min-age:,dry-run,stats,verbose,undo,ext:,target:,help,version -- "$@" 2>/dev/null); then
+if ! PARSED_ARGS=$(getopt -o d:a:nsvuhq -l download-dir:,min-age:,dry-run,stats,verbose,undo,quiet,ext:,target:,help,version -- "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 1
 fi
@@ -248,6 +248,7 @@ while true; do
         -s|--stats)        STATS_ONLY=true; DRY_RUN=true; shift ;;
         -u|--undo)         UNDO_MODE=true; shift ;;
         -v|--verbose)      export VERBOSE=true; shift ;;
+           --quiet|-q)        shift ;;
            --ext)          _EXT_OVERRIDES="$2"; shift 2 ;;
            --target)       _TARGET_OVERRIDES="$2"; shift 2 ;;
         --help|-h)         show_help ;;
