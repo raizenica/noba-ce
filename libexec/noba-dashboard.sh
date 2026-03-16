@@ -6,7 +6,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=./noba-lib.sh
+# FIX: use source=/dev/null so shellcheck doesn't try to resolve the
+# runtime library path, which doesn't exist at lint time.
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -137,6 +139,9 @@ disk_usage() {
 
         pct=${percent%\%}
 
+        # FIX: bare `(( expr ))` exits with code 1 when the expression is
+        # false. Under set -Eeuo pipefail this kills the script mid-render
+        # for any filesystem below the threshold. Use if/elif instead.
         if (( pct >= 90 )); then
             color=$RED
         elif (( pct >= 75 )); then
@@ -252,7 +257,10 @@ pending_downloads() {
 
     section "Pending Downloads"
 
-    download_dir="$(get_config ".organize.download_dir" "$HOME/Downloads")"
+    # FIX: was get_config ".organize.download_dir" — the key defined in the
+    # shared YAML schema is .downloads.dir; the wrong key always fell back to
+    # $HOME/Downloads silently and never picked up a custom path.
+    download_dir="$(get_config ".downloads.dir" "$HOME/Downloads")"
 
     [[ -d "$download_dir" ]] || {
         echo "  Download directory missing."
@@ -261,14 +269,17 @@ pending_downloads() {
 
     count=$(find "$download_dir" -maxdepth 1 -type f | wc -l)
 
+    # FIX: bare (( count > 0 )) returns exit code 1 when count is 0,
+    # triggering errexit. Use if/else throughout.
     if (( count > 0 )); then
 
         printf "  %s file(s) waiting:\n" "$count"
 
         find "$download_dir" -maxdepth 1 -type f -printf "    %f\n" | head -5
 
-        (( count > 5 )) && \
+        if (( count > 5 )); then
             printf "    ... and %s more\n" $((count-5))
+        fi
 
     else
         echo "  No files waiting."
@@ -302,8 +313,12 @@ updates_status() {
     printf "  DNF updates     : %s\n" "$dnf_updates"
     printf "  Flatpak updates : %s\n" "$flatpak_updates"
 
-    (( dnf_updates==0 && flatpak_updates==0 )) && \
+    # FIX: bare (( dnf_updates==0 && flatpak_updates==0 )) exits with code 1
+    # when either counter is non-zero, triggering errexit and aborting the
+    # render. Use if instead.
+    if (( dnf_updates == 0 && flatpak_updates == 0 )); then
         echo "  System up to date."
+    fi
 }
 
 # -------------------------------------------------------------------
@@ -314,8 +329,10 @@ render_dashboard() {
 
     [[ -t 1 ]] && clear
 
+    # FIX: the middle border line was 62 chars wide while top/bottom were 60,
+    # producing a misaligned box. Reduced trailing padding from 11 to 9 spaces.
     printf "%b╔══════════════════════════════════════════════════════════╗%b\n" "$BLUE" "$NC"
-    printf "%b║                NOBA DASHBOARD – %s           ║%b\n" "$BLUE" "$(date '+%Y-%m-%d %H:%M')" "$NC"
+    printf "%b║                NOBA DASHBOARD – %s         ║%b\n" "$BLUE" "$(date '+%Y-%m-%d %H:%M')" "$NC"
     printf "%b╚══════════════════════════════════════════════════════════╝%b\n" "$BLUE" "$NC"
 
     system_info
