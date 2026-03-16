@@ -240,21 +240,25 @@ run_verify() {
         local rel="${backed_up#"$backup_dir/"}"
         local top_dir="${rel%%/*}"
         local src_top="$top_dir"
-        # Check if the original source had a leading dot (e.g. .config)
+        local src_parent=""
+        # Find which source this top-level dir belongs to, accounting for dot-stripping
         for s in "${SOURCES[@]}"; do
             local b; b=$(basename "$s")
-            if [[ "${b#.}" == "$top_dir" && "$b" == .* ]]; then
-                src_top="$b"; break
+            if [[ "${b#.}" == "$top_dir" ]]; then
+                src_top="$b"
+                src_parent="$(dirname "$s")"
+                break
             fi
         done
+        [[ -z "$src_parent" ]] && continue   # couldn't match — skip rather than guess
         # Reconstruct original path
         local original
-        original=$(dirname "${SOURCES[0]}")/"$src_top${rel#"$top_dir"}"
+        original="$src_parent/$src_top${rel#"$top_dir"}"
 
         if [[ -f "$original" ]]; then
             local orig_sum bkp_sum
-            orig_sum=$(sha256sum "$original"     2>/dev/null | cut -d' ' -f1)
-            bkp_sum=$( sha256sum "$backed_up"    2>/dev/null | cut -d' ' -f1)
+            orig_sum=$(sha256sum "$original"  2>/dev/null | cut -d' ' -f1)
+            bkp_sum=$( sha256sum "$backed_up" 2>/dev/null | cut -d' ' -f1)
             if [[ "$orig_sum" != "$bkp_sum" ]]; then
                 log_warn "VERIFY MISMATCH: $backed_up"
                 (( fail_count++ )) || true
@@ -291,7 +295,7 @@ send_report() {
     } > "${body_file}.full"
 
     if command -v mutt &>/dev/null; then
-        mutt -s "$subject" -a "$LOG_FILE" --quiet, "$EMAIL" < "${body_file}.full"
+        mutt -s "$subject" -a "$LOG_FILE" -- "$EMAIL" < "${body_file}.full"
     elif command -v mail &>/dev/null; then
         mail -s "$subject" "$EMAIL" < "${body_file}.full"
     elif command -v sendmail &>/dev/null; then
@@ -313,11 +317,11 @@ setup_logging
 # ── Argument parsing ───────────────────────────────────────────────────────────
 if ! PARSED_ARGS=$(getopt -o qs:d:e:r:k:nVvh \
     -l source:,dest:,email:,retention:,keep-count:,dry-run,verify,report-only,verbose,help,version \
-    --quiet, "$@" 2>/dev/null); then
+    -- "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 2
 fi
-eval set --quiet, "$PARSED_ARGS"
+eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
@@ -586,8 +590,8 @@ log_info "  Duration: ${DURATION}s   Size: ${BACKUP_SIZE}"
 log_info "============================================================"
 
 # Invoke optional notification hook
-if [[ "$DRY_RUN" != true ]] && command -v backup-notify.sh &>/dev/null; then
-    backup-notify.sh || true
+if [[ "$DRY_RUN" != true ]] && [[ -x "$SCRIPT_DIR/backup-notify.sh" ]]; then
+    "$SCRIPT_DIR/backup-notify.sh" || true
 fi
 
 exit $EXIT_CODE
