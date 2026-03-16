@@ -1,0 +1,185 @@
+#!/bin/bash
+# Nobara Command Center – main launcher
+
+set -euo pipefail
+trap 'rc=$?; echo "Exiting with code $rc at line $LINENO" >&2' EXIT
+
+# Find installation prefix (where this script is located)
+SCRIPT_PATH="$(readlink -f "$0")"
+PREFIX="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+
+# Source libraries
+source "$PREFIX/libexec/noba-web/functions.sh"          # our new functions
+source "$PREFIX/libexec/lib/noba-lib.sh"                # adjust if lib/ is elsewhere
+
+# Configuration file
+CONFIG_FILE="${HOME}/.config/noba-web.conf"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# Defaults (can be overridden by config file)
+START_PORT="${START_PORT:-8080}"
+MAX_PORT="${MAX_PORT:-8090}"
+HOST="${HOST:-0.0.0.0}"
+USE_HTTPS="${USE_HTTPS:-false}"
+HTML_DIR="${HTML_DIR:-/tmp/noba-web}"
+SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
+SERVER_URL_FILE="${SERVER_URL_FILE:-/tmp/noba-web-server.url}"
+LOG_FILE="${LOG_FILE:-/tmp/noba-web.log}"
+NOBA_YAML="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
+AUTH_DIR="${HOME}/.config/noba-web"
+AUTH_CONF="${AUTH_DIR}/auth.conf"
+CERT_FILE="${AUTH_DIR}/server.crt"
+KEY_FILE="${AUTH_DIR}/server.key"
+
+# Flags
+KILL_ONLY=false
+RESTART=false
+VERBOSE=false
+USE_HTTPS=false
+SET_PASSWORD=false
+ADD_USER=false
+REMOVE_USER=""
+LIST_USERS=false
+SHOW_STATUS=false
+GEN_SYSTEMD=false
+GEN_CERT=false
+
+# ----- Argument parsing (from original) -----
+if ! PARSED_ARGS=$(getopt -o p:m:kv \
+    -l port:,max:,host:,kill,verbose,help,version,set-password,restart,status,\
+generate-systemd,https,generate-cert,add-user,remove-user:,list-users \
+    -- "$@" 2>/dev/null); then
+    log_error "Invalid argument. Run with --help for usage."; exit 1
+fi
+eval set -- "$PARSED_ARGS"
+
+while true; do
+    case "$1" in
+        -p|--port)           START_PORT="$2";        shift 2 ;;
+        -m|--max)            MAX_PORT="$2";           shift 2 ;;
+        --host)              HOST="$2";               shift 2 ;;
+        -k|--kill)           KILL_ONLY=true;          shift   ;;
+        -v|--verbose)        VERBOSE=true;            shift   ;;
+        --set-password)      ADD_USER=true;           shift   ;;
+        --add-user)          ADD_USER=true;           shift   ;;
+        --remove-user)       REMOVE_USER="$2";        shift 2 ;;
+        --list-users)        LIST_USERS=true;         shift   ;;
+        --https)             USE_HTTPS=true;          shift   ;;
+        --generate-cert)     GEN_CERT=true;           shift   ;;
+        --restart)           KILL_ONLY=true; RESTART=true; shift ;;
+        --status)            SHOW_STATUS=true;        shift   ;;
+        --generate-systemd)  GEN_SYSTEMD=true;        shift   ;;
+        --help)              show_help ;;
+        --version)           show_version ;;
+        --)                  shift; break ;;
+        *)                   log_error "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+# ----- End argument parsing -----
+
+# After parsing, handle immediate actions
+if [[ "$SHOW_STATUS" == true ]]; then show_status; fi
+if [[ "$GEN_CERT" == true ]]; then generate_cert; fi
+if [[ "$GEN_SYSTEMD" == true ]]; then generate_systemd; fi
+if [[ "$ADD_USER" == true ]]; then add_user; fi
+if [[ -n "$REMOVE_USER" ]]; then remove_user "$REMOVE_USER"; fi
+if [[ "$LIST_USERS" == true ]]; then list_users; fi
+
+# HTTPS certificate check
+if [[ "$USE_HTTPS" == true && ! -f "$CERT_FILE" ]]; then
+    log_error "TLS certificate not found. Run:  $0 --generate-cert"
+    exit 1
+fi
+
+# Kill / restart
+if [[ "$KILL_ONLY" == true ]]; then
+    kill_server
+    [[ "$RESTART" != true ]] && exit 0
+fi
+
+# Dependency checks (from noba-lib.sh)
+check_deps python3 yq
+
+# Verify yq is the Go version (mikefarah/yq)
+if ! yq --version 2>/dev/null | grep -q "mikefarah"; then
+    log_error "'yq' must be the Go version (mikefarah/yq). See https://github.com/mikefarah/yq"
+    exit 1
+fi
+
+# Python version check
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
+if ! awk -v ver="$PYTHON_VERSION" 'BEGIN { split(ver,v,"."); exit !(v[1]>3||(v[1]==3&&v[2]>=7)); }'; then
+    log_error "Python 3.7+ required (found $PYTHON_VERSION)."
+    exit 1
+fi
+
+# Find free port
+PORT=$(find_free_port "$START_PORT" "$MAX_PORT") || die "No free port in range ${START_PORT}–${MAX_PORT}."
+log_info "Using port $PORT"
+
+# Prepare runtime directory
+mkdir -p "$HTML_DIR"
+rm -f "$HTML_DIR"/*.html 2>/dev/null || true
+
+# Copy frontend from installation to runtime directory
+cp "$PREFIX/share/noba-web/index.html" "$HTML_DIR/"
+
+# Create default YAML if missing
+create_default_yaml
+
+# Launch the Python backend
+export PORT HOST PID_FILE="$SERVER_PID_FILE"
+export NOBA_SCRIPT_DIR="$PREFIX/libexec"          # point to directory containing automation scripts
+export NOBA_CONFIG="$NOBA_YAML"
+if [[ "$USE_HTTPS" == true ]]; then
+    export NOBA_HTTPS=1 NOBA_CERT="$CERT_FILE" NOBA_KEY="$KEY_FILE"
+fi
+
+cd "$HTML_DIR"
+: > "$LOG_FILE"
+
+nohup python3 "$PREFIX/libexec/noba-web/server.py" >> "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+echo "$SERVER_PID" > "$SERVER_PID_FILE"
+PROTO=$([[ "$USE_HTTPS" == true ]] && echo "https" || echo "http")
+echo "${PROTO}://${HOST}:${PORT}" > "$SERVER_URL_FILE"
+
+# Health check (from original)
+MAX_WAIT=12
+WAITED=0
+while true; do
+    if command -v curl &>/dev/null; then
+        CODE=$(curl -sk -o /dev/null -w '%{http_code}' "${PROTO}://${HOST}:${PORT}/api/health" 2>/dev/null || true)
+    elif command -v wget &>/dev/null; then
+        CODE=$(wget -qO- --no-check-certificate "${PROTO}://${HOST}:${PORT}/api/health" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(200 if d.get('status')=='ok' else 0)" 2>/dev/null || true)
+    else
+        log_error "Neither curl nor wget found."; kill "$SERVER_PID" 2>/dev/null; exit 1
+    fi
+    [[ "$CODE" == "200" ]] && break
+    sleep 1; WAITED=$((WAITED+1))
+    if [[ $WAITED -ge $MAX_WAIT ]]; then
+        log_error "Server did not respond within ${MAX_WAIT}s. Last 20 lines of log:"
+        tail -20 "$LOG_FILE" | sed 's/^/  /' >&2
+        kill "$SERVER_PID" 2>/dev/null || true; exit 1
+    fi
+done
+
+log_success "Dashboard live → ${PROTO}://${HOST}:${PORT}"
+[[ "$USE_HTTPS" == true ]] && log_info "Using TLS cert: $CERT_FILE"
+if [[ ! -f "$AUTH_CONF" ]]; then
+    log_warning "No users configured. Run:  $0 --add-user"
+fi
+
+if [[ "$VERBOSE" == true ]]; then
+    log_info "Tailing log (Ctrl+C to stop)…"
+    tail -f "$LOG_FILE" &
+    TAIL_PID=$!
+fi
+
+wait "$SERVER_PID"
+EXIT_CODE=$?
+[[ -n "${TAIL_PID:-}" ]] && kill "$TAIL_PID" 2>/dev/null || true
+exit $EXIT_CODE
