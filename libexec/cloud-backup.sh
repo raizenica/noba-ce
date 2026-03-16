@@ -200,8 +200,8 @@ parse_rclone_size() {
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 if ! PARSED_ARGS=$(getopt \
-        -o nr:c:slh \
-        -l dry-run,remote:,config:,status,list-remotes,bandwidth:,transfers:,retries:,exclude:,no-progress,help,version \
+        -o nr:c:slvh \
+        -l dry-run,remote:,config:,status,list-remotes,bandwidth:,transfers:,retries:,exclude:,no-progress,verbose,help,version \
         -- "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 2
@@ -220,6 +220,7 @@ while true; do
            --retries)      RETRIES="$2";              shift 2 ;;
            --exclude)      EXTRA_EXCLUDES+=("$2");    shift 2 ;;
            --no-progress)  SHOW_PROGRESS=false;       shift   ;;
+        -v|--verbose)      export VERBOSE=true;       shift   ;;
         -h|--help)         show_help ;;
            --version)      show_version ;;
         --)                shift; break ;;
@@ -263,6 +264,11 @@ if [[ "$CHECK_STATUS" == true ]]; then
     exit 0
 fi
 
+# ── Logging setup (before pre-flight so early errors are captured) ────────────
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 check_deps rclone
 
@@ -277,17 +283,14 @@ if [[ ! -d "$LOCAL_BACKUP_DIR" ]]; then
     exit 1
 fi
 
-# Remote reachability check (non-fatal: warn and continue)
-if ! rclone lsd "$REMOTE_PATH" --max-depth 1 >/dev/null 2>&1; then
+# Remote reachability check — probe the remote root only (not the full path,
+# which won't exist on first sync and would always trigger a false warning).
+_remote_root="${REMOTE_PATH%%:*}:"
+if ! rclone lsd "$_remote_root" --max-depth 1 >/dev/null 2>&1; then
     if [[ "$DRY_RUN" == false ]]; then
-        log_warn "Remote '$REMOTE_PATH' does not appear reachable — attempting sync anyway."
+        log_warn "Remote '${_remote_root}' does not appear reachable — attempting sync anyway."
     fi
 fi
-
-# ── Logging setup ──────────────────────────────────────────────────────────────
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ── Lock ──────────────────────────────────────────────────────────────────────
 [[ "$DRY_RUN" != true ]] && acquire_lock
