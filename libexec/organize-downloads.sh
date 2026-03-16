@@ -360,7 +360,21 @@ while IFS= read -r -d '' file; do
         ext=""
     fi
 
-    if [[ -n "$ext" ]]; then category="${EXT_TO_CAT[$ext]:-Others}"; else category="Others"; fi
+    category="Others"
+    if [[ -n "$ext" && -n "${EXT_TO_CAT[$ext]:-}" ]]; then
+        category="${EXT_TO_CAT[$ext]}"
+    else
+        # Smart Fallback: Guess based on MIME type
+        mime=$(file -b --mime-type "$file" 2>/dev/null || echo "")
+        case "$mime" in
+            image/*) category="Images" ;;
+            video/*) category="Video" ;;
+            audio/*) category="Audio" ;;
+            text/*|application/pdf|application/epub*) category="Documents" ;;
+            application/zip|application/gzip|application/x-tar|application/x-7z-compressed) category="Archives" ;;
+            application/x-executable|application/x-pie-executable|application/x-sharedlib) category="Installers" ;;
+        esac
+    fi
 
     if [[ -n "${CAT_TARGET[$category]:-}" ]]; then
         dest_folder="${CAT_TARGET[$category]}"
