@@ -1,0 +1,17 @@
+[Unit]
+Description=Nobara Command Center Web Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/noba-web --port 8080 --host 0.0.0.0
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=noba-web
+
+[Install]
+WantedBy=default.target

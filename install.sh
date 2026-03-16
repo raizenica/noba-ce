@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 3.2.0
+# Version: 1.0.0
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Usage: install.sh [OPTIONS]"; exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "install.sh version 3.2.0"; exit 0
+    echo "install.sh version 1.0.0"; exit 0
 fi
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
@@ -31,6 +31,13 @@ NO_SYSTEMD=false
 USER_EMAIL="${EMAIL:-}"
 
 MANIFEST_FILE="${MANIFEST_FILE:-$HOME/.local/share/noba-install.manifest}"
+
+# Read version from VERSION file
+if [[ -f "$SCRIPT_DIR/VERSION" ]]; then
+    NOBA_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    NOBA_VERSION="unknown"
+fi
 
 # ── Whitelist of suite scripts ─────────────────────────────────────────────────
 SUITE_SCRIPTS=(
@@ -81,7 +88,7 @@ Options:
   -h, --help             Show this message
   -v, --version          Show version information
 EOF
-    exit 0
+  exit 0
 }
 
 # ── Manifest-based install tracking and rollback ──────────────────────────────
@@ -301,7 +308,7 @@ while [[ $# -gt 0 ]]; do
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
         -h|--help)         show_help ;;
-        -v|--version)      echo "install.sh version 3.2.0"; exit 0 ;;
+        -v|--version)      echo "install.sh version 1.0.0"; exit 0 ;;
         *) say_err "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -309,7 +316,7 @@ done
 [[ "$UNINSTALL" == true ]] && do_uninstall
 
 # ── Begin install ─────────────────────────────────────────────────────────────
-header "Nobara Automation Suite Installer v3.2.0"
+header "Nobara Automation Suite Installer v$NOBA_VERSION"
 
 detect_os
 say "OS: $OS_NAME ($OS_ID${OS_VERSION:+ $OS_VERSION})"
@@ -332,7 +339,7 @@ fi
 
 header "Installing components"
 
-# 1. Install Library (now under libexec/noba/lib/)
+# 1. Install Library
 src="$SCRIPT_DIR/libexec/noba/lib/noba-lib.sh"
 dst="$LIBEXEC_DIR/lib/noba-lib.sh"
 if [[ -f "$src" ]]; then
@@ -347,7 +354,7 @@ else
     exit 1
 fi
 
-# 2. Install Automation Scripts (now under libexec/noba/)
+# 2. Install Automation Scripts
 for name in "${SUITE_SCRIPTS[@]}"; do
     src="$SCRIPT_DIR/libexec/noba/$name"
     dst="$LIBEXEC_DIR/$name"
@@ -375,7 +382,7 @@ for name in "${OPTIONAL_SCRIPTS[@]}"; do
     fi
 done
 
-# 3. Install Web Dashboard components (now under libexec/noba/noba-web/)
+# 3. Install Web Dashboard components
 if [[ -d "$SCRIPT_DIR/libexec/noba/noba-web" ]]; then
     # Create target subdirectory
     if [[ "$DRY_RUN" == true ]]; then
@@ -444,12 +451,21 @@ if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
     fi
 fi
 
-# 5. Install Man Page
+# 5. Install Man Pages
 if [[ -f "$SCRIPT_DIR/docs/noba.1" ]]; then
     if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba.1 → $MAN_DIR/"; else
         cp "$SCRIPT_DIR/docs/noba.1" "$MAN_DIR/noba.1"
         record_install "$MAN_DIR/noba.1"
         say_ok "noba.1 (man page)"
+    fi
+fi
+
+# Install noba-web man page if exists
+if [[ -f "$SCRIPT_DIR/docs/noba-web.1" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba-web.1 → $MAN_DIR/"; else
+        cp "$SCRIPT_DIR/docs/noba-web.1" "$MAN_DIR/noba-web.1"
+        record_install "$MAN_DIR/noba-web.1"
+        say_ok "noba-web.1 (man page)"
     fi
 fi
 

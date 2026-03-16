@@ -1,0 +1,81 @@
+.\" Man page for noba-web
+.TH NOBA-WEB 1 "March 2025" "noba-web 1.0.0" "Nobara Automation Suite"
+.SH NAME
+noba-web \- Launch the Nobara Command Center web dashboard
+.SH SYNOPSIS
+.B noba-web
+[OPTIONS]
+.SH DESCRIPTION
+noba-web starts a web-based dashboard for monitoring and controlling the
+Nobara Automation Suite. It includes live system stats, service control,
+Pi‑hole integration, speedtests, and more.
+.SH OPTIONS
+.TP
+\fB-p, --port PORT\fR
+Start searching from PORT (default: 8080)
+.TP
+\fB-m, --max PORT\fR
+Maximum port to try (default: 8090)
+.TP
+\fB--host HOST\fR
+Bind to specific host/IP (default: 0.0.0.0)
+.TP
+\fB-k, --kill\fR
+Kill any running noba-web server and exit
+.TP
+\fB-v, --verbose\fR
+Tail the server log after starting (Ctrl+C to stop)
+.TP
+\fB--https\fR
+Enable HTTPS/TLS (requires \fB--generate-cert\fR first)
+.TP
+\fB--generate-cert\fR
+Create a self-signed TLS certificate and exit
+.TP
+\fB--add-user\fR
+Add or update a user (interactive, supports roles)
+.TP
+\fB--remove-user USERNAME\fR
+Remove a user from auth.conf
+.TP
+\fB--list-users\fR
+List configured users and their roles
+.TP
+\fB--set-password\fR
+Alias for \fB--add-user\fR (backward compatible)
+.TP
+\fB--restart\fR
+Kill any running server and start a new one
+.TP
+\fB--status\fR
+Show whether the server is running
+.TP
+\fB--generate-systemd\fR
+Print a systemd .service unit and exit
+.TP
+\fB--config FILE\fR
+Use an alternative configuration file
+.TP
+\fB--help\fR
+Show this help message
+.TP
+\fB--version\fR
+Show version information
+.SH FILES
+.TP
+~/.config/noba-web.conf
+Configuration file for environment variables and options.
+.TP
+~/.config/noba-web/auth.conf
+User credentials (one per line, format username:pbkdf2:salt:hash:role).
+.TP
+~/.config/noba/config.yaml
+Main Nobara configuration (email, backup targets, etc.).
+.SH ENVIRONMENT
+.TP
+NOBA_WEB_OPTS
+Additional options passed to the server (used in systemd service).
+.SH AUTHOR
+Raizen (and contributors)
+.SH SEE ALSO
+noba(1)

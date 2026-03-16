@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/noba-web --port 8080 --host 0.0.0.0
+EnvironmentFile=%h/.config/noba-web.conf
+ExecStart=%h/.local/bin/noba-web $NOBA_WEB_OPTS
 ExecStop=/bin/kill -TERM $MAINPID
 Restart=on-failure
 RestartSec=5

@@ -1,0 +1,196 @@
+#!/bin/bash
+# noba – Central command for Nobara automation suite
+# Version: 3.1.0
+
+set -euo pipefail
+
+# Resolve the installation prefix relative to the location of this wrapper
+WRAPPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREFIX="$(dirname "$WRAPPER_DIR")"
+
+# Define where the actual scripts live
+LIBEXEC_DIR="$PREFIX/libexec/noba"
+
+# Source library for logging and config parsing
+if [ -f "$LIBEXEC_DIR/lib/noba-lib.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$LIBEXEC_DIR/lib/noba-lib.sh"
+else
+    echo -e "\033[0;31m[ERROR]\033[0m Cannot find noba-lib.sh in $LIBEXEC_DIR/lib" >&2
+    exit 1
+fi
+
+# -------------------------------------------------------------------
+# Alias Mapping
+# -------------------------------------------------------------------
+declare -A ALIASES=(
+    ["backup"]="backup-to-nas.sh"
+    ["verify"]="backup-verifier.sh"
+    ["cloud"]="cloud-backup.sh"
+    ["checksum"]="checksum.sh"
+    ["disk"]="disk-sentinel.sh"
+    ["organize"]="organize-downloads.sh"
+    ["undo"]="undo-organizer.sh"
+    ["web"]="noba-web.sh"
+    ["report"]="system-report.sh"
+    ["digest"]="noba-daily-digest.sh"
+    ["watch"]="service-watch.sh"
+    ["tui"]="noba-tui.sh"
+    ["update"]="noba-update.sh"
+    ["motd"]="motd-generator.sh"
+    ["cron"]="noba-cron-setup.sh"
+    ["doctor"]="config-check.sh"
+)
+
+# -------------------------------------------------------------------
+# Core Functions
+# -------------------------------------------------------------------
+show_version() {
+    echo "Nobara Automation Suite (noba) version 3.1.0"
+    exit 0
+}
+
+show_help() {
+    cat <<HELP_EOF
+Usage: noba <command> [options]
+
+Core Commands:
+  setup         Run the initial setup and dependency checks
+  config        View or edit the unified configuration
+  list          List all available automation scripts and aliases
+  doctor        Run system diagnostics and configuration checks
+  help          Show this help message
+  version       Show version information
+
+Script Execution:
+  You can run scripts directly via their alias or filename:
+  noba backup --dry-run
+  noba web --port 8080
+  noba disk-sentinel.sh --verbose
+
+For script-specific help, use: noba <command> --help
+HELP_EOF
+}
+
+cmd_list() {
+    echo "Available commands and aliases:"
+    echo "-------------------------------"
+    printf " %-15s | %s\n" "ALIAS" "SCRIPT"
+    printf " %-15s | %s\n" "---------------" "------------------------"
+
+    for alias in $(echo "${!ALIASES[@]}" | tr ' ' '\n' | sort); do
+        printf " %-15s | %s\n" "$alias" "${ALIASES[$alias]}"
+    done
+
+    echo ""
+    echo "Other scripts in directory (can be run directly via 'noba <script.sh>'):"
+    if [ -d "$LIBEXEC_DIR" ]; then
+        for script in "$LIBEXEC_DIR"/*.sh; do
+            [ -f "$script" ] || continue
+            base_name=$(basename "$script")
+            if [[ "$base_name" != "noba-lib.sh" ]] && \
+               [[ "$base_name" != "noba-setup.sh" ]] && \
+               [[ "$base_name" != "noba-completion.sh" ]]; then
+                
+                is_alias=false
+                for val in "${ALIASES[@]}"; do
+                    if [[ "$val" == "$base_name" ]]; then
+                        is_alias=true
+                        break
+                    fi
+                done
+                if [ "$is_alias" = false ]; then
+                    echo " - $base_name"
+                fi
+            fi
+        done
+    else
+        echo " (No internal scripts found in $LIBEXEC_DIR)"
+    fi
+}
+
+cmd_config() {
+    local conf_file="$HOME/.config/noba/config.yaml"
+    if [ ! -f "$conf_file" ]; then
+        log_warn "Config file not found. Run 'noba setup' to create a default."
+        exit 1
+    fi
+
+    if [ $# -eq 0 ]; then
+        log_info "Displaying current configuration ($conf_file):"
+        echo "---------------------------------------------------"
+        cat "$conf_file"
+    elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
+        ${EDITOR:-nano} "$conf_file"
+    else
+        log_error "Unknown option: $1"
+        echo "Usage: noba config [--edit]"
+        exit 1
+    fi
+}
+
+# -------------------------------------------------------------------
+# Main Router
+# -------------------------------------------------------------------
+if [ $# -eq 0 ]; then
+    show_help
+    exit 1
+fi
+
+cmd="$1"
+shift
+
+case "$cmd" in
+    setup)
+        exec "$LIBEXEC_DIR/setup-automation-timers.sh" "$@"
+        ;;
+    config)
+        cmd_config "$@"
+        exit 0
+        ;;
+    list)
+        cmd_list
+        exit 0
+        ;;
+    doctor)
+        exec "$LIBEXEC_DIR/config-check.sh" "$@"
+        ;;
+    help|--help|-h)
+        show_help
+        exit 0
+        ;;
+    version|--version|-v)
+        show_version
+        ;;
+    run)
+        if [ $# -eq 0 ]; then
+            log_error "No script specified. Usage: noba <script>"
+            exit 1
+        fi
+        cmd="$1"
+        shift
+        ;;
+esac
+
+script_target=""
+
+if [[ -n "${ALIASES[$cmd]:-}" ]]; then
+    script_target="${ALIASES[$cmd]}"
+elif [ -f "$LIBEXEC_DIR/$cmd" ] && [[ "$cmd" == *.sh ]]; then
+    script_target="$cmd"
+elif [ -f "$LIBEXEC_DIR/$cmd.sh" ]; then
+    script_target="$cmd.sh"
+else
+    log_error "Unknown command or script: $cmd"
+    echo "Use 'noba list' to see available commands."
+    exit 1
+fi
+
+full_path="$LIBEXEC_DIR/$script_target"
+
+if [ ! -x "$full_path" ]; then
+    log_warn "Script '$script_target' is not executable. Fixing permissions..."
+    chmod +x "$full_path" || echo -e "\033[0;31m[ERROR]\033[0m Failed to make '$script_target' executable." >&2
+fi
+
+exec "$full_path" "$@"

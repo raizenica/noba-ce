@@ -1,0 +1,13 @@
+[Unit]
+Description=Nobara Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/noba/noba-web.sh
+Restart=always
+RestartSec=10
+SyslogIdentifier=noba-web
+
+[Install]
+WantedBy=default.target
