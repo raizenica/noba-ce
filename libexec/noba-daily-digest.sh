@@ -24,7 +24,10 @@ source "$SCRIPT_DIR/lib/noba-lib.sh"
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
-EMAIL="${EMAIL:-strikerke@gmail.com}"
+# BUG-A FIX: default must be empty — a hardcoded personal address means every
+# fresh install silently sends digests to the wrong person if config is absent.
+# The send block below already handles the empty-email case gracefully.
+EMAIL="${EMAIL:-}"
 LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
 DRY_RUN=false
 SERVICES_LIST="backup-to-nas organize-downloads noba-web syncthing"
@@ -36,7 +39,11 @@ if command -v get_config &>/dev/null; then
     EMAIL="$(get_config ".email" "$EMAIL")"
     LOG_DIR="$(get_config ".logs.dir" "$LOG_DIR")"
 
-    config_services=$(get_config_array ".web.service_list")
+    # BUG-B FIX: .web.service_list is the web dashboard's own service list,
+    # not the digest's. Use a dedicated .digest.services key instead.
+    # BUG-C FIX: get_config_array exits non-zero when the key is absent;
+    # without || true this kills the script under set -euo pipefail.
+    config_services=$(get_config_array ".digest.services" 2>/dev/null || true)
     if [ -n "$config_services" ]; then
         # Convert array output to space-separated string, stripping .service
         SERVICES_LIST=$(echo "$config_services" | sed 's/\.service//g' | tr '\n' ' ')
@@ -95,10 +102,16 @@ done
 # -------------------------------------------------------------------
 check_deps tail grep date hostname awk wc
 
-# Native mktemp to avoid subshell trap bug
+# BUG-D FIX: the sed-based trap extraction pattern breaks if noba-lib.sh's
+# EXIT trap contains inner single quotes (e.g. rm -f '/tmp/noba-*.lock').
+# The sed strips outer quotes but truncates at the first inner quote, producing
+# broken shell syntax that silently swallows the cleanup.
+# A named cleanup function composes safely with any pre-existing trap.
 TEMP_DIR=$(mktemp -d "/tmp/noba-digest.XXXXXX")
-existing_trap=$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//")
-trap "${existing_trap:+$existing_trap; }rm -rf \"\$TEMP_DIR\"" EXIT
+_digest_cleanup() {
+    rm -rf "$TEMP_DIR"
+}
+trap '_digest_cleanup' EXIT
 
 digest_file="$TEMP_DIR/digest.txt"
 

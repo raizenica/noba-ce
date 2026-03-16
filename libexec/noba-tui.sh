@@ -21,6 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./noba-lib.sh
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
+# BUG-B FIX: always restore terminal on exit — covers clean exits, set -e
+# triggers, and signals. Without this, an unexpected failure leaves the
+# terminal in dialog's raw/alternate-screen mode with a broken prompt.
+trap 'clear' EXIT
+
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
@@ -78,9 +83,13 @@ run_script() {
         extra_args+=("--verbose")
     fi
 
-    # Run script and pipe live output to programbox, stripping ANSI color codes
-    "$script" "${extra_args[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | \
-        $DIALOG --title "Running: $title" --programbox 22 80
+    # BUG-A FIX: append || true so a non-zero exit from $script (e.g. backup
+    # returning exit 1 for a partial run, or disk-sentinel returning 1 for a
+    # threshold breach) doesn't propagate through the pipeline under pipefail
+    # and kill the entire TUI via set -e.
+    { "$script" "${extra_args[@]}" 2>&1 || true; } \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | $DIALOG --title "Running: $title" --programbox 22 80
 }
 
 # -------------------------------------------------------------------
@@ -145,6 +154,11 @@ while true; do
             if [[ ! -x "$SCRIPT_DIR/noba-web.sh" ]]; then
                 $DIALOG --title "Error" --msgbox \
                     "Script not found or not executable:\n\n$SCRIPT_DIR/noba-web.sh" 8 65
+            # BUG-C FIX: check if an instance is already running before launching
+            # a second one — two instances fight over the same port silently.
+            elif pgrep -f "noba-web.sh" >/dev/null 2>&1; then
+                $DIALOG --title "Web Dashboard" \
+                    --msgbox "Dashboard is already running.\nCheck http://localhost:8080" 7 45
             else
                 "$SCRIPT_DIR/noba-web.sh" &
                 $DIALOG --title "Web Dashboard" \
