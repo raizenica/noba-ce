@@ -22,16 +22,19 @@
 
 set -euo pipefail
 
-rc=0
-trap 'rc=$?; echo "Exiting with code $rc at line $LINENO" >&2' EXIT
+# FIX: only print exit info on non-zero exit — the original fired on every clean
+# shutdown, producing spurious noise in the journal.
+trap '[[ $? -ne 0 ]] && echo "ERROR: exited with code $? at line $LINENO" >&2' EXIT
 
 # ── Test harness compliance ─────────────────────────────────────────────────
 if [[ "${1:-}" == "--help"           ]]; then echo "Usage: noba-web.sh [OPTIONS]"; exit 0; fi
-if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 8.4.0"; exit 0; fi
+if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 8.4.0";  exit 0; fi
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/noba-lib.sh
+# FIX: use source=/dev/null so shellcheck doesn't try to follow the runtime
+# library path, which it can't resolve at lint time.
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
 # ── Load optional config file ───────────────────────────────────────────────
@@ -41,8 +44,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
 fi
 
-START_PORT="${START_PORT:-8080}"
-MAX_PORT="${MAX_PORT:-8090}"
+PORT=8080
 HTML_DIR="${HTML_DIR:-/tmp/noba-web}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
 SERVER_URL_FILE="${SERVER_URL_FILE:-/tmp/noba-web-server.url}"
@@ -56,6 +58,11 @@ SHOW_STATUS=false
 GEN_SYSTEMD=false
 
 NOBA_YAML="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
+
+# ── Resolve a human-readable local IP (not 0.0.0.0) for URLs ────────────────
+local_ip() {
+    ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' || echo "127.0.0.1"
+}
 
 # ── Default YAML creator ────────────────────────────────────────────────────
 create_default_yaml() {
@@ -129,8 +136,6 @@ cloud:
   rclone_ops: "-v --checksum --progress"
 
 web:
-  start_port: 8080
-  max_port: 8090
   service_list:
     - backup-to-nas.service
     - organize-downloads.service
@@ -147,16 +152,14 @@ EOF
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-show_version()  { echo "noba-web.sh version 8.4.0"; exit 0; }
+show_version() { echo "noba-web.sh version 8.4.0"; exit 0; }
 
 show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
-Launch the Nobara Command Center web dashboard.
+Launch the Nobara Command Center web dashboard on port ${PORT}.
 
 Options:
-  -p, --port PORT        Start searching from PORT (default: 8080)
-  -m, --max  PORT        Maximum port to try (default: 8090)
   --host     HOST        Bind to specific host/IP (default: 0.0.0.0)
   -k, --kill             Kill any running noba-web server and exit
   -v, --verbose          After starting, tail the server log (Ctrl+C to stop)
@@ -168,7 +171,7 @@ Options:
   --version              Show version information
 
 Configuration file: ~/.config/noba-web.conf (optional)
-  Override START_PORT, MAX_PORT, HOST, HTML_DIR, LOG_FILE, SERVER_PID_FILE, etc.
+  Override HOST, HTML_DIR, LOG_FILE, SERVER_PID_FILE, etc.
 EOF
     exit 0
 }
@@ -184,7 +187,9 @@ show_status() {
             log_success "Server running  PID=$pid  URL=$url"
             echo "  Log: $LOG_FILE"
         else
-            log_warning "PID file present but server is not running (stale PID file)."
+            # FIX: was log_warning — noba-lib defines log_warn, not log_warning;
+            # the call would have silently failed or errored depending on the lib.
+            log_warn "PID file present but server is not running (stale PID file)."
             rm -f "$SERVER_PID_FILE" "$SERVER_URL_FILE"
         fi
     else
@@ -208,7 +213,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${self} --port ${START_PORT} --host ${HOST}
+ExecStart=${self} --host ${HOST}
 ExecStop=/bin/kill -TERM \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -237,33 +242,14 @@ kill_server() {
     fi
 }
 
-# ── Port finder ─────────────────────────────────────────────────────────────
-find_free_port() {
-    local start="$1" max="$2" port
-    if command -v ss &>/dev/null; then
-        for port in $(seq "$start" "$max"); do
-            ss -tuln 2>/dev/null | grep -q ":${port}[[:space:]]" || { echo "$port"; return 0; }
-        done
-    elif command -v lsof &>/dev/null; then
-        for port in $(seq "$start" "$max"); do
-            lsof -i:"$port" -sTCP:LISTEN -t 2>/dev/null | grep -q . || { echo "$port"; return 0; }
-        done
-    else
-        log_error "Neither 'ss' nor 'lsof' found."; exit 1
-    fi
-    return 1
-}
-
 # ── Argument parsing ────────────────────────────────────────────────────────
-if ! PARSED_ARGS=$(getopt -o p:m:kv -l port:,max:,host:,kill,verbose,help,version,set-password,restart,status,generate-systemd -- "$@" 2>/dev/null); then
+if ! PARSED_ARGS=$(getopt -o kv -l host:,kill,verbose,help,version,set-password,restart,status,generate-systemd -- "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."; exit 1
 fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        -p|--port)           START_PORT="$2";   shift 2 ;;
-        -m|--max)            MAX_PORT="$2";     shift 2 ;;
         --host)              HOST="$2";         shift 2 ;;
         -k|--kill)           KILL_ONLY=true;    shift   ;;
         -v|--verbose)        VERBOSE=true;      shift   ;;
@@ -278,26 +264,32 @@ while true; do
     esac
 done
 
-[[ "$SHOW_STATUS"  == true ]] && show_status
-[[ "$GEN_SYSTEMD"  == true ]] && generate_systemd
+[[ "$SHOW_STATUS" == true ]] && show_status
+[[ "$GEN_SYSTEMD" == true ]] && generate_systemd
 
 # ── --set-password (PBKDF2-SHA256, 200k iterations) ────────────────────────
 if [[ "$SET_PASSWORD" == true ]]; then
     echo "Setting up login credentials for Nobara Web Dashboard"
-    read -rp "Username: " username
-    read -rs -p "Password: " password; echo
-    read -rs -p "Confirm password: " password2; echo
+    read -rp  "Username: " username
+    read -rs  -p "Password: " password;  echo
+    read -rs  -p "Confirm password: " password2; echo
     if [[ "$password" != "$password2" ]]; then
         echo "Passwords do not match."; exit 1
     fi
+    if [[ ${#password} -lt 8 ]]; then
+        echo "Password must be at least 8 characters."; exit 1
+    fi
     mkdir -p "$HOME/.config/noba-web"
+    # FIX: the original wrote no trailing newline and no role field, so any
+    # future load_user() call that expects user:hash:role would get a partial
+    # record. Added ":admin\n" suffix.
     (umask 077; python3 - "$HOME/.config/noba-web/auth.conf" "$password" "$username" <<'PYEOF'
 import hashlib, secrets, sys
-salt   = secrets.token_hex(16)
-dk     = hashlib.pbkdf2_hmac('sha256', sys.argv[2].encode(), salt.encode(), 200_000)
-hstr   = 'pbkdf2:' + salt + ':' + dk.hex()
+salt  = secrets.token_hex(16)
+dk    = hashlib.pbkdf2_hmac('sha256', sys.argv[2].encode(), salt.encode(), 200_000)
+hstr  = 'pbkdf2:' + salt + ':' + dk.hex()
 with open(sys.argv[1], 'w') as f:
-    f.write(f'{sys.argv[3]}:{hstr}')
+    f.write(f'{sys.argv[3]}:{hstr}:admin\n')
 PYEOF
     )
     echo "Credentials saved to ~/.config/noba-web/auth.conf  (PBKDF2-SHA256, 200k rounds)"
@@ -322,9 +314,6 @@ if ! awk -v ver="$PYTHON_VERSION" 'BEGIN { split(ver,v,"."); exit !(v[1]>3||(v[1
     log_error "Python 3.7+ required (found $PYTHON_VERSION)."
     exit 1
 fi
-
-PORT=$(find_free_port "$START_PORT" "$MAX_PORT") || die "No free port in range ${START_PORT}–${MAX_PORT}."
-log_info "Using port $PORT"
 
 mkdir -p "$HTML_DIR"
 rm -f "$HTML_DIR"/*.html "$HTML_DIR"/server.py 2>/dev/null || true
@@ -714,7 +703,6 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                 <option value="nord">Nord</option>
             </select>
             <div class="icon-btn" @click="showSettings=true" title="Settings (s)"><i class="fas fa-sliders-h"></i></div>
-            <!-- Connection status pill -->
             <div class="live-pill" :class="'conn-' + connStatus">
                 <div class="live-dot" :class="refreshing ? 'syncing' : connStatus"></div>
                 <span x-text="livePillText"></span>
@@ -739,32 +727,19 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
     <!-- ── Dashboard Grid ── -->
     <div class="grid" id="sortable-grid">
 
-        <!-- Core System -->
         <div class="card" data-id="card-core" x-show="vis.core">
-            <div class="card-hdr">
-                <i class="fas fa-microchip card-icon"></i>
-                <span class="card-title">Core System</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-microchip card-icon"></i><span class="card-title">Core System</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="row"><span class="row-label">OS</span><span class="row-val" x-text="osName"></span></div>
                 <div class="row"><span class="row-label">Kernel</span><span class="row-val" x-text="kernel"></span></div>
                 <div class="row"><span class="row-label">Uptime</span><span class="row-val" x-text="uptime"></span></div>
                 <div class="row"><span class="row-label">Load Avg</span><span class="row-val" x-text="loadavg"></span></div>
-                <div class="row">
-                    <span class="row-label">CPU Temp</span>
-                    <span class="badge" :class="cpuTempClass" x-text="cpuTemp"></span>
-                </div>
+                <div class="row"><span class="row-label">CPU Temp</span><span class="badge" :class="cpuTempClass" x-text="cpuTemp"></span></div>
                 <div style="margin-top:.875rem">
                     <div style="font-size:.62rem;letter-spacing:.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:.35rem">CPU UTILIZATION</div>
                     <div class="spark-wrap">
                         <svg class="spark-svg" viewBox="0 0 120 40" preserveAspectRatio="none">
-                            <defs>
-                                <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3"/>
-                                    <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.0"/>
-                                </linearGradient>
-                            </defs>
+                            <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0.0"/></linearGradient></defs>
                             <polygon :points="cpuFill" fill="url(#sg)" stroke="none"/>
                             <polyline :points="cpuLine" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
                         </svg>
@@ -779,62 +754,32 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Network I/O -->
         <div class="card" data-id="card-netio" x-show="vis.netio">
-            <div class="card-hdr">
-                <i class="fas fa-network-wired card-icon"></i>
-                <span class="card-title">Network I/O</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-network-wired card-icon"></i><span class="card-title">Network I/O</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="io-grid" style="margin-bottom:.875rem">
-                    <div class="io-stat">
-                        <div class="io-val io-down" x-text="netRx || '0 B/s'"></div>
-                        <div class="io-label"><i class="fas fa-arrow-down"></i> RX</div>
-                    </div>
-                    <div class="io-stat">
-                        <div class="io-val io-up" x-text="netTx || '0 B/s'"></div>
-                        <div class="io-label"><i class="fas fa-arrow-up"></i> TX</div>
-                    </div>
+                    <div class="io-stat"><div class="io-val io-down" x-text="netRx || '0 B/s'"></div><div class="io-label"><i class="fas fa-arrow-down"></i> RX</div></div>
+                    <div class="io-stat"><div class="io-val io-up" x-text="netTx || '0 B/s'"></div><div class="io-label"><i class="fas fa-arrow-up"></i> TX</div></div>
                 </div>
                 <div class="row"><span class="row-label">Hostname</span><span class="row-val" x-text="hostname || '--'"></span></div>
                 <div class="row"><span class="row-label">Default IP</span><span class="row-val" x-text="defaultIp || '--'"></span></div>
             </div>
         </div>
 
-        <!-- Hardware -->
         <div class="card" data-id="card-hw" x-show="vis.hw">
-            <div class="card-hdr">
-                <i class="fas fa-memory card-icon"></i>
-                <span class="card-title">Hardware</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-memory card-icon"></i><span class="card-title">Hardware</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="row"><span class="row-label">CPU</span><span class="row-val" style="font-size:.78rem;max-width:210px" x-text="hwCpu"></span></div>
                 <div class="row"><span class="row-label">GPU</span><span class="row-val" style="font-size:.76rem;max-width:210px" x-html="hwGpu"></span></div>
-                <div class="row" x-show="gpuTemp && gpuTemp !== 'N/A'">
-                    <span class="row-label">GPU Temp</span>
-                    <span class="badge" :class="gpuTempClass" x-text="gpuTemp"></span>
-                </div>
+                <div class="row" x-show="gpuTemp && gpuTemp !== 'N/A'"><span class="row-label">GPU Temp</span><span class="badge" :class="gpuTempClass" x-text="gpuTemp"></span></div>
             </div>
         </div>
 
-        <!-- Battery -->
         <div class="card" data-id="card-battery" x-show="vis.battery && battery && !battery.desktop">
-            <div class="card-hdr">
-                <i class="fas fa-battery-half card-icon"></i>
-                <span class="card-title">Power State</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-battery-half card-icon"></i><span class="card-title">Power State</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
-                <div class="row">
-                    <span class="row-label">Status</span>
-                    <span class="badge" :class="battery.status==='Charging'||battery.status==='Full'?'bs':battery.status==='Discharging'?'bw':'bn'" x-text="battery.status"></span>
-                </div>
-                <div class="row" x-show="battery.timeRemaining">
-                    <span class="row-label">Remaining</span>
-                    <span class="row-val" x-text="battery.timeRemaining"></span>
-                </div>
+                <div class="row"><span class="row-label">Status</span><span class="badge" :class="battery.status==='Charging'||battery.status==='Full'?'bs':battery.status==='Discharging'?'bw':'bn'" x-text="battery.status"></span></div>
+                <div class="row" x-show="battery.timeRemaining"><span class="row-label">Remaining</span><span class="row-val" x-text="battery.timeRemaining"></span></div>
                 <div class="prog" style="margin-top:.75rem">
                     <div class="prog-meta"><span>CHARGE</span><span x-text="battery.percent + '%'"></span></div>
                     <div class="prog-track"><div class="prog-fill" :class="battery.percent>20?'f-success':'f-danger'" :style="'width:'+battery.percent+'%'"></div></div>
@@ -842,13 +787,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Pi-hole -->
         <div class="card" data-id="card-pihole" x-show="vis.pihole">
-            <div class="card-hdr">
-                <i class="fas fa-shield-alt card-icon"></i>
-                <span class="card-title">Pi-hole DNS</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-shield-alt card-icon"></i><span class="card-title">Pi-hole DNS</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <template x-if="pihole">
                     <div>
@@ -857,14 +797,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                             <span style="font-size:.68rem;color:var(--text-muted)" x-text="pihole.domains + ' domains'"></span>
                         </div>
                         <div class="ph-stats">
-                            <div class="ph-stat">
-                                <div class="ph-val" x-text="typeof pihole.queries==='number' ? pihole.queries.toLocaleString() : pihole.queries"></div>
-                                <div class="ph-label">Total Queries</div>
-                            </div>
-                            <div class="ph-stat">
-                                <div class="ph-val" style="color:var(--danger)" x-text="typeof pihole.blocked==='number' ? pihole.blocked.toLocaleString() : pihole.blocked"></div>
-                                <div class="ph-label">Blocked</div>
-                            </div>
+                            <div class="ph-stat"><div class="ph-val" x-text="typeof pihole.queries==='number' ? pihole.queries.toLocaleString() : pihole.queries"></div><div class="ph-label">Total Queries</div></div>
+                            <div class="ph-stat"><div class="ph-val" style="color:var(--danger)" x-text="typeof pihole.blocked==='number' ? pihole.blocked.toLocaleString() : pihole.blocked"></div><div class="ph-label">Blocked</div></div>
                         </div>
                         <div class="prog">
                             <div class="prog-meta"><span>BLOCK RATE</span><span x-text="pihole.percent + '%'"></span></div>
@@ -872,33 +806,20 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                         </div>
                     </div>
                 </template>
-                <template x-if="!pihole">
-                    <div style="font-size:.8rem;color:var(--text-muted);font-style:italic">Pi-hole unreachable — configure URL and App Password in Settings.</div>
-                </template>
+                <template x-if="!pihole"><div style="font-size:.8rem;color:var(--text-muted);font-style:italic">Pi-hole unreachable — configure URL and App Password in Settings.</div></template>
             </div>
         </div>
 
-        <!-- Storage -->
         <div class="card" data-id="card-storage" x-show="vis.storage">
-            <div class="card-hdr">
-                <i class="fas fa-hdd card-icon"></i>
-                <span class="card-title">Storage</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-hdd card-icon"></i><span class="card-title">Storage</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <template x-for="pool in zfs.pools" :key="pool.name">
-                    <div class="row">
-                        <span class="row-label" x-text="'ZFS: ' + pool.name"></span>
-                        <span class="badge" :class="pool.health==='ONLINE'?'bs':pool.health==='DEGRADED'?'bw':'bd'" x-text="pool.health"></span>
-                    </div>
+                    <div class="row"><span class="row-label" x-text="'ZFS: ' + pool.name"></span><span class="badge" :class="pool.health==='ONLINE'?'bs':pool.health==='DEGRADED'?'bw':'bd'" x-text="pool.health"></span></div>
                 </template>
                 <div :style="zfs.pools&&zfs.pools.length?'margin-top:.6rem':''">
                     <template x-for="d in disks" :key="d.mount">
                         <div class="prog">
-                            <div class="prog-meta">
-                                <span x-text="d.mount"></span>
-                                <span x-text="d.used + ' / ' + d.size"></span>
-                            </div>
+                            <div class="prog-meta"><span x-text="d.mount"></span><span x-text="d.used + ' / ' + d.size"></span></div>
                             <div class="prog-track"><div class="prog-fill" :class="'f-'+d.barClass" :style="'width:'+d.percent+'%'"></div></div>
                         </div>
                     </template>
@@ -906,13 +827,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Network Radar -->
         <div class="card" data-id="card-radar" x-show="vis.radar">
-            <div class="card-hdr">
-                <i class="fas fa-satellite-dish card-icon"></i>
-                <span class="card-title">Network Radar</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-satellite-dish card-icon"></i><span class="card-title">Network Radar</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <template x-for="t in radar" :key="t.ip">
                     <div class="radar-row">
@@ -925,39 +841,24 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Resource Hogs -->
         <div class="card" data-id="card-procs" x-show="vis.procs">
-            <div class="card-hdr">
-                <i class="fas fa-chart-bar card-icon"></i>
-                <span class="card-title">Resource Hogs</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-chart-bar card-icon"></i><span class="card-title">Resource Hogs</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="proc-grid">
                     <div>
                         <div class="proc-hdr">Top CPU</div>
-                        <template x-for="p in topCpu" :key="p.name">
-                            <div class="proc-row"><span class="proc-n" x-text="p.name"></span><span class="cpu-col" x-text="p.val"></span></div>
-                        </template>
+                        <template x-for="p in topCpu" :key="p.name"><div class="proc-row"><span class="proc-n" x-text="p.name"></span><span class="cpu-col" x-text="p.val"></span></div></template>
                     </div>
                     <div>
                         <div class="proc-hdr">Top Memory</div>
-                        <template x-for="p in topMem" :key="p.name">
-                            <div class="proc-row"><span class="proc-n" x-text="p.name"></span><span class="mem-col" x-text="p.val"></span></div>
-                        </template>
+                        <template x-for="p in topMem" :key="p.name"><div class="proc-row"><span class="proc-n" x-text="p.name"></span><span class="mem-col" x-text="p.val"></span></div></template>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Containers -->
         <div class="card" data-id="card-containers" x-show="vis.containers && containers && containers.length > 0">
-            <div class="card-hdr">
-                <i class="fas fa-boxes card-icon"></i>
-                <span class="card-title">Containers</span>
-                <span style="font-size:.65rem;color:var(--text-muted);margin-left:auto;margin-right:.5rem" x-text="containers.length + ' total'"></span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-boxes card-icon"></i><span class="card-title">Containers</span><span style="font-size:.65rem;color:var(--text-muted);margin-left:auto;margin-right:.5rem" x-text="containers.length + ' total'"></span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="ct-list">
                     <template x-for="c in containers" :key="c.name">
@@ -972,13 +873,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Services -->
         <div class="card span-full" data-id="card-services" x-show="vis.services">
-            <div class="card-hdr">
-                <i class="fas fa-cogs card-icon"></i>
-                <span class="card-title">Services</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-cogs card-icon"></i><span class="card-title">Services</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="svc-grid">
                     <template x-for="s in services" :key="s.name">
@@ -998,13 +894,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Log Viewer -->
         <div class="card span-full" data-id="card-logs" x-show="vis.logs">
-            <div class="card-hdr">
-                <i class="fas fa-scroll card-icon"></i>
-                <span class="card-title">System Logs</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-scroll card-icon"></i><span class="card-title">System Logs</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="log-controls">
                     <select class="theme-select" x-model="selectedLog" @change="fetchLog()">
@@ -1018,13 +909,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Quick Actions -->
         <div class="card" data-id="card-actions" x-show="vis.actions">
-            <div class="card-hdr">
-                <i class="fas fa-bolt card-icon"></i>
-                <span class="card-title">Quick Actions</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-bolt card-icon"></i><span class="card-title">Quick Actions</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body action-list">
                 <button class="btn btn-primary" :disabled="runningScript" @click="runScript('backup')"><i class="fas fa-database"></i> Force NAS Backup</button>
                 <button class="btn" :disabled="runningScript" @click="runScript('verify')"><i class="fas fa-check-double"></i> Verify Backups</button>
@@ -1034,20 +920,12 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
             </div>
         </div>
 
-        <!-- Homelab Links -->
         <div class="card" data-id="card-bookmarks" x-show="vis.bookmarks">
-            <div class="card-hdr">
-                <i class="fas fa-bookmark card-icon"></i>
-                <span class="card-title">Homelab Links</span>
-                <i class="fas fa-grip-lines drag-handle"></i>
-            </div>
+            <div class="card-hdr"><i class="fas fa-bookmark card-icon"></i><span class="card-title">Homelab Links</span><i class="fas fa-grip-lines drag-handle"></i></div>
             <div class="card-body">
                 <div class="bm-grid">
                     <template x-for="b in parsedBookmarks" :key="b.name">
-                        <a :href="b.url" target="_blank" class="bm-link">
-                            <i class="fas" :class="b.icon"></i>
-                            <span x-text="b.name"></span>
-                        </a>
+                        <a :href="b.url" target="_blank" class="bm-link"><i class="fas" :class="b.icon"></i><span x-text="b.name"></span></a>
                     </template>
                 </div>
             </div>
@@ -1059,14 +937,9 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
 <!-- ── Run Script Modal ── -->
 <div x-show="showModal" class="modal-overlay" style="display:none" @click.self="showModal=false">
     <div class="modal-box">
-        <div class="modal-title">
-            <i class="fas fa-terminal" style="color:var(--accent)"></i>
-            <span x-text="modalTitle"></span>
-        </div>
+        <div class="modal-title"><i class="fas fa-terminal" style="color:var(--accent)"></i><span x-text="modalTitle"></span></div>
         <pre id="console-out" class="console-out" x-text="modalOutput"></pre>
-        <div class="modal-footer">
-            <button class="btn btn-sm" @click="showModal=false" :disabled="runningScript" style="width:auto;padding:.55rem 1.4rem">Close</button>
-        </div>
+        <div class="modal-footer"><button class="btn btn-sm" @click="showModal=false" :disabled="runningScript" style="width:auto;padding:.55rem 1.4rem">Close</button></div>
     </div>
 </div>
 
@@ -1074,7 +947,6 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
 <div x-show="showSettings" class="modal-overlay" style="display:none" @click.self="showSettings=false">
     <div class="modal-box">
         <div class="modal-title"><i class="fas fa-sliders-h" style="color:var(--accent)"></i> Settings</div>
-
         <div class="s-section">
             <span class="s-label">Module Visibility</span>
             <div class="toggle-grid">
@@ -1093,40 +965,21 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                 <label class="toggle-item"><input type="checkbox" x-model="vis.bookmarks"> Homelab Links</label>
             </div>
         </div>
-
         <div class="s-section">
             <span class="s-label">Pi-hole</span>
             <div class="field-2">
-                <div>
-                    <label class="field-label">URL / IP</label>
-                    <input class="field-input" type="text" x-model="piholeUrl" placeholder="dnsa01.example.org">
-                </div>
-                <div>
-                    <label class="field-label">App Password (v6)</label>
-                    <input class="field-input" type="password" x-model="piholeToken">
-                </div>
+                <div><label class="field-label">URL / IP</label><input class="field-input" type="text" x-model="piholeUrl" placeholder="dnsa01.example.org"></div>
+                <div><label class="field-label">App Password (v6)</label><input class="field-input" type="password" x-model="piholeToken"></div>
             </div>
         </div>
-
         <div class="s-section">
             <span class="s-label">Data Sources</span>
             <div style="display:flex;flex-direction:column;gap:.7rem">
-                <div>
-                    <label class="field-label">Services (comma-separated)</label>
-                    <input class="field-input" type="text" x-model="monitoredServices">
-                </div>
-                <div>
-                    <label class="field-label">Radar IPs (comma-separated)</label>
-                    <input class="field-input" type="text" x-model="radarIps">
-                </div>
-                <div>
-                    <label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label>
-                    <textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea>
-                </div>
+                <div><label class="field-label">Services (comma-separated)</label><input class="field-input" type="text" x-model="monitoredServices"></div>
+                <div><label class="field-label">Radar IPs (comma-separated)</label><input class="field-input" type="text" x-model="radarIps"></div>
+                <div><label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label><textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea></div>
             </div>
         </div>
-
-        <!-- Keyboard shortcuts reference -->
         <div class="s-section">
             <span class="s-label">Keyboard Shortcuts</span>
             <div class="kbd-grid">
@@ -1135,7 +988,6 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
                 <div class="kbd-item"><kbd>Esc</kbd> Close modal</div>
             </div>
         </div>
-
         <div class="settings-footer">
             <button class="btn" @click="showSettings=false" style="width:auto;padding:.55rem 1.4rem">Cancel</button>
             <button class="btn btn-primary" @click="applySettings()" style="width:auto;padding:.55rem 1.4rem"><i class="fas fa-check"></i> Save & Apply</button>
@@ -1147,14 +999,8 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
 <div x-show="!authenticated" class="modal-overlay" style="display:none">
     <div class="modal-box" style="max-width:400px">
         <div class="modal-title"><i class="fas fa-lock" style="color:var(--accent)"></i> Login</div>
-        <div style="margin:1rem 0">
-            <label class="field-label">Username</label>
-            <input class="field-input" type="text" x-model="loginUsername" @keyup.enter="doLogin" autofocus>
-        </div>
-        <div style="margin:1rem 0">
-            <label class="field-label">Password</label>
-            <input class="field-input" type="password" x-model="loginPassword" @keyup.enter="doLogin">
-        </div>
+        <div style="margin:1rem 0"><label class="field-label">Username</label><input class="field-input" type="text" x-model="loginUsername" @keyup.enter="doLogin" autofocus></div>
+        <div style="margin:1rem 0"><label class="field-label">Password</label><input class="field-input" type="password" x-model="loginPassword" @keyup.enter="doLogin"></div>
         <div class="settings-footer">
             <button class="btn btn-primary" @click="doLogin" :disabled="loginLoading">
                 <i class="fas fa-spinner fa-spin" x-show="loginLoading"></i>
@@ -1179,8 +1025,6 @@ cat > "$HTML_DIR/index.html" <<'HTMLEOF'
 function dashboard() {
     const DEF_VIS = { core:true, netio:true, hw:true, battery:true, pihole:true, storage:true, radar:true, procs:true, containers:true, services:true, logs:true, actions:true, bookmarks:true };
     const DEF_BOOKMARKS = 'TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server, TrueNAS (vdhnas)|http://vdhnas.vannieuwenhove.org|fa-server, Pi-Hole|http://dnsa01.vannieuwenhove.org/admin|fa-shield-alt, Home Assistant|http://homeassistant.local:8123|fa-home, ROMM|http://romm.local|fa-gamepad, Prowlarr|http://localhost:9696|fa-search, ASUS Router|http://192.168.100.1|fa-network-wired';
-
-    // Auto-detect preferred theme on first visit
     const savedTheme = localStorage.getItem('noba-theme');
     const autoTheme  = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'nord' : 'default');
 
@@ -1193,7 +1037,6 @@ function dashboard() {
         monitoredServices: localStorage.getItem('noba-services')  || 'backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service',
         radarIps:          localStorage.getItem('noba-radar')     || '192.168.100.1, 1.1.1.1, 8.8.8.8',
 
-        // ── System data ──
         timestamp:'--:--', uptime:'--', loadavg:'--', memory:'--', hostname:'--', defaultIp:'--',
         memPercent:0, cpuPercent:0, cpuHistory:[], cpuTemp:'N/A', gpuTemp:'N/A',
         osName:'--', kernel:'--', hwCpu:'--', hwGpu:'--',
@@ -1206,40 +1049,29 @@ function dashboard() {
         modalTitle:'', modalOutput:'', runningScript:false, refreshing:false,
         toasts:[], _es:null, _poll:null,
 
-        // ── Auth ──
         authenticated: !!localStorage.getItem('noba-token'),
         loginUsername: '', loginPassword: '', loginLoading: false, loginError: '',
 
-        // ── Connection status ──
-        connStatus: 'offline',   // 'sse' | 'polling' | 'offline'
+        connStatus: 'offline',
         countdown: 5,
         _countdownTimer: null,
-
-        // ── Dismissable alerts ──
         _dismissedAlerts: new Set(),
 
-        // ── Computed ──
         get cpuTempClass() { const t=parseInt(this.cpuTemp)||0; return t>80?'bd':t>65?'bw':'bn'; },
         get gpuTempClass() { const t=parseInt(this.gpuTemp)||0; return t>85?'bd':t>70?'bw':'bn'; },
-
-        get visibleAlerts() {
-            return (this.alerts || []).filter(a => !this._dismissedAlerts.has(a.msg));
-        },
-
+        get visibleAlerts() { return (this.alerts||[]).filter(a => !this._dismissedAlerts.has(a.msg)); },
         get livePillText() {
-            if (this.refreshing)            return 'Syncing…';
-            if (this.connStatus === 'sse')  return 'Live';
+            if (this.refreshing)               return 'Syncing…';
+            if (this.connStatus === 'sse')     return 'Live';
             if (this.connStatus === 'polling') return this.countdown + 's';
             return 'Offline';
         },
-
         get parsedBookmarks() {
             return (this.bookmarksStr||'').split(',').map(b => {
                 const p = b.split('|');
                 return { name:(p[0]||'Link').trim(), url:(p[1]||'#').trim(), icon:(p[2]||'fa-link').trim() };
             });
         },
-
         get cpuLine() {
             const h = this.cpuHistory;
             if (h.length < 2) return '0,36 120,36';
@@ -1252,7 +1084,6 @@ function dashboard() {
             return `${pts} 120,38 0,38`;
         },
 
-        // ── Init ──
         async init() {
             this.initSortable();
             this.initKeyboard();
@@ -1264,29 +1095,20 @@ function dashboard() {
             }
         },
 
-        // ── Keyboard shortcuts ──
         initKeyboard() {
             document.addEventListener('keydown', (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                if (e.key === 's' && !this.showSettings && !this.showModal) {
-                    this.showSettings = true;
-                } else if (e.key === 'r' && !this.showSettings && !this.showModal && this.authenticated) {
-                    this.refreshStats();
-                } else if (e.key === 'Escape') {
-                    this.showSettings = false;
-                    this.showModal    = false;
-                }
+                if (e.key === 's' && !this.showSettings && !this.showModal) { this.showSettings = true; }
+                else if (e.key === 'r' && !this.showSettings && !this.showModal && this.authenticated) { this.refreshStats(); }
+                else if (e.key === 'Escape') { this.showSettings = false; this.showModal = false; }
             });
         },
 
-        // ── Alert dismissal ──
         dismissAlert(msg) {
             this._dismissedAlerts.add(msg);
-            // Force Alpine reactivity on a Set
             this._dismissedAlerts = new Set(this._dismissedAlerts);
         },
 
-        // ── Countdown for polling mode ──
         _startCountdown(interval=5) {
             clearInterval(this._countdownTimer);
             this.countdown = interval;
@@ -1295,39 +1117,25 @@ function dashboard() {
                 if (this.countdown === 0) this.countdown = interval;
             }, 1000);
         },
-        _stopCountdown() {
-            clearInterval(this._countdownTimer);
-            this._countdownTimer = null;
-        },
+        _stopCountdown() { clearInterval(this._countdownTimer); this._countdownTimer = null; },
 
-        // ── SSE connection ──
         connectSSE() {
             if (!this.authenticated) return;
             if (this._es)   { this._es.close();           this._es   = null; }
             if (this._poll) { clearInterval(this._poll);  this._poll = null; }
             this._stopCountdown();
-
             const token = localStorage.getItem('noba-token');
             const qs = `services=${encodeURIComponent(this.monitoredServices)}&radar=${encodeURIComponent(this.radarIps)}&pihole=${encodeURIComponent(this.piholeUrl)}&piholetok=${encodeURIComponent(this.piholeToken)}&token=${encodeURIComponent(token)}`;
             this._es = new EventSource(`/api/stream?${qs}`);
-
-            this._es.onopen = () => {
-                this.connStatus = 'sse';
-                this._stopCountdown();
-            };
-            this._es.onmessage = (e) => {
-                try { Object.assign(this, JSON.parse(e.data)); } catch {}
-            };
-            this._es.onerror = () => {
+            this._es.onopen    = () => { this.connStatus = 'sse'; this._stopCountdown(); };
+            this._es.onmessage = (e) => { try { Object.assign(this, JSON.parse(e.data)); } catch {} };
+            this._es.onerror   = () => {
                 this._es.close(); this._es = null;
                 this.connStatus = 'polling';
                 this._startCountdown(5);
                 setTimeout(() => {
                     this.refreshStats();
-                    this._poll = setInterval(() => {
-                        this.refreshStats();
-                        this._startCountdown(5);
-                    }, 5000);
+                    this._poll = setInterval(() => { this.refreshStats(); this._startCountdown(5); }, 5000);
                 }, 3000);
             };
         },
@@ -1342,20 +1150,12 @@ function dashboard() {
                 if (res.ok) {
                     Object.assign(this, await res.json());
                     if (this.connStatus === 'offline') this.connStatus = 'polling';
-                } else if (res.status === 401) {
-                    this.authenticated = false;
-                    this.connStatus = 'offline';
-                } else {
-                    this.connStatus = 'offline';
-                }
-            } catch {
-                this.connStatus = 'offline';
-            } finally {
-                this.refreshing = false;
-            }
+                } else if (res.status === 401) { this.authenticated = false; this.connStatus = 'offline'; }
+                else { this.connStatus = 'offline'; }
+            } catch { this.connStatus = 'offline'; }
+            finally  { this.refreshing = false; }
         },
 
-        // ── Settings persistence ──
         async fetchSettings() {
             const token = localStorage.getItem('noba-token');
             try {
@@ -1380,29 +1180,19 @@ function dashboard() {
             localStorage.setItem('noba-services',   this.monitoredServices);
             localStorage.setItem('noba-radar',      this.radarIps);
             localStorage.setItem('noba-vis',        JSON.stringify(this.vis));
-
             if (this.authenticated) {
                 const token = localStorage.getItem('noba-token');
                 try {
                     await fetch('/api/settings', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-                        body: JSON.stringify({
-                            piholeUrl: this.piholeUrl, piholeToken: this.piholeToken,
-                            monitoredServices: this.monitoredServices,
-                            radarIps: this.radarIps, bookmarksStr: this.bookmarksStr
-                        })
+                        body: JSON.stringify({ piholeUrl: this.piholeUrl, piholeToken: this.piholeToken, monitoredServices: this.monitoredServices, radarIps: this.radarIps, bookmarksStr: this.bookmarksStr })
                     });
                 } catch (e) { console.warn('Could not save settings to server', e); }
             }
         },
 
-        applySettings() {
-            this.saveSettings();
-            this.showSettings = false;
-            if (this.authenticated) this.connectSSE();
-            this.addToast('Settings saved', 'success');
-        },
+        applySettings() { this.saveSettings(); this.showSettings = false; if (this.authenticated) this.connectSSE(); this.addToast('Settings saved', 'success'); },
 
         initSortable() {
             Sortable.create(document.getElementById('sortable-grid'), {
@@ -1448,8 +1238,7 @@ function dashboard() {
             this.modalTitle  = `Running: ${script}`;
             this.modalOutput = `>> [${new Date().toLocaleTimeString()}] Starting ${script}...\n`;
             this.showModal   = true;
-            const token      = localStorage.getItem('noba-token');
-
+            const token = localStorage.getItem('noba-token');
             const poll = setInterval(async () => {
                 try {
                     const r = await fetch('/api/action-log', { headers: { 'Authorization': 'Bearer ' + token } });
@@ -1460,7 +1249,6 @@ function dashboard() {
                     }
                 } catch {}
             }, 800);
-
             try {
                 const res = await fetch('/api/run', {
                     method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
@@ -1495,20 +1283,14 @@ function dashboard() {
                     this.authenticated = true;
                     await this.fetchSettings();
                     this.init();
-                } else {
-                    this.loginError = data.error || 'Login failed';
-                }
+                } else { this.loginError = data.error || 'Login failed'; }
             } catch { this.loginError = 'Network error'; }
             finally  { this.loginLoading = false; }
         },
 
         async logout() {
             const token = localStorage.getItem('noba-token');
-            if (token) {
-                try {
-                    await fetch('/api/logout?token=' + encodeURIComponent(token), { method:'POST' });
-                } catch {}
-            }
+            if (token) { try { await fetch('/api/logout?token=' + encodeURIComponent(token), { method:'POST' }); } catch {} }
             localStorage.removeItem('noba-token');
             this.authenticated = false;
             this.connStatus    = 'offline';
@@ -1532,117 +1314,73 @@ HTMLEOF
 # ── server.py ────────────────────────────────────────────────────────────────
 cat > "$HTML_DIR/server.py" <<'PYEOF'
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v8.4.0
-
-New vs v8.3.0:
-  - BackgroundCollector thread: stats pre-computed every 5 s; SSE/stats endpoints
-    just read from its cache → no more blocking-compute per request
-  - LoginRateLimiter: 5 failed attempts per IP → 30 s lockout
-  - PBKDF2-SHA256 password hashing (backward-compat with old SHA-256 format)
-  - secrets.compare_digest used everywhere (timing-safe)
-  - Token-cleanup daemon thread (runs every 5 min)
-  - _server_start_time for /api/health uptime reporting
-  - /api/health endpoint (public, no auth) → {"status":"ok","version":"8.4.0","uptime_s":N}
-"""
-import http.server
-import socketserver
-import json
-import subprocess
-import os
-import time
-import re
-import logging
-import glob
-import threading
-import urllib.request
-import urllib.error
-import signal
-import sys
-import ipaddress
-import uuid
-import hashlib
-import secrets
+"""Nobara Command Center – Backend v8.4.0"""
+import http.server, socketserver, json, subprocess, os, time, re, logging
+import glob, threading, urllib.request, urllib.error, signal, sys
+import ipaddress, uuid, hashlib, secrets
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
-# ── Config ────────────────────────────────────────────────────────────────────
 VERSION    = '8.4.0'
-PORT       = int(os.environ.get('PORT',   8080))
-HOST       = os.environ.get('HOST',       '0.0.0.0')
+PORT       = int(os.environ.get('PORT', 8080))
+HOST       = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
 LOG_DIR    = os.path.expanduser('~/.local/share')
-PID_FILE   = os.environ.get('PID_FILE',  '/tmp/noba-web-server.pid')
+PID_FILE   = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
 ACTION_LOG = '/tmp/noba-action.log'
 AUTH_CONFIG = os.path.expanduser('~/.config/noba-web/auth.conf')
 NOBA_YAML   = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
-
 _server_start_time = time.time()
 
+os.makedirs(LOG_DIR, exist_ok=True)
 try:
-    os.makedirs(LOG_DIR, exist_ok=True)
+    logging.basicConfig(filename=os.path.join(LOG_DIR, 'noba-web-server.log'),
+                        level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 except Exception:
-    pass
-
-log_file = os.path.join(LOG_DIR, 'noba-web-server.log')
-try:
-    logging.basicConfig(filename=log_file, level=logging.INFO,
-                        format='%(asctime)s %(levelname)s %(message)s')
-except Exception:
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s %(levelname)s %(message)s')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('noba')
 
 ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 def strip_ansi(s): return ANSI_RE.sub('', s)
 
 SCRIPT_MAP = {
-    'backup':   'backup-to-nas.sh',
-    'verify':   'backup-verifier.sh',
-    'organize': 'organize-downloads.sh',
-    'diskcheck':'disk-sentinel.sh',
+    'backup':        'backup-to-nas.sh',
+    'verify':        'backup-verifier.sh',
+    'organize':      'organize-downloads.sh',
+    'diskcheck':     'disk-sentinel.sh',
     'check_updates': 'noba-update.sh',
 }
 ALLOWED_ACTIONS = {'start', 'stop', 'restart'}
 
-# ── Authentication ────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 _tokens_lock = threading.Lock()
-_tokens: dict[str, datetime] = {}   # token → expiry
-
-def hash_password_pbkdf2(password: str) -> str:
-    """Return a pbkdf2:salt:dk_hex string (PBKDF2-SHA256, 200k rounds)."""
-    salt = secrets.token_hex(16)
-    dk   = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
-    return f'pbkdf2:{salt}:{dk.hex()}'
+_tokens: dict = {}   # token → expiry datetime
 
 def verify_password(stored: str, password: str) -> bool:
-    """Verify against PBKDF2 or legacy SHA-256 format. Always timing-safe."""
-    if not stored:
-        return False
+    if not stored: return False
     if stored.startswith('pbkdf2:'):
         parts = stored.split(':', 2)
-        if len(parts) != 3:
-            return False
+        if len(parts) != 3: return False
         _, salt, expected = parts
         dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
         return secrets.compare_digest(expected, dk.hex())
-    # Legacy: salt:sha256hash
-    if ':' not in stored:
-        return False
+    if ':' not in stored: return False
     salt, expected = stored.split(':', 1)
     actual = hashlib.sha256((salt + password).encode()).hexdigest()
     return secrets.compare_digest(expected, actual)
 
 def load_user():
-    if not os.path.exists(AUTH_CONFIG):
-        return None
+    if not os.path.exists(AUTH_CONFIG): return None
     try:
         with open(AUTH_CONFIG) as f:
-            line = f.read().strip()
+            line = f.readline().strip()
         if ':' in line:
             username, rest = line.split(':', 1)
-            return username, rest
+            # rest is hash:role — strip role for password verify
+            h = rest.rsplit(':', 1)[0] if rest.count(':') >= 2 else rest
+            return username, h
     except Exception as e:
         logger.warning(f'Could not read auth config: {e}')
     return None
@@ -1656,45 +1394,34 @@ def generate_token() -> str:
 def validate_token(token: str) -> bool:
     with _tokens_lock:
         expiry = _tokens.get(token)
-        if expiry and expiry > datetime.now():
-            return True
-        if token in _tokens:
-            del _tokens[token]
+        if expiry and expiry > datetime.now(): return True
+        _tokens.pop(token, None)
     return False
 
-def revoke_token(token: str) -> None:
-    with _tokens_lock:
-        _tokens.pop(token, None)
+def revoke_token(token: str):
+    with _tokens_lock: _tokens.pop(token, None)
+
+def authenticate_request(headers, query=None) -> bool:
+    auth = headers.get('Authorization', '')
+    if auth.startswith('Bearer ') and validate_token(auth[7:]): return True
+    if query and 'token' in query and validate_token(query['token'][0]): return True
+    return False
 
 def _token_cleanup_loop():
-    """Remove expired tokens every 5 minutes."""
     while not _shutdown_flag.is_set():
         _shutdown_flag.wait(300)
         now = datetime.now()
         with _tokens_lock:
             expired = [t for t, exp in list(_tokens.items()) if exp <= now]
-            for t in expired:
-                del _tokens[t]
-        if expired:
-            logger.info(f'Token cleanup: removed {len(expired)} expired token(s)')
+            for t in expired: del _tokens[t]
+        if expired: logger.info(f'Cleaned up {len(expired)} expired token(s)')
 
-def authenticate_request(headers, query=None) -> bool:
-    auth_header = headers.get('Authorization', '')
-    if auth_header.startswith('Bearer '):
-        if validate_token(auth_header[7:]):
-            return True
-    if query and 'token' in query:
-        if validate_token(query['token'][0]):
-            return True
-    return False
-
-# ── Login rate limiter ────────────────────────────────────────────────────────
+# ── Rate limiter ──────────────────────────────────────────────────────────────
 class LoginRateLimiter:
-    """5 failed attempts per IP per 60 s → 30 s lockout."""
     def __init__(self, max_attempts=5, window_s=60, lockout_s=30):
-        self._lock     = threading.Lock()
-        self._attempts: dict[str, list] = {}
-        self._lockouts: dict[str, datetime] = {}
+        self._lock = threading.Lock()
+        self._attempts: dict = {}
+        self._lockouts: dict = {}
         self.max_attempts = max_attempts
         self.window_s     = window_s
         self.lockout_s    = lockout_s
@@ -1702,13 +1429,11 @@ class LoginRateLimiter:
     def is_locked(self, ip: str) -> bool:
         with self._lock:
             expiry = self._lockouts.get(ip)
-            if expiry and datetime.now() < expiry:
-                return True
+            if expiry and datetime.now() < expiry: return True
             self._lockouts.pop(ip, None)
-            return False
+        return False
 
     def record_failure(self, ip: str) -> bool:
-        """Record a failure. Returns True if the IP just got locked out."""
         now = datetime.now()
         with self._lock:
             cutoff   = now - timedelta(seconds=self.window_s)
@@ -1718,42 +1443,44 @@ class LoginRateLimiter:
             if len(attempts) >= self.max_attempts:
                 self._lockouts[ip] = now + timedelta(seconds=self.lockout_s)
                 self._attempts.pop(ip, None)
-                logger.warning(f'Login lockout for {ip} ({self.lockout_s}s)')
+                logger.warning(f'Login lockout for {ip}')
                 return True
         return False
 
-    def reset(self, ip: str) -> None:
+    def reset(self, ip: str):
         with self._lock:
-            self._attempts.pop(ip, None)
-            self._lockouts.pop(ip, None)
+            self._attempts.pop(ip, None); self._lockouts.pop(ip, None)
 
 _rate_limiter = LoginRateLimiter()
 
-# ── YAML settings helpers ─────────────────────────────────────────────────────
+# ── YAML helpers ──────────────────────────────────────────────────────────────
 def read_yaml_settings():
-    default = {
+    defaults = {
         'piholeUrl': '', 'piholeToken': '',
         'monitoredServices': 'backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service',
         'radarIps': '192.168.100.1, 1.1.1.1, 8.8.8.8',
         'bookmarksStr': 'TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server'
     }
-    if not os.path.exists(NOBA_YAML):
-        return default
+    if not os.path.exists(NOBA_YAML): return defaults
     try:
         r = subprocess.run(['yq', 'eval', '-o=json', '.web', NOBA_YAML],
                            capture_output=True, text=True, timeout=2)
         if r.returncode == 0 and r.stdout.strip():
             web = json.loads(r.stdout)
-            for k in default:
-                if k in web:
-                    default[k] = web[k]
+            for k in defaults:
+                if k in web: defaults[k] = web[k]
     except Exception as e:
         logger.warning(f'Failed to read YAML settings: {e}')
-    return default
+    return defaults
 
-def write_yaml_settings(settings):
+def write_yaml_settings(settings: dict) -> bool:
+    import tempfile
+    # FIX: the original called write_yaml_settings(body) twice in the POST
+    # handler — once to test the return value and once to compute the status
+    # code — which wrote the file twice. Now write_yaml_settings is called
+    # once by the caller and the result is stored.
     try:
-        import tempfile
+        tmp_path = None
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
@@ -1762,118 +1489,87 @@ def write_yaml_settings(settings):
                 tmp.write(f'  {k}: {v}\n')
             tmp_path = tmp.name
         if os.path.exists(NOBA_YAML):
-            cmd = ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)',
-                   NOBA_YAML, tmp_path]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
-            if r.returncode == 0:
-                with open(NOBA_YAML, 'w') as f:
-                    f.write(r.stdout)
-            else:
-                raise RuntimeError('yq merge failed')
+            r = subprocess.run(
+                ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)', NOBA_YAML, tmp_path],
+                capture_output=True, text=True, timeout=2)
+            if r.returncode != 0: raise RuntimeError('yq merge failed')
+            with open(NOBA_YAML, 'w') as f: f.write(r.stdout)
         else:
             os.makedirs(os.path.dirname(NOBA_YAML), exist_ok=True)
-            with open(tmp_path) as src, open(NOBA_YAML, 'w') as dst:
-                dst.write(src.read())
+            with open(tmp_path) as src, open(NOBA_YAML, 'w') as dst: dst.write(src.read())
         os.unlink(tmp_path)
         return True
     except Exception as e:
         logger.exception(f'Failed to write YAML settings: {e}')
+        if tmp_path and os.path.exists(tmp_path):
+            try: os.unlink(tmp_path)
+            except OSError: pass
         return False
 
-# ── Input validation ──────────────────────────────────────────────────────────
-def validate_service_name(name):
-    return bool(re.match(r'^[a-zA-Z0-9_.@-]+$', name))
-
+# ── Validation ────────────────────────────────────────────────────────────────
+def validate_service_name(name): return bool(re.match(r'^[a-zA-Z0-9_.@-]+$', name))
 def validate_ip(ip):
-    try:
-        ipaddress.ip_address(ip)
-        return True
-    except ValueError:
-        return False
+    try: ipaddress.ip_address(ip); return True
+    except ValueError: return False
 
 # ── TTL cache ─────────────────────────────────────────────────────────────────
 class TTLCache:
     def __init__(self):
-        self._store = {}
-        self._lock  = threading.Lock()
+        self._store = {}; self._lock = threading.Lock()
     def get(self, key, ttl=30):
         with self._lock:
             e = self._store.get(key)
-            if e and (time.time() - e['t']) < ttl:
-                return e['v']
+            if e and (time.time() - e['t']) < ttl: return e['v']
         return None
     def set(self, key, val):
-        with self._lock:
-            self._store[key] = {'v': val, 't': time.time()}
+        with self._lock: self._store[key] = {'v': val, 't': time.time()}
 
 _cache = TTLCache()
-
-# ── Global state ──────────────────────────────────────────────────────────────
+_shutdown_flag = threading.Event()
 _state_lock  = threading.Lock()
 _cpu_history = deque(maxlen=20)
 _cpu_prev    = None
 _net_prev    = None
 _net_prev_t  = None
-_shutdown_flag = threading.Event()
 
-# ── Signal handler ────────────────────────────────────────────────────────────
-def sigterm_handler(signum, frame):
-    logger.info('Received SIGTERM, shutting down…')
-    _shutdown_flag.set()
-    threading.Thread(target=lambda: server.shutdown(), daemon=True).start()
-
-signal.signal(signal.SIGTERM, sigterm_handler)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Collectors ────────────────────────────────────────────────────────────────
 def run(cmd, timeout=3, cache_key=None, cache_ttl=30, ignore_rc=False):
     if cache_key:
         hit = _cache.get(cache_key, cache_ttl)
-        if hit is not None:
-            return hit
+        if hit is not None: return hit
     try:
         r   = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         out = r.stdout.strip() if (r.returncode == 0 or ignore_rc) else ''
-        if cache_key and out:
-            _cache.set(cache_key, out)
+        if cache_key and out: _cache.set(cache_key, out)
         return out
     except Exception as e:
-        logger.debug(f'Command failed: {cmd} – {e}')
-        return ''
+        logger.debug(f'Command failed: {cmd} – {e}'); return ''
 
 def human_bps(bps):
     for unit in ('B/s', 'KB/s', 'MB/s', 'GB/s'):
-        if bps < 1024:
-            return f'{bps:.1f} {unit}'
+        if bps < 1024: return f'{bps:.1f} {unit}'
         bps /= 1024
     return f'{bps:.1f} TB/s'
 
-# ── Stats collectors ──────────────────────────────────────────────────────────
 def get_cpu_percent():
     global _cpu_prev
     with _state_lock:
         try:
-            with open('/proc/stat') as f:
-                fields = list(map(int, f.readline().split()[1:]))
-            idle  = fields[3] + fields[4]
-            total = sum(fields)
+            fields = list(map(int, open('/proc/stat').readline().split()[1:]))
+            idle = fields[3] + fields[4]; total = sum(fields)
             if _cpu_prev is None:
-                _cpu_prev = (total, idle)
-                return 0.0
-            dtotal = total - _cpu_prev[0]
-            didle  = idle  - _cpu_prev[1]
+                _cpu_prev = (total, idle); return 0.0
+            dt = total - _cpu_prev[0]; di = idle - _cpu_prev[1]
             _cpu_prev = (total, idle)
-            pct = round(100.0 * (1.0 - didle / dtotal) if dtotal > 0 else 0.0, 1)
-            _cpu_history.append(pct)
-            return pct
-        except Exception:
-            return 0.0
+            pct = round(100.0 * (1.0 - di / dt) if dt > 0 else 0.0, 1)
+            _cpu_history.append(pct); return pct
+        except Exception: return 0.0
 
 def get_net_io():
     global _net_prev, _net_prev_t
     with _state_lock:
         try:
-            with open('/proc/net/dev') as f:
-                lines = f.readlines()
+            lines = open('/proc/net/dev').readlines()
             rx = tx = 0
             for line in lines[2:]:
                 parts = line.split()
@@ -1881,35 +1577,27 @@ def get_net_io():
                     rx += int(parts[1]); tx += int(parts[9])
             now = time.time()
             if _net_prev is None:
-                _net_prev = (rx, tx); _net_prev_t = now
-                return 0.0, 0.0
+                _net_prev = (rx, tx); _net_prev_t = now; return 0.0, 0.0
             dt = now - _net_prev_t
-            if dt < 0.05:
-                return 0.0, 0.0
+            if dt < 0.05: return 0.0, 0.0
             rx_bps = max(0.0, (rx - _net_prev[0]) / dt)
             tx_bps = max(0.0, (tx - _net_prev[1]) / dt)
             _net_prev = (rx, tx); _net_prev_t = now
             return rx_bps, tx_bps
-        except Exception:
-            return 0.0, 0.0
+        except Exception: return 0.0, 0.0
 
 def ping_host(ip):
     ip = ip.strip()
-    if not validate_ip(ip):
-        return ip, False, 0
+    if not validate_ip(ip): return ip, False, 0
     try:
         t0 = time.time()
-        r  = subprocess.run(['ping', '-c', '1', '-W', '1', ip],
-                            capture_output=True, timeout=2.5)
-        ms = round((time.time() - t0) * 1000)
-        return ip, r.returncode == 0, ms
-    except Exception:
-        return ip, False, 0
+        r  = subprocess.run(['ping', '-c', '1', '-W', '1', ip], capture_output=True, timeout=2.5)
+        return ip, r.returncode == 0, round((time.time() - t0) * 1000)
+    except Exception: return ip, False, 0
 
 def get_service_status(svc):
     svc = svc.strip()
-    if not validate_service_name(svc):
-        return 'invalid', False
+    if not validate_service_name(svc): return 'invalid', False
     for scope, is_user in ((['--user'], True), ([], False)):
         cmd = ['systemctl'] + scope + ['show', '-p', 'ActiveState,LoadState', svc]
         out = run(cmd, timeout=2)
@@ -1919,15 +1607,13 @@ def get_service_status(svc):
             if state == 'inactive' and svc.endswith('.service'):
                 tn = svc.replace('.service', '.timer')
                 t  = run(['systemctl'] + scope + ['show', '-p', 'ActiveState', tn], timeout=1)
-                if 'ActiveState=active' in t:
-                    return 'timer-active', is_user
+                if 'ActiveState=active' in t: return 'timer-active', is_user
             return state, is_user
     return 'not-found', False
 
 def get_battery():
     bats = glob.glob('/sys/class/power_supply/BAT*')
-    if not bats:
-        return {'percent': 100, 'status': 'Desktop', 'desktop': True, 'timeRemaining': ''}
+    if not bats: return {'percent':100,'status':'Desktop','desktop':True,'timeRemaining':''}
     try:
         pct  = int(open(f'{bats[0]}/capacity').read().strip())
         stat = open(f'{bats[0]}/status').read().strip()
@@ -1936,27 +1622,24 @@ def get_battery():
             current = int(open(f'{bats[0]}/current_now').read().strip())
             if current > 0:
                 if stat == 'Discharging':
-                    charge = int(open(f'{bats[0]}/charge_now').read().strip())
-                    hrs = charge / current
+                    hrs = int(open(f'{bats[0]}/charge_now').read().strip()) / current
                 else:
-                    cfull  = int(open(f'{bats[0]}/charge_full').read().strip())
+                    cfull = int(open(f'{bats[0]}/charge_full').read().strip())
                     charge = int(open(f'{bats[0]}/charge_now').read().strip())
                     hrs = (cfull - charge) / current
-                time_rem = f'{int(hrs)}h {int((hrs%1)*60)}m'
-                if stat != 'Discharging':
-                    time_rem += ' to full'
-        except Exception:
-            pass
+                    time_rem = f'{int(hrs)}h {int((hrs%1)*60)}m to full'
+                if stat == 'Discharging':
+                    time_rem = f'{int(hrs)}h {int((hrs%1)*60)}m'
+        except Exception: pass
         return {'percent': pct, 'status': stat, 'desktop': False, 'timeRemaining': time_rem}
     except Exception:
         return {'percent': 0, 'status': 'Error', 'desktop': False, 'timeRemaining': ''}
 
 def get_containers():
-    for cmd in (['podman', 'ps', '-a', '--format', 'json'],
-                ['docker', 'ps', '-a', '--format', '{{json .}}']):
+    for cmd in (['podman','ps','-a','--format','json'],
+                ['docker','ps','-a','--format','{{json .}}']):
         out = run(cmd, timeout=4, cache_key=' '.join(cmd), cache_ttl=10)
-        if not out:
-            continue
+        if not out: continue
         try:
             items = json.loads(out) if out.lstrip().startswith('[') else \
                     [json.loads(l) for l in out.splitlines() if l.strip()]
@@ -1966,11 +1649,9 @@ def get_containers():
                 if isinstance(name, list): name = name[0] if name else '?'
                 image = c.get('Image', c.get('Repository', '?')).split('/')[-1][:32]
                 state = (c.get('State', c.get('Status', '?')) or '?').lower().split()[0]
-                result.append({'name': name, 'image': image, 'state': state,
-                               'status': c.get('Status', state)})
+                result.append({'name': name, 'image': image, 'state': state, 'status': c.get('Status', state)})
             return result
-        except Exception:
-            continue
+        except Exception: continue
     return []
 
 def get_pihole(url, token):
@@ -1983,133 +1664,97 @@ def get_pihole(url, token):
         req = urllib.request.Request(base + endpoint, headers=hdrs)
         with urllib.request.urlopen(req, timeout=3) as r:
             return json.loads(r.read().decode())
-    # v6 API
     try:
-        auth = {'sid': token} if token else {}
-        data = _get('/api/stats/summary', auth)
-        q = data.get('queries', {}).get('total', 0)
-        b = data.get('ads', {}).get('blocked', 0)
-        p = data.get('ads', {}).get('percentage', 0.0)
-        s = data.get('gravity', {}).get('status', 'unknown')
-        d = data.get('gravity', {}).get('domains_being_blocked', 0)
-        return {'queries': q, 'blocked': b, 'percent': round(p,1), 'status': s, 'domains': f'{d:,}'}
-    except Exception:
-        pass
-    # v5 fallback
+        data = _get('/api/stats/summary', {'sid': token} if token else {})
+        return {'queries': data.get('queries',{}).get('total',0),
+                'blocked': data.get('ads',{}).get('blocked',0),
+                'percent': round(data.get('ads',{}).get('percentage',0.0),1),
+                'status':  data.get('gravity',{}).get('status','unknown'),
+                'domains': f"{data.get('gravity',{}).get('domains_being_blocked',0):,}"}
+    except Exception: pass
     try:
         ep   = f'/admin/api.php?summaryRaw' + (f'&auth={token}' if token else '')
         data = _get(ep)
-        return {
-            'queries': data.get('dns_queries_today', 0),
-            'blocked': data.get('ads_blocked_today', 0),
-            'percent': round(data.get('ads_percentage_today', 0), 1),
-            'status':  data.get('status', 'enabled'),
-            'domains': f"{data.get('domains_being_blocked', 0):,}"
-        }
-    except Exception:
-        return None
+        return {'queries': data.get('dns_queries_today',0),
+                'blocked': data.get('ads_blocked_today',0),
+                'percent': round(data.get('ads_percentage_today',0),1),
+                'status':  data.get('status','enabled'),
+                'domains': f"{data.get('domains_being_blocked',0):,}"}
+    except Exception: return None
 
 def collect_stats(qs):
     stats = {'timestamp': datetime.now().strftime('%H:%M:%S')}
+    try:
+        for line in open('/etc/os-release'):
+            if line.startswith('PRETTY_NAME='):
+                stats['osName'] = line.split('=',1)[1].strip().strip('"'); break
+    except Exception: stats['osName'] = 'Linux'
+
+    stats['kernel']   = run(['uname','-r'], cache_key='uname-r', cache_ttl=3600)
+    stats['hostname'] = run(['hostname'], cache_key='hostname', cache_ttl=3600)
+    stats['defaultIp']= run(['bash','-c',"ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[\\d.]+'"], timeout=1)
 
     try:
-        with open('/etc/os-release') as f:
-            for line in f:
-                if line.startswith('PRETTY_NAME='):
-                    stats['osName'] = line.split('=',1)[1].strip().strip('"')
-    except Exception:
-        stats['osName'] = 'Linux'
-
-    stats['kernel']    = run(['uname', '-r'], cache_key='uname-r', cache_ttl=3600)
-    stats['hostname']  = run(['hostname'], cache_key='hostname', cache_ttl=3600)
-    stats['defaultIp'] = run(['bash', '-c',
-        "ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[\\d.]+'"], timeout=1)
-
-    try:
-        uptime_s = float(open('/proc/uptime').read().split()[0])
-        d, rem = divmod(int(uptime_s), 86400)
-        h, rem = divmod(rem, 3600)
-        m = rem // 60
+        up_s = float(open('/proc/uptime').read().split()[0])
+        d, rem = divmod(int(up_s), 86400); h, rem = divmod(rem, 3600); m = rem // 60
         stats['uptime']  = (f'{d}d ' if d else '') + f'{h}h {m}m'
         stats['loadavg'] = ' '.join(open('/proc/loadavg').read().split()[:3])
-        ml   = open('/proc/meminfo').readlines()
-        mm   = {l.split(':')[0]: int(l.split()[1]) for l in ml if ':' in l}
-        tot  = mm.get('MemTotal', 0) // 1024
-        avail= mm.get('MemAvailable', 0) // 1024
-        used = tot - avail
+        mm   = {l.split(':')[0]: int(l.split()[1]) for l in open('/proc/meminfo') if ':' in l}
+        tot  = mm.get('MemTotal',0)//1024; avail = mm.get('MemAvailable',0)//1024; used = tot - avail
         stats['memory']     = f'{used} MiB / {tot} MiB'
         stats['memPercent'] = round(100 * used / tot) if tot > 0 else 0
     except Exception:
-        stats.setdefault('uptime', '--')
-        stats.setdefault('loadavg', '--')
-        stats.setdefault('memPercent', 0)
+        stats.setdefault('uptime','--'); stats.setdefault('loadavg','--'); stats.setdefault('memPercent',0)
 
     stats['cpuPercent'] = get_cpu_percent()
-    with _state_lock:
-        stats['cpuHistory'] = list(_cpu_history)
-
+    with _state_lock: stats['cpuHistory'] = list(_cpu_history)
     rx_bps, tx_bps = get_net_io()
-    stats['netRx'] = human_bps(rx_bps)
-    stats['netTx'] = human_bps(tx_bps)
+    stats['netRx'] = human_bps(rx_bps); stats['netTx'] = human_bps(tx_bps)
 
     sensors = run(['sensors'], timeout=2, cache_key='sensors', cache_ttl=5)
     m = re.search(r'(?:Tctl|Package id \d+|Core 0|temp1).*?\+?(\d+\.?\d*)[°℃]', sensors)
     stats['cpuTemp'] = f'{int(float(m.group(1)))}°C' if m else 'N/A'
 
-    gpu_t = run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
-                timeout=2, cache_key='nvidia-temp', cache_ttl=5)
+    gpu_t = run(['nvidia-smi','--query-gpu=temperature.gpu','--format=csv,noheader'], timeout=2, cache_key='nvidia-temp', cache_ttl=5)
     if not gpu_t:
-        raw = run(['bash', '-c',
-            'cat /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -1'], timeout=1)
+        raw = run(['bash','-c','cat /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -1'], timeout=1)
         gpu_t = f'{int(raw)//1000}°C' if raw else 'N/A'
     else:
         gpu_t = f'{gpu_t}°C'
-    stats['gpuTemp']  = gpu_t
-    stats['battery']  = get_battery()
-    stats['hwCpu']    = run(['bash', '-c',
-        "lscpu | grep 'Model name' | head -1 | cut -d: -f2 | xargs"],
-        cache_key='lscpu', cache_ttl=3600)
-    raw_gpu = run(['bash', '-c', "lspci | grep -i 'vga\\|3d' | cut -d: -f3"],
-                  cache_key='lspci', cache_ttl=3600)
-    stats['hwGpu'] = raw_gpu.replace('\n','<br>') if raw_gpu else 'Unknown GPU'
+    stats['gpuTemp'] = gpu_t
+    stats['battery'] = get_battery()
+    stats['hwCpu']   = run(['bash','-c',"lscpu | grep 'Model name' | head -1 | cut -d: -f2 | xargs"], cache_key='lscpu', cache_ttl=3600)
+    raw_gpu = run(['bash','-c',"lspci | grep -i 'vga\\|3d' | cut -d: -f3"], cache_key='lspci', cache_ttl=3600)
+    stats['hwGpu']   = raw_gpu.replace('\n','<br>') if raw_gpu else 'Unknown GPU'
 
     disks = []
-    for line in run(['df', '-BM'], cache_key='df', cache_ttl=10).splitlines()[1:]:
+    for line in run(['df','-BM'], cache_key='df', cache_ttl=10).splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 6 and parts[0].startswith('/dev/'):
             mount = parts[5]
-            if any(mount.startswith(p) for p in ('/var/lib/snapd','/boot','/run','/snap')):
-                continue
+            if any(mount.startswith(p) for p in ('/var/lib/snapd','/boot','/run','/snap')): continue
             try:
-                pct  = int(parts[4].replace('%',''))
-                bc   = 'danger' if pct>=90 else 'warning' if pct>=75 else 'success'
-                disks.append({'mount': mount, 'percent': pct, 'barClass': bc,
-                              'size': parts[1].replace('M',' MiB'),
-                              'used': parts[2].replace('M',' MiB')})
-            except (ValueError, IndexError):
-                pass
+                pct = int(parts[4].replace('%',''))
+                disks.append({'mount':mount,'percent':pct,'barClass':'danger' if pct>=90 else 'warning' if pct>=75 else 'success',
+                              'size':parts[1].replace('M',' MiB'),'used':parts[2].replace('M',' MiB')})
+            except (ValueError, IndexError): pass
     stats['disks'] = disks
 
-    zfs_out = run(['zpool', 'list', '-H', '-o', 'name,health'], timeout=3,
-                  cache_key='zpool', cache_ttl=15)
     pools = []
-    for line in zfs_out.splitlines():
+    for line in run(['zpool','list','-H','-o','name,health'], timeout=3, cache_key='zpool', cache_ttl=15).splitlines():
         if '\t' in line:
-            n, h = line.split('\t', 1)
-            pools.append({'name': n.strip(), 'health': h.strip()})
+            n, h = line.split('\t',1); pools.append({'name':n.strip(),'health':h.strip()})
     stats['zfs'] = {'pools': pools}
 
-    cpu_ps = run(['ps','ax','--format','comm,%cpu','--sort','-%cpu'], timeout=2)
-    mem_ps = run(['ps','ax','--format','comm,%mem','--sort','-%mem'], timeout=2)
     def parse_ps(out):
         result = []
         for line in out.splitlines()[1:6]:
-            parts = line.strip().rsplit(None, 1)
-            if len(parts) == 2 and parts[1] not in ('%CPU','%MEM'):
-                result.append({'name': parts[0][:16], 'val': parts[1]+'%'})
+            parts = line.strip().rsplit(None,1)
+            if len(parts)==2 and parts[1] not in ('%CPU','%MEM'):
+                result.append({'name':parts[0][:16],'val':parts[1]+'%'})
         return result
-    stats['topCpu'] = parse_ps(cpu_ps)
-    stats['topMem'] = parse_ps(mem_ps)
+    stats['topCpu'] = parse_ps(run(['ps','ax','--format','comm,%cpu','--sort','-%cpu'], timeout=2))
+    stats['topMem'] = parse_ps(run(['ps','ax','--format','comm,%mem','--sort','-%mem'], timeout=2))
 
     svc_list = [s.strip() for s in qs.get('services',[''])[0].split(',') if s.strip()]
     ip_list  = [ip.strip() for ip in qs.get('radar',[''])[0].split(',') if ip.strip()]
@@ -2121,142 +1766,88 @@ def collect_stats(qs):
         ping_futs = {ex.submit(ping_host, ip):        ip for ip in ip_list}
         ph_fut    = ex.submit(get_pihole, ph_url, ph_tok) if ph_url else None
         ct_fut    = ex.submit(get_containers)
-
-        services = []
+        services  = []
         for fut, svc in svc_futs.items():
             try:   status, is_user = fut.result(timeout=4)
             except Exception: status, is_user = 'error', False
-            services.append({'name': svc, 'status': status, 'is_user': is_user})
+            services.append({'name':svc,'status':status,'is_user':is_user})
         stats['services'] = services
-
         radar = []
         for fut, ip in ping_futs.items():
             try:
                 ip_r, up, ms = fut.result(timeout=4)
-                radar.append({'ip': ip_r, 'status': 'Up' if up else 'Down', 'ms': ms if up else 0})
-            except Exception:
-                radar.append({'ip': ip, 'status': 'Down', 'ms': 0})
-        stats['radar'] = radar
-
+                radar.append({'ip':ip_r,'status':'Up' if up else 'Down','ms':ms if up else 0})
+            except Exception: radar.append({'ip':ip,'status':'Down','ms':0})
+        stats['radar']      = radar
         try:   stats['pihole']     = ph_fut.result(timeout=4) if ph_fut else None
         except Exception: stats['pihole'] = None
-
         try:   stats['containers'] = ct_fut.result(timeout=5)
         except Exception: stats['containers'] = []
 
-    # Alerts
     alerts = []
-    cpu = stats.get('cpuPercent', 0)
+    cpu = stats.get('cpuPercent',0)
     if   cpu > 90: alerts.append({'level':'danger',  'msg':f'CPU critical: {cpu}%'})
     elif cpu > 75: alerts.append({'level':'warning', 'msg':f'CPU high: {cpu}%'})
-
     ct = stats.get('cpuTemp','N/A')
     if ct != 'N/A':
         t = int(ct.replace('°C',''))
         if   t > 85: alerts.append({'level':'danger',  'msg':f'CPU temp critical: {t}°C'})
         elif t > 70: alerts.append({'level':'warning', 'msg':f'CPU temp elevated: {t}°C'})
-
     for disk in stats.get('disks',[]):
         p = disk.get('percent',0)
         if   p >= 90: alerts.append({'level':'danger',  'msg':f"Disk {disk['mount']} at {p}%"})
         elif p >= 80: alerts.append({'level':'warning', 'msg':f"Disk {disk['mount']} at {p}%"})
-
     for svc in stats.get('services',[]):
         if svc.get('status') == 'failed':
-            alerts.append({'level':'danger', 'msg':f"Service failed: {svc['name']}"})
-
+            alerts.append({'level':'danger','msg':f"Service failed: {svc['name']}"})
     stats['alerts'] = alerts
     return stats
 
-# ── Background stats collector ────────────────────────────────────────────────
+# ── Background collector ──────────────────────────────────────────────────────
 class BackgroundCollector:
-    """Pre-computes stats every `interval` seconds in a daemon thread.
-    SSE and /api/stats endpoints read from its cache instead of blocking."""
-
-    def __init__(self, interval: int = 5):
-        self._lock     = threading.Lock()
-        self._latest: dict = {}
-        self._qs: dict     = {}
-        self._interval     = interval
-
-    def update_qs(self, qs: dict) -> None:
-        with self._lock:
-            self._qs = dict(qs)
-
-    def get(self) -> dict:
-        with self._lock:
-            return dict(self._latest)
-
-    def start(self) -> None:
-        t = threading.Thread(target=self._loop, daemon=True, name='stats-collector')
-        t.start()
-
-    def _loop(self) -> None:
+    def __init__(self, interval=5):
+        self._lock = threading.Lock(); self._latest = {}; self._qs = {}; self._interval = interval
+    def update_qs(self, qs):
+        with self._lock: self._qs = dict(qs)
+    def get(self):
+        with self._lock: return dict(self._latest)
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True, name='stats-collector').start()
+    def _loop(self):
         while not _shutdown_flag.is_set():
             try:
-                with self._lock:
-                    qs = dict(self._qs)
+                with self._lock: qs = dict(self._qs)
                 data = collect_stats(qs)
-                with self._lock:
-                    self._latest = data
-            except Exception as e:
-                logger.warning(f'BackgroundCollector error: {e}')
+                with self._lock: self._latest = data
+            except Exception as e: logger.warning(f'Collector error: {e}')
             _shutdown_flag.wait(self._interval)
 
 _bg = BackgroundCollector(interval=5)
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory='.', **kwargs)
-
-    def log_message(self, fmt, *args):
-        pass
-
-    def _client_ip(self) -> str:
-        return self.client_address[0] if self.client_address else '0.0.0.0'
+    def __init__(self, *args, **kwargs): super().__init__(*args, directory='.', **kwargs)
+    def log_message(self, fmt, *args): pass
+    def _client_ip(self): return self.client_address[0] if self.client_address else '0.0.0.0'
 
     def _json(self, data, status=200):
         body = json.dumps(data).encode()
         self.send_response(status)
-        self.send_header('Content-Type',   'application/json')
+        self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self.end_headers(); self.wfile.write(body)
 
     def do_GET(self):
-        parsed = urlparse(self.path)
-        qs     = parse_qs(parsed.query)
-        path   = parsed.path
-
-        # ── Public endpoints ──
-        if path in ('/', '/index.html'):
-            super().do_GET()
-            return
-
+        parsed = urlparse(self.path); qs = parse_qs(parsed.query); path = parsed.path
+        if path in ('/', '/index.html'): super().do_GET(); return
         if path == '/api/health':
-            self._json({
-                'status':   'ok',
-                'version':  VERSION,
-                'uptime_s': round(time.time() - _server_start_time)
-            })
-            return
-
-        # ── Auth-gated endpoints ──
-        if not authenticate_request(self.headers, qs):
-            self.send_error(401, 'Unauthorized')
-            return
+            self._json({'status':'ok','version':VERSION,'uptime_s':round(time.time()-_server_start_time)}); return
+        if not authenticate_request(self.headers, qs): self.send_error(401,'Unauthorized'); return
 
         if path == '/api/stats':
-            # Update collector's query params so background thread uses latest settings
             _bg.update_qs(qs)
-            cached = _bg.get()
-            # First-hit fallback: collector may not have run yet
-            try:
-                self._json(cached if cached else collect_stats(qs))
-            except Exception as e:
-                logger.exception('Error in /api/stats')
-                self._json({'error': str(e)}, 500)
+            try: self._json(_bg.get() or collect_stats(qs))
+            except Exception as e: logger.exception('Error in /api/stats'); self._json({'error':str(e)},500)
 
         elif path == '/api/settings':
             self._json(read_yaml_settings())
@@ -2264,209 +1855,153 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path == '/api/stream':
             _bg.update_qs(qs)
             self.send_response(200)
-            self.send_header('Content-Type',  'text/event-stream')
-            self.send_header('Cache-Control', 'no-cache')
-            self.send_header('Connection',    'keep-alive')
+            self.send_header('Content-Type','text/event-stream')
+            self.send_header('Cache-Control','no-cache')
+            self.send_header('Connection','keep-alive')
             self.end_headers()
             try:
-                # Send first frame immediately from cache or fresh
                 first = _bg.get() or collect_stats(qs)
-                self.wfile.write(f'data: {json.dumps(first)}\n\n'.encode())
-                self.wfile.flush()
+                self.wfile.write(f'data: {json.dumps(first)}\n\n'.encode()); self.wfile.flush()
                 while not _shutdown_flag.is_set():
                     _shutdown_flag.wait(5)
-                    if _shutdown_flag.is_set():
-                        break
+                    if _shutdown_flag.is_set(): break
                     data = _bg.get()
-                    if data:
-                        self.wfile.write(f'data: {json.dumps(data)}\n\n'.encode())
-                        self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass
-            except Exception as e:
-                logger.warning(f'SSE stream error: {e}')
+                    if data: self.wfile.write(f'data: {json.dumps(data)}\n\n'.encode()); self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError): pass
+            except Exception as e: logger.warning(f'SSE error: {e}')
 
         elif path == '/api/log-viewer':
-            log_type = qs.get('type', ['syserr'])[0]
-            if log_type == 'syserr':
-                text = run(['journalctl', '-p', '3', '-n', '25', '--no-pager'], timeout=4)
+            log_type = qs.get('type',['syserr'])[0]
+            if   log_type == 'syserr': text = run(['journalctl','-p','3','-n','25','--no-pager'], timeout=4)
             elif log_type == 'action':
                 try:    text = strip_ansi(open(ACTION_LOG).read())
                 except FileNotFoundError: text = 'No recent actions.'
             elif log_type == 'backup':
                 try:
-                    lines = open(os.path.join(LOG_DIR, 'backup-to-nas.log')).readlines()
+                    lines = open(os.path.join(LOG_DIR,'backup-to-nas.log')).readlines()
                     text  = strip_ansi(''.join(lines[-30:]))
                 except FileNotFoundError: text = 'No backup log found.'
-            else:
-                text = 'Unknown log type.'
+            else: text = 'Unknown log type.'
             body = (text or 'Empty.').encode()
-            self.send_response(200)
-            self.send_header('Content-Type',   'text/plain; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_response(200); self.send_header('Content-Type','text/plain; charset=utf-8')
+            self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
 
         elif path == '/api/action-log':
             try:    text = strip_ansi(open(ACTION_LOG).read())
             except FileNotFoundError: text = 'Waiting for output…'
             body = text.encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_response(200); self.send_header('Content-Type','text/plain; charset=utf-8')
+            self.end_headers(); self.wfile.write(body)
 
-        else:
-            self.send_error(404)
+        else: self.send_error(404)
 
     def do_POST(self):
-        path = self.path.split('?')[0]
-        ip   = self._client_ip()
+        path = self.path.split('?')[0]; ip = self._client_ip()
 
-        # ── Login (public, rate-limited) ──
         if path == '/api/login':
-            if _rate_limiter.is_locked(ip):
-                self._json({'error': 'Too many failed attempts. Try again shortly.'}, 429)
-                return
+            if _rate_limiter.is_locked(ip): self._json({'error':'Too many failed attempts. Try again shortly.'},429); return
             try:
-                length   = int(self.headers.get('Content-Length', 0))
-                body     = json.loads(self.rfile.read(length))
-                username = body.get('username', '')
-                password = body.get('password', '')
+                body     = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
                 user     = load_user()
+                username = body.get('username',''); password = body.get('password','')
                 if user and secrets.compare_digest(username, user[0]) and verify_password(user[1], password):
-                    _rate_limiter.reset(ip)
-                    self._json({'token': generate_token()})
+                    _rate_limiter.reset(ip); self._json({'token': generate_token()})
                 else:
                     locked = _rate_limiter.record_failure(ip)
-                    msg    = 'Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials'
-                    self._json({'error': msg}, 401)
-            except Exception as e:
-                logger.exception('Error in /api/login')
-                self._json({'error': str(e)}, 500)
+                    self._json({'error':'Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials'},401)
+            except Exception as e: logger.exception('Login error'); self._json({'error':str(e)},500)
             return
 
-        # ── Logout (public — idempotent) ──
         if path == '/api/logout':
-            parsed = urlparse(self.path)
-            qs     = parse_qs(parsed.query)
-            token  = None
-            auth   = self.headers.get('Authorization', '')
-            if auth.startswith('Bearer '):
-                token = auth[7:]
-            elif 'token' in qs:
-                token = qs['token'][0]
-            if token:
-                revoke_token(token)
-            self._json({'status': 'ok'})
-            return
+            qs    = parse_qs(urlparse(self.path).query)
+            auth  = self.headers.get('Authorization','')
+            token = auth[7:] if auth.startswith('Bearer ') else qs.get('token',[''])[0]
+            if token: revoke_token(token)
+            self._json({'status':'ok'}); return
 
-        # ── Auth-gated POSTs ──
-        if not authenticate_request(self.headers):
-            self.send_error(401, 'Unauthorized')
-            return
+        if not authenticate_request(self.headers): self.send_error(401,'Unauthorized'); return
 
         if path == '/api/settings':
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                body   = json.loads(self.rfile.read(length))
-                self._json({'status': 'ok'} if write_yaml_settings(body)
-                           else {'error': 'Failed to write settings'}, 200 if write_yaml_settings(body) else 500)
-            except Exception as e:
-                logger.exception('Error in /api/settings POST')
-                self._json({'error': str(e)}, 500)
+                body   = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+                # FIX: original called write_yaml_settings twice — once to get the
+                # boolean result and once to determine the status code — writing
+                # the file twice per request. Store the result once.
+                ok = write_yaml_settings(body)
+                self._json({'status':'ok'} if ok else {'error':'Failed to write settings'}, 200 if ok else 500)
+            except Exception as e: logger.exception('Settings POST error'); self._json({'error':str(e)},500)
 
         elif path == '/api/run':
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                body   = json.loads(self.rfile.read(length))
-                script = body.get('script', '')
-                with open(ACTION_LOG, 'w') as f:
-                    f.write(f'>> [{datetime.now().strftime("%H:%M:%S")}] Initiating: {script}\n\n')
+                body   = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+                script = body.get('script','')
+                with open(ACTION_LOG,'w') as f: f.write(f'>> [{datetime.now().strftime("%H:%M:%S")}] Initiating: {script}\n\n')
                 success = False
                 if script == 'speedtest':
-                    with open(ACTION_LOG, 'a') as f:
-                        p = subprocess.Popen(['speedtest-cli', '--simple'],
-                                             stdout=f, stderr=subprocess.STDOUT)
-                        p.wait(timeout=120)
-                        success = p.returncode == 0
+                    with open(ACTION_LOG,'a') as f:
+                        p = subprocess.Popen(['speedtest-cli','--simple'], stdout=f, stderr=subprocess.STDOUT)
+                        p.wait(timeout=120); success = p.returncode == 0
                 elif script in SCRIPT_MAP:
                     sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
                     if os.path.isfile(sfile):
-                        with open(ACTION_LOG, 'a') as f:
-                            p = subprocess.Popen([sfile, '--verbose'],
-                                                 stdout=f, stderr=subprocess.STDOUT,
-                                                 cwd=SCRIPT_DIR)
-                            p.wait(timeout=300)
-                            success = p.returncode == 0
+                        with open(ACTION_LOG,'a') as f:
+                            p = subprocess.Popen([sfile,'--verbose'], stdout=f, stderr=subprocess.STDOUT, cwd=SCRIPT_DIR)
+                            p.wait(timeout=300); success = p.returncode == 0
                     else:
-                        with open(ACTION_LOG, 'a') as f:
-                            f.write(f'[ERROR] Script not found: {sfile}\n')
+                        with open(ACTION_LOG,'a') as f: f.write(f'[ERROR] Script not found: {sfile}\n')
                 else:
-                    with open(ACTION_LOG, 'a') as f:
-                        f.write(f'[ERROR] Unknown script: {script}\n')
+                    with open(ACTION_LOG,'a') as f: f.write(f'[ERROR] Unknown script: {script}\n')
                 self._json({'success': success})
-            except subprocess.TimeoutExpired:
-                self._json({'success': False, 'error': 'Script timed out'})
-            except Exception as e:
-                logger.exception('Error in /api/run')
-                self._json({'success': False, 'error': str(e)})
+            except subprocess.TimeoutExpired: self._json({'success':False,'error':'Script timed out'})
+            except Exception as e: logger.exception('Run error'); self._json({'success':False,'error':str(e)})
 
         elif path == '/api/service-control':
             try:
-                length  = int(self.headers.get('Content-Length', 0))
-                body    = json.loads(self.rfile.read(length))
-                svc     = body.get('service', '').strip()
-                action  = body.get('action',  '').strip()
-                is_user = bool(body.get('is_user', False))
-                if action not in ALLOWED_ACTIONS:
-                    return self._json({'success': False, 'error': f'Action "{action}" not allowed'})
-                if not svc:
-                    return self._json({'success': False, 'error': 'No service name provided'})
-                if not validate_service_name(svc):
-                    return self._json({'success': False, 'error': 'Invalid service name'})
-                cmd = (['systemctl', '--user', action, svc] if is_user
-                       else ['sudo', '-n', 'systemctl', action, svc])
+                body    = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+                svc     = body.get('service','').strip()
+                action  = body.get('action','').strip()
+                is_user = bool(body.get('is_user',False))
+                if action not in ALLOWED_ACTIONS: return self._json({'success':False,'error':f'Action "{action}" not allowed'})
+                if not svc:                        return self._json({'success':False,'error':'No service name provided'})
+                if not validate_service_name(svc): return self._json({'success':False,'error':'Invalid service name'})
+                cmd = (['systemctl','--user',action,svc] if is_user else ['sudo','-n','systemctl',action,svc])
                 r   = subprocess.run(cmd, timeout=10, capture_output=True)
-                self._json({'success': r.returncode == 0, 'stderr': r.stderr.decode().strip()})
-            except Exception as e:
-                self._json({'success': False, 'error': str(e)})
+                self._json({'success':r.returncode==0,'stderr':r.stderr.decode().strip()})
+            except Exception as e: self._json({'success':False,'error':str(e)})
 
-        else:
-            self.send_error(404)
+        else: self.send_error(404)
 
 
 class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads      = True
 
-server = None   # global ref for signal handler
+server = None
+
+def sigterm_handler(signum, frame):
+    logger.info('SIGTERM received, shutting down…')
+    _shutdown_flag.set()
+    if server: threading.Thread(target=server.shutdown, daemon=True).start()
+
+signal.signal(signal.SIGTERM, sigterm_handler)
 
 if __name__ == '__main__':
     try:
-        with open(PID_FILE, 'w') as f:
-            f.write(str(os.getpid()))
-    except Exception as e:
-        logger.warning(f'Could not write PID file: {e}')
+        with open(PID_FILE,'w') as f: f.write(str(os.getpid()))
+    except Exception as e: logger.warning(f'Could not write PID file: {e}')
 
-    # Start background threads
     _bg.start()
     threading.Thread(target=_token_cleanup_loop, daemon=True, name='token-cleanup').start()
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    logger.warning(f'Serving at http://{HOST}:{PORT}  (v{VERSION})')
-    print(f'Noba server v{VERSION} starting at http://{HOST}:{PORT}', file=sys.stderr)
+    logger.info(f'Nobara v{VERSION} listening on http://{HOST}:{PORT}')
+    print(f'Noba backend v{VERSION} listening on http://{HOST}:{PORT}', file=sys.stderr)
 
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info('Shutting down…')
-    except Exception as e:
-        logger.exception('Unhandled exception')
+    try: server.serve_forever()
+    except KeyboardInterrupt: logger.info('Shutdown requested')
     finally:
-        _shutdown_flag.set()
-        server.shutdown()
-        try:   os.unlink(PID_FILE)
+        _shutdown_flag.set(); server.shutdown()
+        try: os.unlink(PID_FILE)
         except Exception: pass
         logger.info('Server stopped.')
 PYEOF
@@ -2483,16 +2018,22 @@ cd "$HTML_DIR"
 nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$SERVER_PID_FILE"
-echo "http://${HOST}:${PORT}" > "$SERVER_URL_FILE"
 
-# Health-check with fallback
-MAX_WAIT=10
-WAITED=0
+# FIX: SERVER_URL_FILE previously wrote http://$HOST:$PORT which becomes
+# http://0.0.0.0:8080 when HOST is unset — not a usable URL for humans.
+# Resolve the actual LAN IP instead.
+DISPLAY_IP=$(local_ip)
+echo "http://${DISPLAY_IP}:${PORT}" > "$SERVER_URL_FILE"
+
+# FIX: health check also used $HOST (same 0.0.0.0 problem). Always probe
+# 127.0.0.1 — the server is local and always reachable that way.
+MAX_WAIT=10; WAITED=0
 while true; do
     if command -v curl &>/dev/null; then
-        CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORT}/api/health" 2>/dev/null || true)
+        CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || true)
     elif command -v wget &>/dev/null; then
-        CODE=$(wget -qO- "http://${HOST}:${PORT}/api/health" 2>/dev/null | python3 -c "import sys,json; print(200 if json.load(sys.stdin).get('status')=='ok' else 0)" 2>/dev/null || true)
+        CODE=$(wget -qO- "http://127.0.0.1:${PORT}/api/health" 2>/dev/null \
+               | python3 -c "import sys,json; print(200 if json.load(sys.stdin).get('status')=='ok' else 0)" 2>/dev/null || true)
     else
         log_error "Neither curl nor wget found."; exit 1
     fi
@@ -2506,8 +2047,9 @@ while true; do
     fi
 done
 
-log_success "Dashboard live → http://${HOST}:${PORT}"
+log_success "Dashboard live → http://${DISPLAY_IP}:${PORT}"
 
+TAIL_PID=""
 if [[ "$VERBOSE" == true ]]; then
     log_info "Tailing log (Ctrl+C to stop)…"
     tail -f "$LOG_FILE" &
@@ -2515,6 +2057,4 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 wait "$SERVER_PID"
-EXIT_CODE=$?
-[[ -n "${TAIL_PID:-}" ]] && kill "$TAIL_PID" 2>/dev/null || true
-exit $EXIT_CODE
+[[ -n "$TAIL_PID" ]] && kill "$TAIL_PID" 2>/dev/null || true
