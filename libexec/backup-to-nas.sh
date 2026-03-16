@@ -316,7 +316,7 @@ setup_logging
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 if ! PARSED_ARGS=$(getopt -o qs:d:e:r:k:nVvh \
-    -l source:,dest:,email:,retention:,keep-count:,dry-run,verify,report-only,verbose,help,version \
+    -l quiet,source:,dest:,email:,retention:,keep-count:,dry-run,verify,report-only,verbose,help,version \
     -- "$@" 2>/dev/null); then
     log_error "Invalid argument. Run with --help for usage."
     exit 2
