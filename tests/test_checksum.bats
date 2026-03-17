@@ -9,14 +9,14 @@ teardown() {
 }
 
 @test "checksum --version returns version" {
-    run ./checksum.sh --version
+    run ./libexec/checksum.sh --version
     [ "$status" -eq 0 ]
     [[ "$output" =~ "version" ]]
 }
 
 @test "checksum generates md5 for a file" {
   echo "test" > testfile.txt
-  run ./checksum.sh --algo md5 testfile.txt
+  run ./libexec/checksum.sh --algo md5 testfile.txt
   [ "$status" -eq 0 ]
   [ -f "testfile.txt.md5.txt" ]
 }
