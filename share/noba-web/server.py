@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v1.2.1 (multi‑user & generic)"""
+"""Nobara Command Center – Backend v1.3.1 (Hardened & Multi-user)"""
 
 import glob
 import hashlib
@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VERSION        = '1.2.1'
+VERSION        = '1.3.1'
 PORT           = int(os.environ.get('PORT', 8080))
 HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -48,6 +48,9 @@ SCRIPT_MAP = {
     'check_updates': 'noba-update.sh',
 }
 ALLOWED_ACTIONS = frozenset({'start', 'stop', 'restart'})
+
+# Valid roles; the first entry is the least-privileged default for new accounts.
+VALID_ROLES    = ('viewer', 'admin')
 
 _server_start_time = time.time()
 _shutdown_flag     = threading.Event()
@@ -84,6 +87,12 @@ _tokens: dict = {}  # token -> (username, role, expiry)
 users_db_lock = threading.Lock()
 users_db = {}       # username -> (hash, role)
 
+# Username must be 1–64 printable chars, no colon or newline (would corrupt users.conf).
+_USERNAME_RE = re.compile(r'^[^\s:/\\]{1,64}$')
+
+def _valid_username(name: str) -> bool:
+    return bool(_USERNAME_RE.match(name))
+
 def load_users():
     """Load all users from USER_DB into users_db."""
     global users_db
@@ -110,10 +119,11 @@ def save_users():
         tmp_db = USER_DB + '.tmp'
         try:
             os.makedirs(os.path.dirname(USER_DB), exist_ok=True)
-            with open(tmp_db, 'w') as f:
+            # Secure file creation: strictly 0600 from the exact moment of creation
+            fd = os.open(tmp_db, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with open(fd, 'w', encoding='utf-8') as f:
                 for username, (hashval, role) in users_db.items():
                     f.write(f"{username}:{hashval}:{role}\n")
-            os.chmod(tmp_db, 0o600)
             os.replace(tmp_db, USER_DB)
         except Exception as e:
             logger.error("Failed to save users: %s", e)
@@ -290,8 +300,12 @@ def write_yaml_settings(settings: dict) -> bool:
             backup = f'{NOBA_YAML}.bak.{int(time.time())}'
             try:
                 shutil.copy2(NOBA_YAML, backup)
+                # Rotate backups: keep only the 5 most recent
+                baks = sorted(glob.glob(f'{NOBA_YAML}.bak.*'))
+                for old_bak in baks[:-5]:
+                    os.unlink(old_bak)
             except Exception as be:
-                logger.warning('Could not create YAML backup: %s', be)
+                logger.warning('Could not rotate YAML backups: %s', be)
 
             r = subprocess.run(
                 ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)',
@@ -786,15 +800,21 @@ _bg = BackgroundCollector()
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 _SECURITY_HEADERS = {
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options':        'SAMEORIGIN',
-    'Referrer-Policy':        'same-origin',
+    'X-Content-Type-Options':  'nosniff',
+    'X-Frame-Options':         'SAMEORIGIN',
+    'Referrer-Policy':         'same-origin',
+    'Content-Security-Policy': "default-src 'self'",
 }
 
 _active_job: dict | None = None
 _job_lock = threading.Lock()
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+
+    # Hide the exact Python and OS version from the Server header
+    server_version = f"noba-web/{VERSION}"
+    sys_version = ""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory='.', **kwargs)
 
@@ -846,9 +866,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
-        # Authenticate most endpoints
+        # Authenticate all remaining endpoints
         username, role = authenticate_request(self.headers, qs)
-        if not username and path not in ('/api/health',):
+        if not username:
             self.send_error(401, 'Unauthorized')
             return
 
@@ -931,18 +951,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with _job_lock:
                 self._json(dict(_active_job) if _active_job else {'status': 'idle'})
 
-        # Admin endpoints for user management
-        elif path.startswith('/api/admin/users'):
+        # Admin endpoint – list users (GET /api/admin/users)
+        elif path == '/api/admin/users':
             if role != 'admin':
                 self._json({'error': 'Forbidden'}, 403)
                 return
-            if path == '/api/admin/users':
-                # List users
-                with users_db_lock:
-                    user_list = [{'username': u, 'role': r} for u, (_, r) in users_db.items()]
-                self._json(user_list)
-                return
-            self.send_error(405)  # Method not allowed for other subpaths (should be POST)
+            with users_db_lock:
+                user_list = [{'username': u, 'role': r} for u, (_, r) in users_db.items()]
+            self._json(user_list)
 
         else:
             self.send_error(404)
@@ -981,6 +997,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             # Login failed
             locked = _rate_limiter.record_failure(ip)
+            # Explicit logging for auditing/fail2ban integration
+            logger.warning("Failed login attempt for user '%s' from IP %s", username, ip)
             msg    = ('Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials')
             self._json({'error': msg}, 401)
             return
@@ -999,7 +1017,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(401, 'Unauthorized')
             return
 
+        # ── Settings (admin only) ─────────────────────────────────────────────
         if path == '/api/settings':
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
             body = self._read_body()
             if body is None:
                 return
@@ -1015,8 +1037,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             script = body.get('script', '')
 
+            global _active_job
             with _job_lock:
-                global _active_job
                 if _active_job and _active_job.get('status') == 'running':
                     self._json({'success': False, 'error': 'A script is already running'})
                     return
@@ -1082,7 +1104,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             svc     = body.get('service', '').strip()
             action  = body.get('action', '').strip()
-            is_user = bool(body.get('is_user', False))
+
+            # Explicit boolean evaluation to prevent mapping "false" strings to True
+            is_user_val = body.get('is_user', False)
+            is_user = (is_user_val is True) or (str(is_user_val).lower() in ('true', '1', 'yes', 't', 'y'))
+
             if action not in ALLOWED_ACTIONS:
                 self._json({'success': False, 'error': f'Action "{action}" not allowed'})
                 return
@@ -1100,8 +1126,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self._json({'success': False, 'error': str(e)})
 
-        # Admin-only user management endpoints
-        elif path.startswith('/api/admin/users'):
+        # Admin-only user management endpoints (POST /api/admin/users)
+        elif path == '/api/admin/users':
             if role != 'admin':
                 self._json({'error': 'Forbidden'}, 403)
                 return
@@ -1114,52 +1140,58 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if action == 'add':
-                username = body.get('username')
-                password = body.get('password')
-                userrole = body.get('role', 'admin')
-                if not username or not password:
+                new_username = body.get('username', '').strip()
+                password     = body.get('password', '')
+                new_role     = body.get('role', VALID_ROLES[0])
+                if not new_username or not password:
                     self._json({'error': 'Missing username or password'}, 400)
                     return
+                if not _valid_username(new_username):
+                    self._json({'error': 'Invalid username (1–64 chars, no : / \\ or whitespace)'}, 400)
+                    return
+                if new_role not in VALID_ROLES:
+                    self._json({'error': f'Invalid role. Must be one of: {", ".join(VALID_ROLES)}'}, 400)
+                    return
                 with users_db_lock:
-                    if username in users_db:
+                    if new_username in users_db:
                         self._json({'error': 'User already exists'}, 409)
                         return
-                    # Hash password
-                    salt = secrets.token_hex(16)
-                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
-                    hashval = f'pbkdf2:{salt}:{dk.hex()}'
-                    users_db[username] = (hashval, userrole)
+                    salt     = secrets.token_hex(16)
+                    dk       = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
+                    hashval  = f'pbkdf2:{salt}:{dk.hex()}'
+                    users_db[new_username] = (hashval, new_role)
                 save_users()
                 self._json({'status': 'ok'})
 
             elif action == 'remove':
-                username = body.get('username')
-                if not username:
+                target = body.get('username', '').strip()
+                if not target:
                     self._json({'error': 'Missing username'}, 400)
                     return
                 with users_db_lock:
-                    if username not in users_db:
+                    if target not in users_db:
                         self._json({'error': 'User not found'}, 404)
                         return
-                    del users_db[username]
+                    del users_db[target]
                 save_users()
                 self._json({'status': 'ok'})
 
             elif action == 'change_password':
-                username = body.get('username')
-                password = body.get('password')
-                if not username or not password:
+                target   = body.get('username', '').strip()
+                password = body.get('password', '')
+                if not target or not password:
                     self._json({'error': 'Missing username or password'}, 400)
                     return
                 with users_db_lock:
-                    if username not in users_db:
+                    if target not in users_db:
                         self._json({'error': 'User not found'}, 404)
                         return
-                    salt = secrets.token_hex(16)
-                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
-                    hashval = f'pbkdf2:{salt}:{dk.hex()}'
-                    role = users_db[username][1]
-                    users_db[username] = (hashval, role)
+                    salt        = secrets.token_hex(16)
+                    dk          = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
+                    hashval     = f'pbkdf2:{salt}:{dk.hex()}'
+                    # use a distinct variable so we don't shadow the authenticated user's role
+                    user_role   = users_db[target][1]
+                    users_db[target] = (hashval, user_role)
                 save_users()
                 self._json({'status': 'ok'})
 
