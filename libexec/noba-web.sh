@@ -1,5 +1,5 @@
 #!/bin/bash
-# noba-web.sh – Noba Command Center v1.0.0
+# noba-web.sh – Noba Command Center v1.0.1
 #
 #   Shell   : --status flag (shows PID + URL of running server)
 #             --generate-systemd flag (prints ready-to-use .service unit)
@@ -20,21 +20,49 @@
 #             Countdown timer shown in live pill when polling
 #             Keyboard shortcuts: s=Settings  r=Refresh  Esc=close modal
 #             Shortcuts listed in Settings modal
+#
+# Fixed in 1.0.1:
+#   YAML write – empty-string escape
+#             write_yaml_settings only called json.dumps(v) when the value
+#             contained \n, : or #.  An empty piholeToken passed none of those
+#             checks, so it was written as "  piholeToken: \n" — valid YAML
+#             for null, not "".  Fixed: always json.dumps every string value.
+#   YAML write – timeout
+#             The yq subprocess in write_yaml_settings had a 2-second timeout
+#             that could race on a loaded system.  Raised to 5 s.
+#   YAML read – null .web section
+#             When the .web key is absent, yq returns the literal string
+#             "null".  json.loads("null") → None, and "if k in None" raises
+#             TypeError, silently caught, causing read_yaml_settings to return
+#             hardcoded defaults every time.  Fixed: guard with
+#             isinstance(web, dict) before iterating.
+#   YAML read – timeout
+#             The yq subprocess in read_yaml_settings also had a 2 s timeout.
+#             Raised to 5 s.
+#   YAML read – non-None defaults
+#             read_yaml_settings returned non-empty strings for
+#             monitoredServices, radarIps and bookmarksStr when those keys
+#             were absent.  fetchSettings (JS) used || so a truthy server
+#             default always overwrote the user's value on login.  Fixed:
+#             defaults are now None for all five keys.
+#   fetchSettings – || → != null
+#             The || guard in fetchSettings treated empty string as "not set"
+#             (correct) but also treated the server's hardcoded non-empty
+#             defaults as authoritative (wrong).  Now the setting is updated
+#             only when the server returns a value that is not null/None,
+#             keeping localStorage / in-memory values intact when the server
+#             has nothing to say.
 
 set -euo pipefail
 
-# FIX: only print exit info on non-zero exit — the original fired on every clean
-# shutdown, producing spurious noise in the journal.
 trap '[[ $? -ne 0 ]] && echo "ERROR: exited with code $? at line $LINENO" >&2' EXIT
 
 # ── Test harness compliance ─────────────────────────────────────────────────
 if [[ "${1:-}" == "--help"           ]]; then echo "Usage: noba-web.sh [OPTIONS]"; exit 0; fi
-if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 1.0.0";  exit 0; fi
+if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 1.0.1";  exit 0; fi
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# FIX: use source=/dev/null so shellcheck doesn't try to follow the runtime
-# library path, which it can't resolve at lint time.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
@@ -153,8 +181,6 @@ EOF
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-show_version() { echo "noba-web.sh version 1.0.0"; exit 0; }
-
 show_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
@@ -188,8 +214,6 @@ show_status() {
             log_success "Server running  PID=$pid  URL=$url"
             echo "  Log: $LOG_FILE"
         else
-            # FIX: was log_warning — noba-lib defines log_warn, not log_warning;
-            # the call would have silently failed or errored depending on the lib.
             log_warn "PID file present but server is not running (stale PID file)."
             rm -f "$SERVER_PID_FILE" "$SERVER_URL_FILE"
         fi
@@ -259,7 +283,7 @@ while true; do
         --status)            SHOW_STATUS=true;  shift   ;;
         --generate-systemd)  GEN_SYSTEMD=true;  shift   ;;
         --help)              show_help ;;
-        --version)           show_version ;;
+        --version)           echo "noba-web.sh version 1.0.1"; exit 0 ;;
         --)                  shift; break ;;
         *)                   log_error "Unknown argument: $1"; exit 1 ;;
     esac
@@ -281,9 +305,6 @@ if [[ "$SET_PASSWORD" == true ]]; then
         echo "Password must be at least 8 characters."; exit 1
     fi
     mkdir -p "$HOME/.config/noba-web"
-    # FIX: the original wrote no trailing newline and no role field, so any
-    # future load_user() call that expects user:hash:role would get a partial
-    # record. Added ":admin\n" suffix.
     (umask 077; python3 - "$HOME/.config/noba-web/auth.conf" "$password" "$username" <<'PYEOF'
 import hashlib, secrets, sys
 salt  = secrets.token_hex(16)
@@ -1157,17 +1178,23 @@ function dashboard() {
             finally  { this.refreshing = false; }
         },
 
+        // FIX: was using || for all five fields.  That meant a truthy server
+        // default (e.g. the hardcoded monitoredServices string) would silently
+        // overwrite whatever the user had stored in localStorage, causing
+        // settings to appear to reset on every login.
+        // Now we update only when the server returns a non-null value, which
+        // only happens when the setting has actually been saved to the YAML.
         async fetchSettings() {
             const token = localStorage.getItem('noba-token');
             try {
                 const res = await fetch('/api/settings', { headers: { 'Authorization': 'Bearer ' + token } });
                 if (res.ok) {
                     const s = await res.json();
-                    this.piholeUrl         = s.piholeUrl         || this.piholeUrl;
-                    this.piholeToken       = s.piholeToken       || this.piholeToken;
-                    this.monitoredServices = s.monitoredServices || this.monitoredServices;
-                    this.radarIps          = s.radarIps          || this.radarIps;
-                    this.bookmarksStr      = s.bookmarksStr      || this.bookmarksStr;
+                    if (s.piholeUrl         != null) this.piholeUrl         = s.piholeUrl;
+                    if (s.piholeToken       != null) this.piholeToken       = s.piholeToken;
+                    if (s.monitoredServices != null) this.monitoredServices = s.monitoredServices;
+                    if (s.radarIps         != null) this.radarIps          = s.radarIps;
+                    if (s.bookmarksStr     != null) this.bookmarksStr      = s.bookmarksStr;
                     this.saveSettings();
                 }
             } catch (e) { console.warn('Could not fetch settings', e); }
@@ -1315,7 +1342,7 @@ HTMLEOF
 # ── server.py ────────────────────────────────────────────────────────────────
 cat > "$HTML_DIR/server.py" <<'PYEOF'
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v8.4.0"""
+"""Nobara Command Center – Backend v1.0.1"""
 import http.server, socketserver, json, subprocess, os, time, re, logging
 import glob, threading, urllib.request, urllib.error, signal, sys
 import ipaddress, uuid, hashlib, secrets
@@ -1324,7 +1351,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
-VERSION    = '1.0.0'
+VERSION    = '1.0.1'
 PORT       = int(os.environ.get('PORT', 8080))
 HOST       = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -1379,7 +1406,6 @@ def load_user():
             line = f.readline().strip()
         if ':' in line:
             username, rest = line.split(':', 1)
-            # rest is hash:role — strip role for password verify
             h = rest.rsplit(':', 1)[0] if rest.count(':') >= 2 else rest
             return username, h
     except Exception as e:
@@ -1456,44 +1482,55 @@ _rate_limiter = LoginRateLimiter()
 
 # ── YAML helpers ──────────────────────────────────────────────────────────────
 def read_yaml_settings():
+    # FIX: all defaults are None, not hardcoded strings.
+    # Previously monitoredServices/radarIps/bookmarksStr returned non-empty
+    # strings, which the JS fetchSettings() || guard treated as authoritative
+    # and used to overwrite the user's stored values on every login.
     defaults = {
-        'piholeUrl': '', 'piholeToken': '',
-        'monitoredServices': 'backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service',
-        'radarIps': '192.168.100.1, 1.1.1.1, 8.8.8.8',
-        'bookmarksStr': 'TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server'
+        'piholeUrl': None, 'piholeToken': None,
+        'monitoredServices': None, 'radarIps': None, 'bookmarksStr': None
     }
     if not os.path.exists(NOBA_YAML): return defaults
     try:
+        # FIX: raised timeout from 2 s to 5 s — 2 s could race on a loaded box
         r = subprocess.run(['yq', 'eval', '-o=json', '.web', NOBA_YAML],
-                           capture_output=True, text=True, timeout=2)
+                           capture_output=True, text=True, timeout=5)
         if r.returncode == 0 and r.stdout.strip():
             web = json.loads(r.stdout)
-            for k in defaults:
-                if k in web: defaults[k] = web[k]
+            # FIX: guard against None when .web section is absent — yq returns
+            # the literal string "null" which json.loads turns into Python None;
+            # "if k in None" then raises TypeError, silently caught, causing
+            # the function to always return the hardcoded defaults above.
+            if isinstance(web, dict):
+                for k in defaults:
+                    if k in web: defaults[k] = web[k]
     except Exception as e:
         logger.warning(f'Failed to read YAML settings: {e}')
     return defaults
 
 def write_yaml_settings(settings: dict) -> bool:
     import tempfile
-    # FIX: the original called write_yaml_settings(body) twice in the POST
-    # handler — once to test the return value and once to compute the status
-    # code — which wrote the file twice. Now write_yaml_settings is called
-    # once by the caller and the result is stored.
     try:
         tmp_path = None
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
-                if isinstance(v, str) and any(c in v for c in '\n:#'):
+                # FIX: always json.dumps every string value, not just those
+                # containing \n, : or #.  The old conditional missed empty
+                # strings (piholeToken=''), writing "  piholeToken: \n" which
+                # YAML parses as null — breaking the empty-token round-trip.
+                # json.dumps("") → '""', json.dumps("http://x") → '"http://x"'
+                # — both are valid YAML double-quoted scalars.
+                if isinstance(v, str):
                     v = json.dumps(v)
                 tmp.write(f'  {k}: {v}\n')
             tmp_path = tmp.name
         if os.path.exists(NOBA_YAML):
+            # FIX: raised timeout from 2 s to 5 s
             r = subprocess.run(
                 ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)', NOBA_YAML, tmp_path],
-                capture_output=True, text=True, timeout=2)
-            if r.returncode != 0: raise RuntimeError('yq merge failed')
+                capture_output=True, text=True, timeout=5)
+            if r.returncode != 0: raise RuntimeError(f'yq merge failed: {r.stderr.strip()}')
             with open(NOBA_YAML, 'w') as f: f.write(r.stdout)
         else:
             os.makedirs(os.path.dirname(NOBA_YAML), exist_ok=True)
@@ -1924,11 +1961,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if path == '/api/settings':
             try:
-                body   = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
-                # FIX: original called write_yaml_settings twice — once to get the
-                # boolean result and once to determine the status code — writing
-                # the file twice per request. Store the result once.
-                ok = write_yaml_settings(body)
+                body = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+                ok   = write_yaml_settings(body)
                 self._json({'status':'ok'} if ok else {'error':'Failed to write settings'}, 200 if ok else 500)
             except Exception as e: logger.exception('Settings POST error'); self._json({'error':str(e)},500)
 
@@ -2020,14 +2054,9 @@ nohup python3 server.py >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$SERVER_PID_FILE"
 
-# FIX: SERVER_URL_FILE previously wrote http://$HOST:$PORT which becomes
-# http://0.0.0.0:8080 when HOST is unset — not a usable URL for humans.
-# Resolve the actual LAN IP instead.
 DISPLAY_IP=$(local_ip)
 echo "http://${DISPLAY_IP}:${PORT}" > "$SERVER_URL_FILE"
 
-# FIX: health check also used $HOST (same 0.0.0.0 problem). Always probe
-# 127.0.0.1 — the server is local and always reachable that way.
 MAX_WAIT=10; WAITED=0
 while true; do
     if command -v curl &>/dev/null; then
