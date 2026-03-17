@@ -237,6 +237,9 @@ def run(cmd, timeout=3, cache_key=None, cache_ttl=30, ignore_rc=False):
         out = r.stdout.strip() if (r.returncode == 0 or ignore_rc) else ''
         if cache_key and out: _cache.set(cache_key, out)
         return out
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+        return ''
     except Exception as e:
         logger.debug(f'Command failed: {cmd} – {e}'); return ''
 

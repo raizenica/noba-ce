@@ -41,7 +41,6 @@ SUITE_SCRIPTS=(
     config-check.sh
     disk-sentinel.sh
     images-to-pdf.sh
-    noba-web.sh
     organize-downloads.sh
 )
 OPTIONAL_SCRIPTS=(
@@ -385,7 +384,47 @@ if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
     fi
 fi
 
-# 4. Install Man Page
+# 4. Install Web Dashboard
+header "Installing Web Dashboard"
+mkdir -p "$LIBEXEC_DIR/web"
+
+# Install backend and frontend
+for f in server.py index.html; do
+    src="$SCRIPT_DIR/share/noba-web/$f"
+    dst="$LIBEXEC_DIR/web/$f"
+    if [[ -f "$src" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then dry "cp share/noba-web/$f → $LIBEXEC_DIR/web/"; else
+            cp "$src" "$dst"
+            [[ "$f" == "server.py" ]] && chmod +x "$dst"
+            record_install "$dst"
+            say_ok "Web component: $f"
+        fi
+    fi
+done
+
+# Install web functions
+src="$SCRIPT_DIR/lib/noba-web-functions.sh"
+dst="$LIBEXEC_DIR/lib/noba-web-functions.sh"
+if [[ -f "$src" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp lib/noba-web-functions.sh → $LIBEXEC_DIR/lib/"; else
+        cp "$src" "$dst"
+        record_install "$dst"
+        say_ok "noba-web-functions.sh"
+    fi
+fi
+
+# Install standalone launcher
+src="$SCRIPT_DIR/bin/noba-web"
+dst="$BIN_DIR/noba-web"
+if [[ -f "$src" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then dry "cp bin/noba-web → $BIN_DIR/"; else
+        cp "$src" "$dst"
+        chmod +x "$dst"
+        record_install "$dst"
+        say_ok "noba-web (standalone launcher)"
+    fi
+fi
+# 5. Install Man Page
 if [[ -f "$SCRIPT_DIR/docs/noba.1" ]]; then
     if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba.1 → $MAN_DIR/"; else
         cp "$SCRIPT_DIR/docs/noba.1" "$MAN_DIR/noba.1"
