@@ -339,6 +339,87 @@ EOF
     log_success "Default config created. Edit before first use: $yaml_file"
 }
 
+# ── User database management ──────────────────────────────────────────────────
+NOBA_USER_DB="${NOBA_USER_DB:-$HOME/.config/noba-web/users.conf}"
+
+init_user_db() {
+    mkdir -p "$(dirname "$NOBA_USER_DB")"
+    touch "$NOBA_USER_DB"
+    chmod 600 "$NOBA_USER_DB"
+}
+
+add_user() {
+    local username="$1"
+    local password="$2"
+    local role="${3:-admin}"
+    init_user_db
+    if grep -q "^$username:" "$NOBA_USER_DB" 2>/dev/null; then
+        log_error "User '$username' already exists."
+        return 1
+    fi
+    local hash
+    hash=$(python3 -c "
+import hashlib, secrets, sys
+salt = secrets.token_hex(16)
+dk = hashlib.pbkdf2_hmac('sha256', sys.argv[1].encode(), salt.encode(), 200000)
+print('pbkdf2:' + salt + ':' + dk.hex())
+" "$password")
+    echo "$username:$hash:$role" >> "$NOBA_USER_DB"
+    log_success "User '$username' added with role '$role'."
+}
+
+list_users() {
+    if [[ ! -f "$NOBA_USER_DB" ]]; then
+        echo "No users found."
+        return
+    fi
+    printf "%-20s %-10s\n" "USERNAME" "ROLE"
+    printf "%-20s %-10s\n" "--------" "----"
+    while IFS=: read -r user hash role; do
+        printf "%-20s %-10s\n" "$user" "$role"
+    done < "$NOBA_USER_DB"
+}
+
+remove_user() {
+    local username="$1"
+    if [[ ! -f "$NOBA_USER_DB" ]]; then
+        log_error "No user database."
+        return 1
+    fi
+    if ! grep -q "^$username:" "$NOBA_USER_DB"; then
+        log_error "User '$username' not found."
+        return 1
+    fi
+    grep -v "^$username:" "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
+    mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
+    log_success "User '$username' removed."
+}
+
+change_password() {
+    local username="$1"
+    local password="$2"
+    if [[ ! -f "$NOBA_USER_DB" ]]; then
+        log_error "No user database."
+        return 1
+    fi
+    if ! grep -q "^$username:" "$NOBA_USER_DB"; then
+        log_error "User '$username' not found."
+        return 1
+    fi
+    local hash role
+    hash=$(python3 -c "
+import hashlib, secrets, sys
+salt = secrets.token_hex(16)
+dk = hashlib.pbkdf2_hmac('sha256', sys.argv[1].encode(), salt.encode(), 200000)
+print('pbkdf2:' + salt + ':' + dk.hex())
+" "$password")
+    role=$(grep "^$username:" "$NOBA_USER_DB" | cut -d: -f3)
+    grep -v "^$username:" "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
+    echo "$username:$hash:$role" >> "$NOBA_USER_DB.tmp"
+    mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
+    log_success "Password changed for '$username'."
+}
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 show_help() {
     cat <<EOF
@@ -350,7 +431,11 @@ Options:
   -k, --kill             Stop any running noba-web server and exit
   --restart              Stop any running server, then start a new one
   --status               Show running state (PID, URL, uptime)
-  --set-password         Create or update login credentials (PBKDF2-SHA256)
+  --set-password         Create or update single login credential (legacy)
+  --add-user             Add a new user (interactive)
+  --list-users           List all users
+  --remove-user USER     Remove a user
+  --change-password      Change a user's password (interactive)
   --generate-systemd     Print a systemd user-service unit and exit
   -v, --verbose          Tail the server log after starting  (Ctrl-C to stop)
   --version              Print version information and exit
@@ -359,6 +444,6 @@ Options:
 Configuration:
   Runtime config  ~/.config/noba-web.conf   (HOST, LOG_FILE, PID_FILE, …)
   App config      ~/.config/noba/config.yaml
-  Credentials     ~/.config/noba-web/auth.conf
+  Credentials     ~/.config/noba-web/users.conf   (multi‑user)
 EOF
 }

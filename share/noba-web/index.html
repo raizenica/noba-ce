@@ -352,6 +352,46 @@
         .settings-footer { display: flex; justify-content: flex-end; gap: .7rem; margin-top: 1.5rem; }
         .btn-sm { width: auto; padding: .55rem 1.4rem; }
 
+        /* ── Admin user management table ── */
+        .user-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: .8rem;
+        }
+        .user-table th {
+            text-align: left;
+            padding: .5rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+        .user-table td {
+            padding: .5rem;
+            border-bottom: 1px dashed var(--border);
+        }
+        .user-table tr:last-child td {
+            border-bottom: none;
+        }
+        .user-actions {
+            display: flex;
+            gap: .5rem;
+        }
+        .user-actions button {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: .2rem .4rem;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: .7rem;
+        }
+        .user-actions button:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+        }
+
         /* ── Kbd shortcuts ── */
         .kbd-grid { display: flex; flex-wrap: wrap; gap: .45rem; }
         .kbd-item { display: flex; align-items: center; gap: .4rem; font-size: .75rem; color: var(--text-muted); }
@@ -672,6 +712,52 @@
                 <div><label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label><textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea></div>
             </div>
         </div>
+
+        <!-- Admin section – only visible to admin users -->
+        <div class="s-section" x-show="userRole === 'admin'">
+            <span class="s-label">User Management</span>
+            <div style="margin-bottom: 1rem;">
+                <button class="btn btn-sm" @click="fetchUsers()" style="width:auto; margin-right: 0.5rem;"><i class="fas fa-sync"></i> Refresh</button>
+                <button class="btn btn-sm btn-primary" @click="showAddUserForm = true" style="width:auto;"><i class="fas fa-plus"></i> Add User</button>
+            </div>
+
+            <!-- Add user form (collapsible) -->
+            <div x-show="showAddUserForm" style="margin-bottom: 1rem; padding: 1rem; background: var(--surface-2); border-radius: 4px;">
+                <div class="field-2">
+                    <div><label class="field-label">Username</label><input class="field-input" type="text" x-model="newUsername" placeholder="username"></div>
+                    <div><label class="field-label">Password</label><input class="field-input" type="password" x-model="newPassword" placeholder="password"></div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <label class="field-label" style="margin:0;">Role:</label>
+                    <select x-model="newRole" class="theme-select" style="padding: .3rem;">
+                        <option value="admin">admin</option>
+                        <option value="user">user</option>
+                    </select>
+                    <button class="btn btn-sm" @click="addUser()" style="width:auto;"><i class="fas fa-check"></i> Save</button>
+                    <button class="btn btn-sm" @click="showAddUserForm = false; newUsername=''; newPassword=''; newRole='admin'" style="width:auto;">Cancel</button>
+                </div>
+            </div>
+
+            <!-- User list table -->
+            <table class="user-table">
+                <thead>
+                    <tr><th>Username</th><th>Role</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    <template x-for="u in userList" :key="u.username">
+                        <tr>
+                            <td x-text="u.username"></td>
+                            <td><span class="badge" :class="u.role==='admin'?'ba':'bn'" x-text="u.role"></span></td>
+                            <td class="user-actions">
+                                <button @click="changeUserPassword(u.username)" title="Change password"><i class="fas fa-key"></i></button>
+                                <button @click="removeUser(u.username)" title="Remove user" x-show="u.username !== username"><i class="fas fa-trash"></i></button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
         <div class="s-section">
             <span class="s-label">Keyboard Shortcuts</span>
             <div class="kbd-grid">
@@ -747,6 +833,15 @@ function dashboard() {
         _countdownTimer: null,
         _dismissedAlerts: new Set(),
 
+        // User management
+        userRole: 'user',
+        username: '',               // current username
+        userList: [],
+        showAddUserForm: false,
+        newUsername: '',
+        newPassword: '',
+        newRole: 'admin',
+
         get cpuTempClass() { const t=parseInt(this.cpuTemp)||0; return t>80?'bd':t>65?'bw':'bn'; },
         get gpuTempClass() { const t=parseInt(this.gpuTemp)||0; return t>85?'bd':t>70?'bw':'bn'; },
         get visibleAlerts() { return (this.alerts||[]).filter(a => !this._dismissedAlerts.has(a.msg)); },
@@ -778,8 +873,10 @@ function dashboard() {
             this.initSortable();
             this.initKeyboard();
             if (this.authenticated) {
+                await this.fetchUserInfo();
                 await this.fetchSettings();
                 await this.fetchLog();
+                if (this.userRole === 'admin') await this.fetchUsers();
                 this.connectSSE();
                 setInterval(() => { if (this.vis.logs) this.fetchLog(); }, 12000);
 
@@ -795,6 +892,18 @@ function dashboard() {
                     }
                 }, 5000);
             }
+        },
+
+        async fetchUserInfo() {
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (res.ok) {
+                    const data = await res.json();
+                    this.username = data.username;
+                    this.userRole = data.role;
+                }
+            } catch (e) { console.warn('Could not fetch user info', e); }
         },
 
         initKeyboard() {
@@ -983,7 +1092,9 @@ function dashboard() {
                 if (res.ok && data.token) {
                     localStorage.setItem('noba-token', data.token);
                     this.authenticated = true;
+                    await this.fetchUserInfo();
                     await this.fetchSettings();
+                    if (this.userRole === 'admin') await this.fetchUsers();
                     this.init();
                 } else { this.loginError = data.error || 'Login failed'; }
             } catch { this.loginError = 'Network error'; }
@@ -1005,6 +1116,104 @@ function dashboard() {
             const id = Date.now() + Math.random();
             this.toasts.push({id, msg, type});
             setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3500);
+        },
+
+        // --- Admin user management methods ---
+        async fetchUsers() {
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/admin/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ action: 'list' })
+                });
+                if (res.ok) {
+                    this.userList = await res.json();
+                } else {
+                    this.addToast('Failed to fetch users', 'error');
+                }
+            } catch (e) {
+                console.warn('fetchUsers error', e);
+                this.addToast('Error fetching users', 'error');
+            }
+        },
+
+        async addUser() {
+            if (!this.newUsername || !this.newPassword) {
+                this.addToast('Username and password required', 'error');
+                return;
+            }
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/admin/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({
+                        action: 'add',
+                        username: this.newUsername,
+                        password: this.newPassword,
+                        role: this.newRole
+                    })
+                });
+                if (res.ok) {
+                    this.addToast(`User ${this.newUsername} added`, 'success');
+                    this.newUsername = '';
+                    this.newPassword = '';
+                    this.newRole = 'admin';
+                    this.showAddUserForm = false;
+                    await this.fetchUsers();
+                } else {
+                    const err = await res.json();
+                    this.addToast(err.error || 'Failed to add user', 'error');
+                }
+            } catch (e) {
+                console.warn('addUser error', e);
+                this.addToast('Error adding user', 'error');
+            }
+        },
+
+        async removeUser(username) {
+            if (!confirm(`Remove user ${username}?`)) return;
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/admin/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ action: 'remove', username })
+                });
+                if (res.ok) {
+                    this.addToast(`User ${username} removed`, 'success');
+                    await this.fetchUsers();
+                } else {
+                    const err = await res.json();
+                    this.addToast(err.error || 'Failed to remove user', 'error');
+                }
+            } catch (e) {
+                console.warn('removeUser error', e);
+                this.addToast('Error removing user', 'error');
+            }
+        },
+
+        async changeUserPassword(username) {
+            const newPass = prompt(`Enter new password for ${username}:`);
+            if (!newPass) return;
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/admin/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ action: 'change_password', username, password: newPass })
+                });
+                if (res.ok) {
+                    this.addToast(`Password changed for ${username}`, 'success');
+                } else {
+                    const err = await res.json();
+                    this.addToast(err.error || 'Failed to change password', 'error');
+                }
+            } catch (e) {
+                console.warn('changePassword error', e);
+                this.addToast('Error changing password', 'error');
+            }
         }
     };
 }

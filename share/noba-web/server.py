@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v1.1.1"""
+"""Nobara Command Center – Backend v1.2.0 (multi‑user)"""
 
 import glob
 import hashlib
@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VERSION        = '1.1.1'
+VERSION        = '1.2.0'
 PORT           = int(os.environ.get('PORT', 8080))
 HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -34,6 +34,7 @@ LOG_DIR        = os.path.expanduser('~/.local/share')
 PID_FILE       = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
 ACTION_LOG     = '/tmp/noba-action.log'
 AUTH_CONFIG    = os.path.expanduser('~/.config/noba-web/auth.conf')
+USER_DB        = os.path.expanduser('~/.config/noba-web/users.conf')   # new multi‑user file
 NOBA_YAML      = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
 MAX_BODY_BYTES = 64 * 1024  # 64 KiB – guard against oversized POST bodies
 TOKEN_TTL_H    = 24
@@ -76,9 +77,45 @@ def _read_file(path: str, default: str = '') -> str:
     except OSError:
         return default
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth – multi‑user support ─────────────────────────────────────────────────
 _tokens_lock = threading.Lock()
-_tokens: dict = {}  # token → expiry datetime
+_tokens: dict = {}  # token -> (username, role, expiry)
+
+users_db_lock = threading.Lock()
+users_db = {}       # username -> (hash, role)
+
+def load_users():
+    """Load all users from USER_DB into users_db."""
+    global users_db
+    new_db = {}
+    if os.path.exists(USER_DB):
+        try:
+            with open(USER_DB, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(':', 2)
+                    if len(parts) == 3:
+                        username, hashval, role = parts
+                        new_db[username] = (hashval, role)
+        except Exception as e:
+            logger.error(f"Failed to load users: {e}")
+    with users_db_lock:
+        users_db = new_db
+
+def save_users():
+    """Write users_db back to USER_DB."""
+    with users_db_lock:
+        try:
+            with open(USER_DB, 'w') as f:
+                for username, (hashval, role) in users_db.items():
+                    f.write(f"{username}:{hashval}:{role}\n")
+        except Exception as e:
+            logger.error(f"Failed to save users: {e}")
+
+# Load users at startup
+load_users()
 
 def verify_password(stored: str, password: str) -> bool:
     if not stored:
@@ -101,7 +138,8 @@ _user_cache_t: float = 0.0
 _user_cache_lock = threading.Lock()
 _USER_CACHE_TTL  = 30.0
 
-def load_user() -> tuple | None:
+def load_old_user() -> tuple | None:
+    """Load single user from old auth.conf (backward compatibility)."""
     global _user_cache, _user_cache_t
     with _user_cache_lock:
         if time.time() - _user_cache_t < _USER_CACHE_TTL:
@@ -121,40 +159,46 @@ def load_user() -> tuple | None:
             _user_cache_t = time.time()
         return result
     except Exception as e:
-        logger.warning('Could not read auth config: %s', e)
+        logger.warning('Could not read old auth config: %s', e)
     return None
 
-def generate_token() -> str:
+def generate_token(username: str, role: str) -> str:
     token = secrets.token_urlsafe(32)
     with _tokens_lock:
-        _tokens[token] = datetime.now() + timedelta(hours=TOKEN_TTL_H)
+        _tokens[token] = (username, role, datetime.now() + timedelta(hours=TOKEN_TTL_H))
     return token
 
-def validate_token(token: str) -> bool:
+def validate_token(token: str):
+    """Return (username, role) if valid, else (None, None)."""
     with _tokens_lock:
-        expiry = _tokens.get(token)
-        if expiry and expiry > datetime.now():
-            return True
+        data = _tokens.get(token)
+        if data and data[2] > datetime.now():
+            return data[0], data[1]
         _tokens.pop(token, None)
-    return False
+    return None, None
 
 def revoke_token(token: str) -> None:
     with _tokens_lock:
         _tokens.pop(token, None)
 
-def authenticate_request(headers, query=None) -> bool:
+def authenticate_request(headers, query=None):
+    """Return (username, role) if authenticated, else (None, None)."""
     auth = headers.get('Authorization', '')
-    if auth.startswith('Bearer ') and validate_token(auth[7:]):
-        return True
-    if query and 'token' in query and validate_token(query['token'][0]):
-        return True
-    return False
+    if auth.startswith('Bearer '):
+        username, role = validate_token(auth[7:])
+        if username:
+            return username, role
+    if query and 'token' in query:
+        username, role = validate_token(query['token'][0])
+        if username:
+            return username, role
+    return None, None
 
 def _token_cleanup_loop() -> None:
     while not _shutdown_flag.wait(300):
         now = datetime.now()
         with _tokens_lock:
-            expired = [t for t, exp in list(_tokens.items()) if exp <= now]
+            expired = [t for t, (_, _, exp) in list(_tokens.items()) if exp <= now]
             for t in expired:
                 del _tokens[t]
         if expired:
@@ -498,7 +542,7 @@ def get_pihole(url: str, token: str) -> dict | None:
     except Exception:
         return None
 
-# ── Stats assembly ──────────────────────────────
+# ── Stats assembly ────────────────────────────────────────────────────────────
 def _collect_system() -> dict:
     s: dict = {}
     try:
@@ -793,8 +837,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
-        if not authenticate_request(self.headers, qs):
+        # Authenticate most endpoints
+        username, role = authenticate_request(self.headers, qs)
+        if not username and path not in ('/api/health',):
             self.send_error(401, 'Unauthorized')
+            return
+
+        if path == '/api/me':
+            self._json({'username': username, 'role': role})
             return
 
         if path == '/api/stats':
@@ -872,6 +922,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with _job_lock:
                 self._json(dict(_active_job) if _active_job else {'status': 'idle'})
 
+        # Admin endpoints for user management
+        elif path.startswith('/api/admin/users'):
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
+            if path == '/api/admin/users':
+                # List users
+                with users_db_lock:
+                    user_list = [{'username': u, 'role': r} for u, (_, r) in users_db.items()]
+                self._json(user_list)
+                return
+            self.send_error(405)  # Method not allowed for other subpaths (should be POST)
+
         else:
             self.send_error(404)
 
@@ -886,22 +949,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = self._read_body()
             if body is None:
                 return
-            try:
-                user     = load_user()
-                username = body.get('username', '')
-                password = body.get('password', '')
-                if user and secrets.compare_digest(username, user[0]) and \
-                        verify_password(user[1], password):
-                    _rate_limiter.reset(ip)
-                    self._json({'token': generate_token()})
-                else:
-                    locked = _rate_limiter.record_failure(ip)
-                    msg    = ('Too many failed attempts. Try again shortly.'
-                              if locked else 'Invalid credentials')
-                    self._json({'error': msg}, 401)
-            except Exception as e:
-                logger.exception('Login error')
-                self._json({'error': str(e)}, 500)
+            username = body.get('username', '')
+            password = body.get('password', '')
+
+            # Try old single‑user auth.conf first (backward compatibility)
+            user_old = load_old_user()
+            if user_old and secrets.compare_digest(username, user_old[0]) and \
+                    verify_password(user_old[1], password):
+                _rate_limiter.reset(ip)
+                token = generate_token(username, 'admin')  # old users are admin
+                self._json({'token': token})
+                return
+
+            # Try multi‑user database
+            with users_db_lock:
+                user_data = users_db.get(username)
+            if user_data and verify_password(user_data[0], password):
+                _rate_limiter.reset(ip)
+                token = generate_token(username, user_data[1])
+                self._json({'token': token})
+                return
+
+            # Login failed
+            locked = _rate_limiter.record_failure(ip)
+            msg    = ('Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials')
+            self._json({'error': msg}, 401)
             return
 
         if path == '/api/logout':
@@ -913,7 +985,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json({'status': 'ok'})
             return
 
-        if not authenticate_request(self.headers):
+        username, role = authenticate_request(self.headers)
+        if not username:
             self.send_error(401, 'Unauthorized')
             return
 
@@ -992,7 +1065,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         _active_job['status']  = status
                         _active_job['finished'] = datetime.now().isoformat()
 
-            # Now we actually return the success key the frontend expects!
             self._json({'success': status == 'done', 'status': status, 'script': script})
 
         elif path == '/api/service-control':
@@ -1018,6 +1090,77 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json({'success': r.returncode == 0, 'stderr': r.stderr.decode().strip()})
             except Exception as e:
                 self._json({'success': False, 'error': str(e)})
+
+        # Admin-only user management endpoints
+        elif path.startswith('/api/admin/users'):
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
+            body = self._read_body()
+            if body is None:
+                return
+            action = body.get('action')
+            if not action:
+                self._json({'error': 'Missing action'}, 400)
+                return
+
+            if action == 'add':
+                username = body.get('username')
+                password = body.get('password')
+                userrole = body.get('role', 'admin')
+                if not username or not password:
+                    self._json({'error': 'Missing username or password'}, 400)
+                    return
+                with users_db_lock:
+                    if username in users_db:
+                        self._json({'error': 'User already exists'}, 409)
+                        return
+                    # Hash password
+                    salt = secrets.token_hex(16)
+                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
+                    hashval = f'pbkdf2:{salt}:{dk.hex()}'
+                    users_db[username] = (hashval, userrole)
+                save_users()
+                self._json({'status': 'ok'})
+
+            elif action == 'remove':
+                username = body.get('username')
+                if not username:
+                    self._json({'error': 'Missing username'}, 400)
+                    return
+                with users_db_lock:
+                    if username not in users_db:
+                        self._json({'error': 'User not found'}, 404)
+                        return
+                    del users_db[username]
+                save_users()
+                self._json({'status': 'ok'})
+
+            elif action == 'change_password':
+                username = body.get('username')
+                password = body.get('password')
+                if not username or not password:
+                    self._json({'error': 'Missing username or password'}, 400)
+                    return
+                with users_db_lock:
+                    if username not in users_db:
+                        self._json({'error': 'User not found'}, 404)
+                        return
+                    salt = secrets.token_hex(16)
+                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
+                    hashval = f'pbkdf2:{salt}:{dk.hex()}'
+                    role = users_db[username][1]
+                    users_db[username] = (hashval, role)
+                save_users()
+                self._json({'status': 'ok'})
+
+            elif action == 'list':
+                with users_db_lock:
+                    user_list = [{'username': u, 'role': r} for u, (_, r) in users_db.items()]
+                self._json(user_list)
+
+            else:
+                self._json({'error': 'Invalid action'}, 400)
 
         else:
             self.send_error(404)
