@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # noba – Central command for Nobara automation suite
-# Version: 3.1.0
+# Version: 3.2.0
 
 set -euo pipefail
 
@@ -10,9 +10,10 @@ PREFIX="$(dirname "$WRAPPER_DIR")"
 
 # Define where the actual scripts live
 LIBEXEC_DIR="$PREFIX/libexec/noba"
+BIN_DIR="$PREFIX/bin"
 
 # Source library for logging and config parsing
-if [ -f "$LIBEXEC_DIR/lib/noba-lib.sh" ]; then
+if [[ -f "$LIBEXEC_DIR/lib/noba-lib.sh" ]]; then
     # shellcheck source=/dev/null
     source "$LIBEXEC_DIR/lib/noba-lib.sh"
 else
@@ -31,7 +32,6 @@ declare -A ALIASES=(
     ["disk"]="disk-sentinel.sh"
     ["organize"]="organize-downloads.sh"
     ["undo"]="undo-organizer.sh"
-    ["web"]="noba-web.sh"
     ["report"]="system-report.sh"
     ["digest"]="noba-daily-digest.sh"
     ["watch"]="service-watch.sh"
@@ -46,7 +46,7 @@ declare -A ALIASES=(
 # Core Functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "Nobara Automation Suite (noba) version 3.1.0"
+    echo "Nobara Automation Suite (noba) version 3.2.0"
     exit 0
 }
 
@@ -59,13 +59,13 @@ Core Commands:
   config        View or edit the unified configuration
   list          List all available automation scripts and aliases
   doctor        Run system diagnostics and configuration checks
+  web           Launch the Nobara Command Center web dashboard
   help          Show this help message
   version       Show version information
 
 Script Execution:
   You can run scripts directly via their alias or filename:
   noba backup --dry-run
-  noba web --port 8080
   noba disk-sentinel.sh --verbose
 
 For script-specific help, use: noba <command> --help
@@ -81,17 +81,18 @@ cmd_list() {
     for alias in $(echo "${!ALIASES[@]}" | tr ' ' '\n' | sort); do
         printf " %-15s | %s\n" "$alias" "${ALIASES[$alias]}"
     done
+    printf " %-15s | %s\n" "web" "noba-web (Standalone Dashboard Launcher)"
 
     echo ""
     echo "Other scripts in directory (can be run directly via 'noba <script.sh>'):"
-    if [ -d "$LIBEXEC_DIR" ]; then
+    if [[ -d "$LIBEXEC_DIR" ]]; then
         for script in "$LIBEXEC_DIR"/*.sh; do
-            [ -f "$script" ] || continue
+            [[ -f "$script" ]] || continue
             base_name=$(basename "$script")
             if [[ "$base_name" != "noba-lib.sh" ]] && \
                [[ "$base_name" != "noba-setup.sh" ]] && \
                [[ "$base_name" != "noba-completion.sh" ]]; then
-                
+
                 is_alias=false
                 for val in "${ALIASES[@]}"; do
                     if [[ "$val" == "$base_name" ]]; then
@@ -99,7 +100,7 @@ cmd_list() {
                         break
                     fi
                 done
-                if [ "$is_alias" = false ]; then
+                if [[ "$is_alias" == false ]]; then
                     echo " - $base_name"
                 fi
             fi
@@ -111,16 +112,16 @@ cmd_list() {
 
 cmd_config() {
     local conf_file="$HOME/.config/noba/config.yaml"
-    if [ ! -f "$conf_file" ]; then
+    if [[ ! -f "$conf_file" ]]; then
         log_warn "Config file not found. Run 'noba setup' to create a default."
         exit 1
     fi
 
-    if [ $# -eq 0 ]; then
+    if [[ $# -eq 0 ]]; then
         log_info "Displaying current configuration ($conf_file):"
         echo "---------------------------------------------------"
         cat "$conf_file"
-    elif [ "$1" = "--edit" ] || [ "$1" = "-e" ]; then
+    elif [[ "$1" == "--edit" || "$1" == "-e" ]]; then
         ${EDITOR:-nano} "$conf_file"
     else
         log_error "Unknown option: $1"
@@ -132,7 +133,7 @@ cmd_config() {
 # -------------------------------------------------------------------
 # Main Router
 # -------------------------------------------------------------------
-if [ $# -eq 0 ]; then
+if [[ $# -eq 0 ]]; then
     show_help
     exit 1
 fi
@@ -155,6 +156,10 @@ case "$cmd" in
     doctor)
         exec "$LIBEXEC_DIR/config-check.sh" "$@"
         ;;
+    web)
+        # Route 'noba web' directly to the new standalone launcher
+        exec "$BIN_DIR/noba-web" "$@"
+        ;;
     help|--help|-h)
         show_help
         exit 0
@@ -163,7 +168,7 @@ case "$cmd" in
         show_version
         ;;
     run)
-        if [ $# -eq 0 ]; then
+        if [[ $# -eq 0 ]]; then
             log_error "No script specified. Usage: noba <script>"
             exit 1
         fi
@@ -176,9 +181,9 @@ script_target=""
 
 if [[ -n "${ALIASES[$cmd]:-}" ]]; then
     script_target="${ALIASES[$cmd]}"
-elif [ -f "$LIBEXEC_DIR/$cmd" ] && [[ "$cmd" == *.sh ]]; then
+elif [[ -f "$LIBEXEC_DIR/$cmd" && "$cmd" == *.sh ]]; then
     script_target="$cmd"
-elif [ -f "$LIBEXEC_DIR/$cmd.sh" ]; then
+elif [[ -f "$LIBEXEC_DIR/$cmd.sh" ]]; then
     script_target="$cmd.sh"
 else
     log_error "Unknown command or script: $cmd"
@@ -188,7 +193,7 @@ fi
 
 full_path="$LIBEXEC_DIR/$script_target"
 
-if [ ! -x "$full_path" ]; then
+if [[ ! -x "$full_path" ]]; then
     log_warn "Script '$script_target' is not executable. Fixing permissions..."
     chmod +x "$full_path" || echo -e "\033[0;31m[ERROR]\033[0m Failed to make '$script_target' executable." >&2
 fi

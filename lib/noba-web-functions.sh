@@ -1,21 +1,50 @@
 #!/usr/bin/env bash
-# Shared functions for Noba Web – optimized drop‑in replacement
+# Shared functions for Noba Web
 # Sourced by bin/noba-web — do NOT execute directly.
 
-# ── Logging (fast, compact) ───────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 _has_color() { [[ -t 1 ]]; }
 _has_color_err() { [[ -t 2 ]]; }
 
-log_info()    { _has_color     && echo -e "\033[1;34m[INFO]\033[0m $*" || echo "[INFO] $*"; }
-log_success() { _has_color     && echo -e "\033[1;32m[OK]\033[0m $*"   || echo "[OK] $*"; }
-log_warn()    { _has_color_err && echo -e "\033[1;33m[WARN]\033[0m $*" >&2 || echo "[WARN] $*" >&2; }
-log_error()   { _has_color_err && echo -e "\033[1;31m[ERROR]\033[0m $*" >&2 || echo "[ERROR] $*" >&2; }
+log_info() {
+    if _has_color; then
+        echo -e "\033[1;34m[INFO]\033[0m $*"
+    else
+        echo "[INFO] $*"
+    fi
+}
+
+log_success() {
+    if _has_color; then
+        echo -e "\033[1;32m[OK]\033[0m $*"
+    else
+        echo "[OK] $*"
+    fi
+}
+
+log_warn() {
+    if _has_color_err; then
+        echo -e "\033[1;33m[WARN]\033[0m $*" >&2
+    else
+        echo "[WARN] $*" >&2
+    fi
+}
+
+log_error() {
+    if _has_color_err; then
+        echo -e "\033[1;31m[ERROR]\033[0m $*" >&2
+    else
+        echo "[ERROR] $*" >&2
+    fi
+}
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 check_deps() {
     local missing=()
     for dep in "$@"; do
-        command -v "$dep" &>/dev/null || missing+=("$dep")
+        if ! command -v "$dep" &>/dev/null; then
+            missing+=("$dep")
+        fi
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required dependencies: ${missing[*]}"
@@ -23,60 +52,87 @@ check_deps() {
     fi
 }
 
-# ── Network helpers (faster, no grep -P) ─────────────────────────────────────
+# ── Network helpers ───────────────────────────────────────────────────────────
 local_ip() {
     ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || echo "127.0.0.1"
 }
 
 # ── Process helpers ───────────────────────────────────────────────────────────
-_is_running() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
-_read_pid()   { [[ -s "$1" ]] && cat "$1"; }
+_is_running() {
+    if [[ -n "${1:-}" ]]; then
+        kill -0 "$1" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+_read_pid() {
+    if [[ -s "$1" ]]; then
+        cat "$1"
+    else
+        return 1
+    fi
+}
 
 # ── Kill server (strict safe removal) ─────────────────────────────────────────
 kill_server() {
-    local pid_file="$1" url_file="$2" html_dir="$3"
+    local pid_file="$1"
+    local url_file="$2"
+    local html_dir="${3:-}"
     local pid
 
-    pid=$(_read_pid "$pid_file" || true)
+    if [[ -f "$pid_file" ]]; then
+        pid=$(_read_pid "$pid_file" || true)
 
-    if _is_running "$pid"; then
-        log_info "Stopping server (PID $pid)…"
-        kill -TERM "$pid" 2>/dev/null || true
+        if _is_running "$pid"; then
+            log_info "Stopping server (PID $pid)…"
+            kill -TERM "$pid" 2>/dev/null || true
 
-        for _ in {1..5}; do
-            _is_running "$pid" || break
-            sleep 1
-        done
+            local i
+            for i in {1..5}; do
+                if ! _is_running "$pid"; then
+                    break
+                fi
+                sleep 1
+            done
 
-        _is_running "$pid" && { log_warn "Force killing"; kill -KILL "$pid" 2>/dev/null || true; }
+            if _is_running "$pid"; then
+                log_warn "Server did not stop gracefully — sending SIGKILL."
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+
+        rm -f "$pid_file" "$url_file"
     fi
 
-    rm -f "$pid_file" "$url_file"
-
-    # Only remove html_dir if it's under /tmp/ or /var/tmp/ (strict safety)
-    if [[ -n "$html_dir" && "$html_dir" != "/" ]] && \
-       [[ "$html_dir" =~ ^(/tmp/|/var/tmp/) ]]; then
-        rm -rf "$html_dir"
-    elif [[ -n "$html_dir" && -d "$html_dir" ]]; then
-        log_warn "html_dir '$html_dir' is outside ephemeral locations — skipping removal."
+    # Strict Environment-Aware Cleanup: Only nuke ephemeral dev directories.
+    # NEVER delete the persistent deployment or user home directory.
+    if [[ -n "$html_dir" && -d "$html_dir" ]]; then
+        if [[ "$html_dir" =~ ^(/tmp/|/var/tmp/) ]] && [[ ! "$html_dir" =~ ^$HOME ]]; then
+            log_info "Cleaning up ephemeral sandbox: $html_dir"
+            rm -rf "$html_dir"
+        else
+            log_info "Retaining persistent deployment directory: $html_dir"
+        fi
     fi
 }
 
 # ── Show status (with uptime) ─────────────────────────────────────────────────
 show_status() {
-    local pid_file="$1" url_file="$2" log_file="$3"
+    local pid_file="$1"
+    local url_file="$2"
+    local log_file="$3"
     local pid url
 
     pid=$(_read_pid "$pid_file" || true)
     if [[ -z "$pid" ]]; then
-        log_info "Server not running"
+        log_info "Server is not running."
         return
     fi
 
-    url=$(<"$url_file" 2>/dev/null || echo "unknown")
+    url=$(cat "$url_file" 2>/dev/null || echo "unknown")
 
     if _is_running "$pid"; then
-        # Calculate process uptime if possible
         local uptime_str=""
         if [[ -r "/proc/$pid/stat" ]]; then
             local start_ticks hz elapsed
@@ -87,21 +143,25 @@ show_status() {
                 uptime_s=$(awk '{print int($1)}' /proc/uptime)
                 elapsed=$(( uptime_s - start_ticks / hz ))
                 local d h m
-                d=$(( elapsed / 86400 )); h=$(( (elapsed % 86400) / 3600 )); m=$(( (elapsed % 3600) / 60 ))
+                d=$(( elapsed / 86400 ))
+                h=$(( (elapsed % 86400) / 3600 ))
+                m=$(( (elapsed % 3600) / 60 ))
                 uptime_str="  uptime=${d}d${h}h${m}m"
             fi
         fi
-        log_success "Running PID=$pid URL=$url${uptime_str}"
+        log_success "Server running PID=$pid URL=$url${uptime_str}"
         echo "  Log: $log_file"
     else
-        log_warn "Stale PID, cleaning"
+        log_warn "PID file present but server is not running (stale). Cleaning up."
         rm -f "$pid_file" "$url_file"
     fi
 }
 
 # ── Systemd unit generator (with hardening) ───────────────────────────────────
 generate_systemd() {
-    local self="$1" host="$2"
+    local self="$1"
+    local host="$2"
+
     cat <<EOF
 # Save to: ~/.config/systemd/user/noba-web.service
 # Enable:  systemctl --user enable --now noba-web.service
@@ -136,12 +196,14 @@ EOF
 
 # ── Unified password hashing (PBKDF2-SHA256) ──────────────────────────────────
 hash_password() {
-    python3 - "$1" <<'PY'
+    local raw_password="$1"
+    python3 - "$raw_password" <<'PYEOF'
 import hashlib, secrets, sys
+password = sys.argv[1]
 salt = secrets.token_hex(16)
-dk = hashlib.pbkdf2_hmac('sha256', sys.argv[1].encode(), salt.encode(), 200000)
+dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
 print(f"pbkdf2:{salt}:{dk.hex()}")
-PY
+PYEOF
 }
 
 # ── Legacy single‑user setup (auth.conf) ─────────────────────────────────────
@@ -149,7 +211,6 @@ set_password() {
     local yaml_file="$1"
     echo "Setting up login credentials for Nobara Web Dashboard"
 
-    # Validate username
     local username
     while true; do
         read -rp "Username: " username
@@ -164,12 +225,14 @@ set_password() {
 
     local password password2
     while true; do
-        read -rs -p "Password: " password; echo
+        read -rs -p "Password: " password
+        echo
         if [[ ${#password} -lt 12 ]]; then
             echo "Password must be at least 12 characters."
             continue
         fi
-        read -rs -p "Confirm password: " password2; echo
+        read -rs -p "Confirm password: " password2
+        echo
         if [[ "$password" != "$password2" ]]; then
             echo "Passwords do not match. Try again."
             continue
@@ -179,12 +242,15 @@ set_password() {
 
     local auth_dir="$HOME/.config/noba-web"
     mkdir -p "$auth_dir"
+
     local hash
     hash=$(hash_password "$password")
 
-    # Atomic write
     local tmp="$auth_dir/auth.conf.tmp"
-    (umask 077; echo "$username:$hash:admin" > "$tmp")
+    (
+        umask 077
+        echo "$username:$hash:admin" > "$tmp"
+    )
     mv "$tmp" "$auth_dir/auth.conf"
 
     log_success "Credentials saved to $auth_dir/auth.conf  (PBKDF2-SHA256, 200k rounds)"
@@ -194,7 +260,10 @@ set_password() {
 # ── Default YAML config (if missing) ─────────────────────────────────────────
 create_default_yaml() {
     local yaml_file="$1"
-    [[ -f "$yaml_file" ]] && return 0
+
+    if [[ -f "$yaml_file" ]]; then
+        return 0
+    fi
 
     log_info "Creating default config at $yaml_file"
     mkdir -p "$(dirname "$yaml_file")"
@@ -281,15 +350,15 @@ EOF
     log_success "Default config created. Edit before first use: $yaml_file"
 }
 
-# ── Multi‑user database management (optimized with awk) ──────────────────────
+# ── Multi‑user database management ───────────────────────────────────────────
 NOBA_USER_DB="${NOBA_USER_DB:-$HOME/.config/noba-web/users.conf}"
 
 init_user_db() {
-    [[ -f "$NOBA_USER_DB" ]] || {
+    if [[ ! -f "$NOBA_USER_DB" ]]; then
         mkdir -p "$(dirname "$NOBA_USER_DB")"
         touch "$NOBA_USER_DB"
         chmod 600 "$NOBA_USER_DB"
-    }
+    fi
 }
 
 _user_exists() {
@@ -297,10 +366,16 @@ _user_exists() {
 }
 
 add_user() {
-    local username="$1" password="$2" role="${3:-admin}"
+    local username="$1"
+    local password="$2"
+    local role="${3:-viewer}"
+
     init_user_db
 
-    _user_exists "$username" && { log_error "User '$username' already exists"; return 1; }
+    if _user_exists "$username"; then
+        log_error "User '$username' already exists"
+        return 1
+    fi
 
     local hash
     hash=$(hash_password "$password")
@@ -330,19 +405,28 @@ remove_user() {
     local username="$1"
     init_user_db
 
-    _user_exists "$username" || { log_error "User '$username' not found"; return 1; }
+    if ! _user_exists "$username"; then
+        log_error "User '$username' not found"
+        return 1
+    fi
 
     awk -F: -v u="$username" '$1!=u' "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
+
+    chmod 600 "$NOBA_USER_DB.tmp"
     mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
 
     log_success "User '$username' removed"
 }
 
 change_password() {
-    local username="$1" password="$2"
+    local username="$1"
+    local password="$2"
     init_user_db
 
-    _user_exists "$username" || { log_error "User '$username' not found"; return 1; }
+    if ! _user_exists "$username"; then
+        log_error "User '$username' not found"
+        return 1
+    fi
 
     local hash
     hash=$(hash_password "$password")
@@ -353,6 +437,7 @@ change_password() {
         {print}
     ' "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
 
+    chmod 600 "$NOBA_USER_DB.tmp"
     mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
 
     log_success "Password updated for '$username'"

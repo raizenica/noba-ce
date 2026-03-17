@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 3.1.1
+# Version: 3.2.0
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Usage: install.sh [OPTIONS]"; exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "install.sh version 3.1.1"; exit 0
+    echo "install.sh version 3.2.0"; exit 0
 fi
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
@@ -148,7 +148,11 @@ detect_os() {
 }
 
 install_deps() {
-    [[ "$SKIP_DEPS" == true ]] && { say "Skipping dependency installation."; return 0; }
+    if [[ "$SKIP_DEPS" == true ]]; then
+        say "Skipping dependency installation."
+        return 0
+    fi
+
     local deps=()
     case "$OS_ID" in
         fedora|nobara|rhel|centos|rocky|almalinux)
@@ -208,8 +212,8 @@ install_deps() {
 }
 
 setup_completion() {
-    [[ "$NO_COMPLETION" == true ]] && return 0
-    [[ ! -f "$LIBEXEC_DIR/noba-completion.sh" ]] && return 0
+    if [[ "$NO_COMPLETION" == true ]]; then return 0; fi
+    if [[ ! -f "$LIBEXEC_DIR/noba-completion.sh" ]]; then return 0; fi
 
     local shell_name rc_file
     shell_name=$(basename "${SHELL:-bash}")
@@ -261,8 +265,11 @@ setup_completion() {
 }
 
 reload_systemd() {
-    [[ "$NO_SYSTEMD" == true ]] && return 0
-    [[ "$DRY_RUN"  == true ]] && { dry "Would run: systemctl --user daemon-reload"; return 0; }
+    if [[ "$NO_SYSTEMD" == true ]]; then return 0; fi
+    if [[ "$DRY_RUN"  == true ]]; then
+        dry "Would run: systemctl --user daemon-reload"
+        return 0
+    fi
 
     if ! command -v systemctl &>/dev/null; then
         say_warn "systemctl not found — systemd units installed but not loaded."
@@ -300,15 +307,17 @@ while [[ $# -gt 0 ]]; do
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
         -h|--help)         show_help ;;
-        -v|--version)      echo "install.sh version 3.1.1"; exit 0 ;;
+        -v|--version)      echo "install.sh version 3.2.0"; exit 0 ;;
         *) say_err "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
-[[ "$UNINSTALL" == true ]] && do_uninstall
+if [[ "$UNINSTALL" == true ]]; then
+    do_uninstall
+fi
 
 # ── Begin install ─────────────────────────────────────────────────────────────
-header "Nobara Automation Suite Installer v3.1.1"
+header "Nobara Automation Suite Installer v3.2.0"
 
 detect_os
 say "OS: $OS_NAME ($OS_ID${OS_VERSION:+ $OS_VERSION})"
@@ -316,7 +325,10 @@ say "Bin dir:      $BIN_DIR"
 say "Libexec dir:  $LIBEXEC_DIR"
 say "Config dir:   $CONFIG_DIR"
 say "Systemd dir:  $SYSTEMD_USER_DIR"
-[[ "$DRY_RUN" == true ]] && say_warn "DRY RUN — no files will be written"
+
+if [[ "$DRY_RUN" == true ]]; then
+    say_warn "DRY RUN — no files will be written"
+fi
 
 header "Dependencies"
 install_deps
@@ -335,7 +347,9 @@ header "Installing components"
 src="$SCRIPT_DIR/libexec/lib/noba-lib.sh"
 dst="$LIBEXEC_DIR/lib/noba-lib.sh"
 if [[ -f "$src" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then dry "cp lib/noba-lib.sh → $LIBEXEC_DIR/lib/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp lib/noba-lib.sh → $LIBEXEC_DIR/lib/"
+    else
         cp "$src" "$dst"
         chmod +x "$dst"
         record_install "$dst"
@@ -354,7 +368,9 @@ for name in "${SUITE_SCRIPTS[@]}"; do
         say_warn "Not found in source, skipping: libexec/$name"
         continue
     fi
-    if [[ "$DRY_RUN" == true ]]; then dry "cp libexec/$name → $LIBEXEC_DIR/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp libexec/$name → $LIBEXEC_DIR/"
+    else
         cp "$src" "$dst"
         chmod +x "$dst"
         record_install "$dst"
@@ -365,8 +381,12 @@ done
 for name in "${OPTIONAL_SCRIPTS[@]}"; do
     src="$SCRIPT_DIR/libexec/$name"
     dst="$LIBEXEC_DIR/$name"
-    [[ -f "$src" ]] || continue
-    if [[ "$DRY_RUN" == true ]]; then dry "cp libexec/$name → $LIBEXEC_DIR/ (optional)"; else
+    if [[ ! -f "$src" ]]; then
+        continue
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp libexec/$name → $LIBEXEC_DIR/ (optional)"
+    else
         cp "$src" "$dst"
         chmod +x "$dst"
         record_install "$dst"
@@ -376,7 +396,9 @@ done
 
 # 3. Install CLI Wrapper
 if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then dry "cp bin/noba → $BIN_DIR/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp bin/noba → $BIN_DIR/"
+    else
         cp "$SCRIPT_DIR/bin/noba" "$BIN_DIR/noba"
         chmod +x "$BIN_DIR/noba"
         record_install "$BIN_DIR/noba"
@@ -393,9 +415,13 @@ for f in server.py index.html; do
     src="$SCRIPT_DIR/share/noba-web/$f"
     dst="$LIBEXEC_DIR/web/$f"
     if [[ -f "$src" ]]; then
-        if [[ "$DRY_RUN" == true ]]; then dry "cp share/noba-web/$f → $LIBEXEC_DIR/web/"; else
+        if [[ "$DRY_RUN" == true ]]; then
+            dry "cp share/noba-web/$f → $LIBEXEC_DIR/web/"
+        else
             cp "$src" "$dst"
-            [[ "$f" == "server.py" ]] && chmod +x "$dst"
+            if [[ "$f" == "server.py" ]]; then
+                chmod +x "$dst"
+            fi
             record_install "$dst"
             say_ok "Web component: $f"
         fi
@@ -406,7 +432,9 @@ done
 src="$SCRIPT_DIR/lib/noba-web-functions.sh"
 dst="$LIBEXEC_DIR/lib/noba-web-functions.sh"
 if [[ -f "$src" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then dry "cp lib/noba-web-functions.sh → $LIBEXEC_DIR/lib/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp lib/noba-web-functions.sh → $LIBEXEC_DIR/lib/"
+    else
         cp "$src" "$dst"
         record_install "$dst"
         say_ok "noba-web-functions.sh"
@@ -417,7 +445,9 @@ fi
 src="$SCRIPT_DIR/bin/noba-web"
 dst="$BIN_DIR/noba-web"
 if [[ -f "$src" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then dry "cp bin/noba-web → $BIN_DIR/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp bin/noba-web → $BIN_DIR/"
+    else
         cp "$src" "$dst"
         chmod +x "$dst"
         record_install "$dst"
@@ -427,7 +457,9 @@ fi
 
 # 5. Install Man Page
 if [[ -f "$SCRIPT_DIR/docs/noba.1" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba.1 → $MAN_DIR/"; else
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "cp docs/noba.1 → $MAN_DIR/"
+    else
         cp "$SCRIPT_DIR/docs/noba.1" "$MAN_DIR/noba.1"
         record_install "$MAN_DIR/noba.1"
         say_ok "noba.1 (man page)"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v1.4.0 (Hardened, Multi-user, Optimized)"""
+"""Nobara Command Center – Backend v1.6.1 (Integrations & Watchdogs)"""
 
 import glob
 import hashlib
@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import shlex
 import signal
 import socketserver
 import subprocess
@@ -26,7 +27,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VERSION        = '1.4.0'
+VERSION        = '1.6.1'
 PORT           = int(os.environ.get('PORT', 8080))
 HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -36,9 +37,9 @@ ACTION_LOG     = '/tmp/noba-action.log'
 AUTH_CONFIG    = os.path.expanduser('~/.config/noba-web/auth.conf')
 USER_DB        = os.path.expanduser('~/.config/noba-web/users.conf')
 NOBA_YAML      = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
-MAX_BODY_BYTES = 64 * 1024  # 64 KiB – guard against oversized POST bodies
+MAX_BODY_BYTES = 64 * 1024
 TOKEN_TTL_H    = 24
-STATS_INTERVAL = 5          # background collector cadence (seconds)
+STATS_INTERVAL = 5
 
 SCRIPT_MAP = {
     'backup':        'backup-to-nas.sh',
@@ -48,9 +49,7 @@ SCRIPT_MAP = {
     'check_updates': 'noba-update.sh',
 }
 ALLOWED_ACTIONS = frozenset({'start', 'stop', 'restart'})
-
-# Valid roles; the first entry is the least-privileged default for new accounts.
-VALID_ROLES    = ('viewer', 'admin')
+VALID_ROLES     = ('viewer', 'admin')
 
 _server_start_time = time.time()
 _shutdown_flag     = threading.Event()
@@ -73,28 +72,25 @@ def strip_ansi(s: str) -> str:
     return ANSI_RE.sub('', s)
 
 def _read_file(path: str, default: str = '') -> str:
-    """Safely read a file, ensuring descriptor closure."""
     try:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read().strip()
     except OSError:
         return default
 
-# ── Auth – multi‑user support ─────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 _tokens_lock = threading.Lock()
-_tokens: dict = {}  # token -> (username, role, expiry)
+_tokens: dict = {}
 
 users_db_lock = threading.Lock()
-users_db = {}       # username -> (hash, role)
+users_db = {}
 
-# Username must be 1–64 printable chars, no colon or newline (would corrupt users.conf).
 _USERNAME_RE = re.compile(r'^[^\s:/\\]{1,64}$')
 
 def _valid_username(name: str) -> bool:
     return bool(_USERNAME_RE.match(name))
 
 def load_users():
-    """Load all users from USER_DB into users_db."""
     global users_db
     new_db = {}
     if os.path.exists(USER_DB):
@@ -106,20 +102,18 @@ def load_users():
                         continue
                     parts = line.split(':', 2)
                     if len(parts) == 3:
-                        username, hashval, role = parts
-                        new_db[username] = (hashval, role)
+                        new_db[parts[0]] = (parts[1], parts[2])
         except Exception as e:
             logger.error("Failed to load users: %s", e)
+
     with users_db_lock:
         users_db = new_db
 
 def save_users():
-    """Write users_db back to USER_DB atomically to prevent corruption."""
     with users_db_lock:
         tmp_db = USER_DB + '.tmp'
         try:
             os.makedirs(os.path.dirname(USER_DB), exist_ok=True)
-            # Secure file creation: strictly 0600 from the exact moment of creation
             fd = os.open(tmp_db, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with open(fd, 'w', encoding='utf-8') as f:
                 for username, (hashval, role) in users_db.items():
@@ -133,12 +127,12 @@ def save_users():
                 except OSError:
                     pass
 
-# Load users at startup
 load_users()
 
 def verify_password(stored: str, password: str) -> bool:
     if not stored:
         return False
+
     if stored.startswith('pbkdf2:'):
         parts = stored.split(':', 2)
         if len(parts) != 3:
@@ -146,8 +140,10 @@ def verify_password(stored: str, password: str) -> bool:
         _, salt, expected = parts
         dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
         return secrets.compare_digest(expected, dk.hex())
+
     if ':' not in stored:
         return False
+
     salt, expected = stored.split(':', 1)
     actual = hashlib.sha256((salt + password).encode()).hexdigest()
     return secrets.compare_digest(expected, actual)
@@ -158,13 +154,14 @@ _user_cache_lock = threading.Lock()
 _USER_CACHE_TTL  = 30.0
 
 def load_old_user() -> tuple | None:
-    """Load single user from old auth.conf (backward compatibility)."""
     global _user_cache, _user_cache_t
     with _user_cache_lock:
         if time.time() - _user_cache_t < _USER_CACHE_TTL:
             return _user_cache
+
     if not os.path.exists(AUTH_CONFIG):
         return None
+
     try:
         with open(AUTH_CONFIG, encoding='utf-8') as f:
             line = f.readline().strip()
@@ -173,12 +170,15 @@ def load_old_user() -> tuple | None:
             username, rest = line.split(':', 1)
             h = rest.rsplit(':', 1)[0] if rest.count(':') >= 2 else rest
             result = (username, h)
+
         with _user_cache_lock:
             _user_cache  = result
             _user_cache_t = time.time()
         return result
+
     except Exception as e:
         logger.warning('Could not read old auth config: %s', e)
+
     return None
 
 def generate_token(username: str, role: str) -> str:
@@ -188,7 +188,6 @@ def generate_token(username: str, role: str) -> str:
     return token
 
 def validate_token(token: str):
-    """Return (username, role) if valid, else (None, None)."""
     with _tokens_lock:
         data = _tokens.get(token)
         if data and data[2] > datetime.now():
@@ -201,16 +200,17 @@ def revoke_token(token: str) -> None:
         _tokens.pop(token, None)
 
 def authenticate_request(headers, query=None):
-    """Return (username, role) if authenticated, else (None, None)."""
     auth = headers.get('Authorization', '')
     if auth.startswith('Bearer '):
         username, role = validate_token(auth[7:])
         if username:
             return username, role
+
     if query and 'token' in query:
         username, role = validate_token(query['token'][0])
         if username:
             return username, role
+
     return None, None
 
 def _token_cleanup_loop() -> None:
@@ -262,14 +262,23 @@ class LoginRateLimiter:
 
 _rate_limiter = LoginRateLimiter()
 
-# ── YAML helpers ──────────────────────────────────────────────────────────────
+# ── YAML config ───────────────────────────────────────────────────────────────
 def read_yaml_settings() -> dict:
     defaults: dict = {
-        'piholeUrl': None, 'piholeToken': None,
-        'monitoredServices': None, 'radarIps': None, 'bookmarksStr': None,
+        'piholeUrl': '',
+        'piholeToken': '',
+        'monitoredServices': '',
+        'radarIps': '',
+        'bookmarksStr': '',
+        'plexUrl': '',
+        'plexToken': '',
+        'kumaUrl': '',
+        'bmcMap': ''
     }
+
     if not os.path.exists(NOBA_YAML):
         return defaults
+
     try:
         r = subprocess.run(
             ['yq', 'eval', '-o=json', '.web', NOBA_YAML],
@@ -283,6 +292,7 @@ def read_yaml_settings() -> dict:
                         defaults[k] = web[k]
     except Exception as e:
         logger.warning('Failed to read YAML settings: %s', e)
+
     return defaults
 
 def write_yaml_settings(settings: dict) -> bool:
@@ -300,7 +310,6 @@ def write_yaml_settings(settings: dict) -> bool:
             backup = f'{NOBA_YAML}.bak.{int(time.time())}'
             try:
                 shutil.copy2(NOBA_YAML, backup)
-                # Rotate backups: keep only the 5 most recent
                 baks = sorted(glob.glob(f'{NOBA_YAML}.bak.*'))
                 for old_bak in baks[:-5]:
                     os.unlink(old_bak)
@@ -308,12 +317,12 @@ def write_yaml_settings(settings: dict) -> bool:
                 logger.warning('Could not rotate YAML backups: %s', be)
 
             r = subprocess.run(
-                ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)',
-                 NOBA_YAML, tmp_path],
+                ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)', NOBA_YAML, tmp_path],
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode != 0:
                 raise RuntimeError(f'yq merge failed: {r.stderr.strip()}')
+
             with open(NOBA_YAML, 'w') as f:
                 f.write(r.stdout)
         else:
@@ -345,7 +354,7 @@ def validate_ip(ip: str) -> bool:
     except ValueError:
         return False
 
-# ── TTL cache ─────────────────────────────────────────────────────────────────
+# ── Subprocess & API collectors ───────────────────────────────────────────────
 class TTLCache:
     def __init__(self) -> None:
         self._store: dict = {}
@@ -369,21 +378,15 @@ _cpu_prev    = None
 _net_prev    = None
 _net_prev_t  = None
 
-# ── Subprocess helper ─────────────────────────────────────────────────────────
 def run(cmd: list, timeout: float = 3, cache_key: str | None = None,
         cache_ttl: float = 30, ignore_rc: bool = False) -> str:
     if cache_key:
         hit = _cache.get(cache_key, cache_ttl)
         if hit is not None:
             return hit
+
     try:
-        r = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         if r.returncode != 0 and not ignore_rc:
             return ""
 
@@ -391,6 +394,7 @@ def run(cmd: list, timeout: float = 3, cache_key: str | None = None,
         if cache_key and out:
             _cache.set(cache_key, out)
         return out
+
     except subprocess.TimeoutExpired:
         logger.warning('Command timed out after %.1fs: %s', timeout, ' '.join(str(c) for c in cmd))
         return ''
@@ -398,146 +402,54 @@ def run(cmd: list, timeout: float = 3, cache_key: str | None = None,
         logger.debug('Command failed %s: %s', cmd, e)
         return ''
 
-# ── Stat collectors ───────────────────────────────────────────────────────────
-def human_bps(bps: float) -> str:
-    for unit in ('B/s', 'KB/s', 'MB/s', 'GB/s'):
-        if bps < 1024:
-            return f'{bps:.1f} {unit}'
-        bps /= 1024
-    return f'{bps:.1f} TB/s'
+def get_plex(url: str, token: str) -> dict | None:
+    if not url or not token:
+        return None
 
-def get_cpu_percent() -> float:
-    global _cpu_prev
-    with _state_lock:
-        try:
-            line = _read_file('/proc/stat', '')
-            fields = list(map(int, line.split('\n')[0].split()[1:]))
-            idle   = fields[3] + fields[4]
-            total  = sum(fields)
-            if _cpu_prev is None:
-                _cpu_prev = (total, idle)
-                return 0.0
-            dt = total - _cpu_prev[0]
-            di = idle  - _cpu_prev[1]
-            _cpu_prev = (total, idle)
-            pct = round(100.0 * (1.0 - di / dt) if dt > 0 else 0.0, 1)
-            _cpu_history.append(pct)
-            return pct
-        except Exception:
-            return 0.0
+    base = url.rstrip('/')
+    hdrs = {'Accept': 'application/json', 'X-Plex-Token': token}
 
-def get_net_io() -> tuple:
-    global _net_prev, _net_prev_t
-    with _state_lock:
-        try:
-            lines = _read_file('/proc/net/dev').splitlines()
-            rx = tx = 0
-            for line in lines[2:]:
-                parts = line.split()
-                if len(parts) > 9 and not parts[0].startswith('lo'):
-                    rx += int(parts[1])
-                    tx += int(parts[9])
-            now = time.time()
-            if _net_prev is None:
-                _net_prev  = (rx, tx)
-                _net_prev_t = now
-                return 0.0, 0.0
-            dt = now - _net_prev_t
-            if dt < 0.05:
-                return 0.0, 0.0
-            rx_bps = max(0.0, (rx - _net_prev[0]) / dt)
-            tx_bps = max(0.0, (tx - _net_prev[1]) / dt)
-            _net_prev   = (rx, tx)
-            _net_prev_t = now
-            return rx_bps, tx_bps
-        except Exception:
-            return 0.0, 0.0
-
-def ping_host(ip: str) -> tuple:
-    ip = ip.strip()
-    if not validate_ip(ip):
-        return ip, False, 0
     try:
-        t0 = time.time()
-        r  = subprocess.run(['ping', '-c', '1', '-W', '1', ip], capture_output=True, timeout=2.5)
-        return ip, r.returncode == 0, round((time.time() - t0) * 1000)
+        req1 = urllib.request.Request(f"{base}/status/sessions", headers=hdrs)
+        with urllib.request.urlopen(req1, timeout=3) as r:
+            sessions = json.loads(r.read().decode()).get('MediaContainer', {}).get('size', 0)
+
+        req2 = urllib.request.Request(f"{base}/activities", headers=hdrs)
+        with urllib.request.urlopen(req2, timeout=3) as r:
+            activities = json.loads(r.read().decode()).get('MediaContainer', {}).get('size', 0)
+
+        return {'sessions': sessions, 'activities': activities, 'status': 'online'}
     except Exception:
-        return ip, False, 0
+        return {'sessions': 0, 'activities': 0, 'status': 'offline'}
 
-def get_service_status(svc: str) -> tuple:
-    svc = svc.strip()
-    if not validate_service_name(svc):
-        return 'invalid', False
-    for scope, is_user in ((['--user'], True), ([], False)):
-        cmd = ['systemctl'] + scope + ['show', '-p', 'ActiveState,LoadState', svc]
-        out = run(cmd, timeout=2)
-        d   = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
-        if d.get('LoadState') not in (None, '', 'not-found'):
-            state = d.get('ActiveState', 'unknown')
-            if state == 'inactive' and svc.endswith('.service'):
-                timer_name = svc.replace('.service', '.timer')
-                t = run(['systemctl'] + scope + ['show', '-p', 'ActiveState', timer_name], timeout=1)
-                if 'ActiveState=active' in t:
-                    return 'timer-active', is_user
-            return state, is_user
-    return 'not-found', False
+def get_kuma(url: str) -> list:
+    if not url:
+        return []
 
-def get_battery() -> dict:
-    bats = glob.glob('/sys/class/power_supply/BAT*')
-    if not bats:
-        return {'percent': 100, 'status': 'Desktop', 'desktop': True, 'timeRemaining': ''}
+    base = url.rstrip('/')
     try:
-        bat      = bats[0]
-        pct      = int(_read_file(f'{bat}/capacity', '0'))
-        stat     = _read_file(f'{bat}/status', 'Unknown')
-        time_rem = ''
-        try:
-            current = int(_read_file(f'{bat}/current_now', '0'))
-            if current > 0:
-                if stat == 'Discharging':
-                    hrs      = int(_read_file(f'{bat}/charge_now', '0')) / current
-                    time_rem = f'{int(hrs)}h {int((hrs % 1) * 60)}m'
-                else:
-                    cfull    = int(_read_file(f'{bat}/charge_full', '0'))
-                    charge   = int(_read_file(f'{bat}/charge_now', '0'))
-                    hrs      = (cfull - charge) / current
-                    time_rem = f'{int(hrs)}h {int((hrs % 1) * 60)}m to full'
-        except Exception:
-            pass
-        return {'percent': pct, 'status': stat, 'desktop': False, 'timeRemaining': time_rem}
-    except Exception:
-        return {'percent': 0, 'status': 'Error', 'desktop': False, 'timeRemaining': ''}
+        req = urllib.request.Request(f"{base}/metrics")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            lines = r.read().decode().splitlines()
 
-def get_containers() -> list:
-    for cmd in (
-        ['podman', 'ps', '-a', '--format', 'json'],
-        ['docker', 'ps', '-a', '--format', '{{json .}}'],
-    ):
-        out = run(cmd, timeout=4, cache_key=' '.join(cmd), cache_ttl=10)
-        if not out:
-            continue
-        try:
-            items = (json.loads(out) if out.lstrip().startswith('[')
-                     else [json.loads(l) for l in out.splitlines() if l.strip()])
-            result = []
-            for c in items[:16]:
-                name  = c.get('Names', c.get('Name', '?'))
-                if isinstance(name, list):
-                    name = name[0] if name else '?'
-                image = c.get('Image', c.get('Repository', '?')).split('/')[-1][:32]
-                state = (c.get('State', c.get('Status', '?')) or '?').lower().split()[0]
-                result.append({
-                    'name': name, 'image': image,
-                    'state': state, 'status': c.get('Status', state),
-                })
-            return result
-        except Exception:
-            continue
-    return []
+        monitors = []
+        for line in lines:
+            if line.startswith('monitor_status{'):
+                m = re.search(r'monitor_name="([^"]+)"', line)
+                if m:
+                    name = m.group(1)
+                    val = int(float(line.split()[-1]))
+                    status = 'Up' if val == 1 else ('Pending' if val == 2 else 'Down')
+                    monitors.append({'name': name, 'status': status})
+        return monitors
+    except Exception as e:
+        logger.debug(f"Kuma metrics error: {e}")
+        return []
 
 def get_pihole(url: str, token: str) -> dict | None:
     if not url:
         return None
+
     base = url if url.startswith('http') else 'http://' + url
     base = base.rstrip('/').replace('/admin', '')
 
@@ -562,7 +474,7 @@ def get_pihole(url: str, token: str) -> dict | None:
         pass
 
     try:
-        ep   = '/admin/api.php?summaryRaw' + (f'&auth={token}' if token else '')
+        ep = '/admin/api.php?summaryRaw' + (f'&auth={token}' if token else '')
         data = _get(ep)
         return {
             'queries': data.get('dns_queries_today', 0),
@@ -573,6 +485,154 @@ def get_pihole(url: str, token: str) -> dict | None:
         }
     except Exception:
         return None
+
+def human_bps(bps: float) -> str:
+    for unit in ('B/s', 'KB/s', 'MB/s', 'GB/s'):
+        if bps < 1024:
+            return f'{bps:.1f} {unit}'
+        bps /= 1024
+    return f'{bps:.1f} TB/s'
+
+def get_cpu_percent() -> float:
+    global _cpu_prev
+    with _state_lock:
+        try:
+            fields = list(map(int, _read_file('/proc/stat', '').split('\n')[0].split()[1:]))
+            idle = fields[3] + fields[4]
+            total = sum(fields)
+            if _cpu_prev is None:
+                _cpu_prev = (total, idle)
+                return 0.0
+
+            dt = total - _cpu_prev[0]
+            di = idle - _cpu_prev[1]
+            _cpu_prev = (total, idle)
+
+            pct = round(100.0 * (1.0 - di / dt) if dt > 0 else 0.0, 1)
+            _cpu_history.append(pct)
+            return pct
+        except Exception:
+            return 0.0
+
+def get_net_io() -> tuple:
+    global _net_prev, _net_prev_t
+    with _state_lock:
+        try:
+            lines = _read_file('/proc/net/dev').splitlines()
+            rx = tx = 0
+            for line in lines[2:]:
+                parts = line.split()
+                if len(parts) > 9 and not parts[0].startswith('lo'):
+                    rx += int(parts[1])
+                    tx += int(parts[9])
+
+            now = time.time()
+            if _net_prev is None:
+                _net_prev = (rx, tx)
+                _net_prev_t = now
+                return 0.0, 0.0
+
+            dt = now - _net_prev_t
+            if dt < 0.05:
+                return 0.0, 0.0
+
+            rx_bps = max(0.0, (rx - _net_prev[0]) / dt)
+            tx_bps = max(0.0, (tx - _net_prev[1]) / dt)
+
+            _net_prev = (rx, tx)
+            _net_prev_t = now
+            return rx_bps, tx_bps
+        except Exception:
+            return 0.0, 0.0
+
+def ping_host(ip: str) -> tuple:
+    ip = ip.strip()
+    if not validate_ip(ip):
+        return ip, False, 0
+    try:
+        t0 = time.time()
+        r  = subprocess.run(['ping', '-c', '1', '-W', '1', ip], capture_output=True, timeout=2.5)
+        return ip, r.returncode == 0, round((time.time() - t0) * 1000)
+    except Exception:
+        return ip, False, 0
+
+def get_service_status(svc: str) -> tuple:
+    svc = svc.strip()
+    if not validate_service_name(svc):
+        return 'invalid', False
+
+    for scope, is_user in ((['--user'], True), ([], False)):
+        cmd = ['systemctl'] + scope + ['show', '-p', 'ActiveState,LoadState', svc]
+        out = run(cmd, timeout=2)
+        d   = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+
+        if d.get('LoadState') not in (None, '', 'not-found'):
+            state = d.get('ActiveState', 'unknown')
+            if state == 'inactive' and svc.endswith('.service'):
+                timer_name = svc.replace('.service', '.timer')
+                t = run(['systemctl'] + scope + ['show', '-p', 'ActiveState', timer_name], timeout=1)
+                if 'ActiveState=active' in t:
+                    return 'timer-active', is_user
+            return state, is_user
+
+    return 'not-found', False
+
+def get_battery() -> dict:
+    bats = glob.glob('/sys/class/power_supply/BAT*')
+    if not bats:
+        return {'percent': 100, 'status': 'Desktop', 'desktop': True, 'timeRemaining': ''}
+
+    try:
+        bat = bats[0]
+        pct = int(_read_file(f'{bat}/capacity', '0'))
+        stat = _read_file(f'{bat}/status', 'Unknown')
+        time_rem = ''
+        try:
+            current = int(_read_file(f'{bat}/current_now', '0'))
+            if current > 0:
+                if stat == 'Discharging':
+                    hrs = int(_read_file(f'{bat}/charge_now', '0')) / current
+                    time_rem = f'{int(hrs)}h {int((hrs % 1) * 60)}m'
+                else:
+                    cfull = int(_read_file(f'{bat}/charge_full', '0'))
+                    charge = int(_read_file(f'{bat}/charge_now', '0'))
+                    hrs = (cfull - charge) / current
+                    time_rem = f'{int(hrs)}h {int((hrs % 1) * 60)}m to full'
+        except Exception:
+            pass
+        return {'percent': pct, 'status': stat, 'desktop': False, 'timeRemaining': time_rem}
+    except Exception:
+        return {'percent': 0, 'status': 'Error', 'desktop': False, 'timeRemaining': ''}
+
+def get_containers() -> list:
+    for cmd in (
+        ['podman', 'ps', '-a', '--format', 'json'],
+        ['docker', 'ps', '-a', '--format', '{{json .}}']
+    ):
+        out = run(cmd, timeout=4, cache_key=' '.join(cmd), cache_ttl=10)
+        if not out:
+            continue
+        try:
+            items = (json.loads(out) if out.lstrip().startswith('[') else [json.loads(l) for l in out.splitlines() if l.strip()])
+            result = []
+            for c in items[:16]:
+                name = c.get('Names', c.get('Name', '?'))
+                if isinstance(name, list):
+                    name = name[0] if name else '?'
+
+                image = c.get('Image', c.get('Repository', '?')).split('/')[-1][:32]
+                state = (c.get('State', c.get('Status', '?')) or '?').lower().split()[0]
+
+                result.append({
+                    'name': name,
+                    'image': image,
+                    'state': state,
+                    'status': c.get('Status', state),
+                })
+            return result
+        except Exception:
+            continue
+    return []
 
 # ── Stats assembly ────────────────────────────────────────────────────────────
 def _collect_system() -> dict:
@@ -585,60 +645,48 @@ def _collect_system() -> dict:
     except Exception:
         s['osName'] = 'Linux'
 
-    s['kernel']    = run(['uname', '-r'],  cache_key='uname-r',  cache_ttl=3600)
-    s['hostname']  = run(['hostname'],     cache_key='hostname',  cache_ttl=3600)
-    s['defaultIp'] = run(
-        ['bash', '-c', "ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[\\d.]+'"],
-        timeout=1,
-    )
+    s['kernel']    = run(['uname', '-r'], cache_key='uname-r', cache_ttl=3600)
+    s['hostname']  = run(['hostname'], cache_key='hostname', cache_ttl=3600)
+    s['defaultIp'] = run(['bash', '-c', "ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[\\d.]+'"], timeout=1)
+
     try:
         up_s = float(_read_file('/proc/uptime', '0 0').split()[0])
         d, rem = divmod(int(up_s), 86400)
         h, rem = divmod(rem, 3600)
-        m = rem // 60
-        s['uptime']  = (f'{d}d ' if d else '') + f'{h}h {m}m'
+        s['uptime']  = (f'{d}d ' if d else '') + f'{h}h {rem // 60}m'
+
         s['loadavg'] = ' '.join(_read_file('/proc/loadavg', '0 0 0').split()[:3])
-        mm    = {l.split(':')[0]: int(l.split()[1]) for l in _read_file('/proc/meminfo').splitlines() if ':' in l}
-        tot   = mm.get('MemTotal', 0) // 1024
+
+        mm = {l.split(':')[0]: int(l.split()[1]) for l in _read_file('/proc/meminfo').splitlines() if ':' in l}
+        tot = mm.get('MemTotal', 0) // 1024
         avail = mm.get('MemAvailable', 0) // 1024
-        used  = tot - avail
-        s['memory']     = f'{used} MiB / {tot} MiB'
-        s['memPercent'] = round(100 * used / tot) if tot > 0 else 0
+
+        s['memory'] = f'{tot - avail} MiB / {tot} MiB'
+        s['memPercent'] = round(100 * (tot - avail) / tot) if tot > 0 else 0
     except Exception:
         s.setdefault('uptime', '--')
         s.setdefault('loadavg', '--')
         s.setdefault('memPercent', 0)
+
     return s
 
 def _collect_hardware() -> dict:
     s: dict = {}
-    s['hwCpu'] = run(
-        ['bash', '-c', "lscpu | grep 'Model name' | head -1 | cut -d: -f2 | xargs"],
-        cache_key='lscpu', cache_ttl=3600,
-    )
-    raw_gpu = run(
-        ['bash', '-c', "lspci | grep -i 'vga\\|3d' | cut -d: -f3"],
-        cache_key='lspci', cache_ttl=3600,
-    )
+    s['hwCpu'] = run(['bash', '-c', "lscpu | grep 'Model name' | head -1 | cut -d: -f2 | xargs"], cache_key='lscpu', cache_ttl=3600)
+    raw_gpu = run(['bash', '-c', "lspci | grep -i 'vga\\|3d' | cut -d: -f3"], cache_key='lspci', cache_ttl=3600)
     s['hwGpu'] = raw_gpu.replace('\n', '<br>') if raw_gpu else 'Unknown GPU'
 
     sensors = run(['sensors'], timeout=2, cache_key='sensors', cache_ttl=5)
     m = re.search(r'(?:Tctl|Package id \d+|Core 0|temp1).*?\+?(\d+\.?\d*)[°℃]', sensors)
     s['cpuTemp'] = f'{int(float(m.group(1)))}°C' if m else 'N/A'
 
-    gpu_t = run(
-        ['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
-        timeout=2, cache_key='nvidia-temp', cache_ttl=5,
-    )
+    gpu_t = run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'], timeout=2, cache_key='nvidia-temp', cache_ttl=5)
     if not gpu_t:
-        raw = run(
-            ['bash', '-c',
-             'cat /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -1'],
-            timeout=1,
-        )
+        raw = run(['bash', '-c', 'cat /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -1'], timeout=1)
         gpu_t = f'{int(raw) // 1000}°C' if raw else 'N/A'
     else:
         gpu_t = f'{gpu_t}°C'
+
     s['gpuTemp'] = gpu_t
     s['battery'] = get_battery()
     return s
@@ -655,20 +703,17 @@ def _collect_storage() -> dict:
         try:
             pct = int(parts[4].replace('%', ''))
             disks.append({
-                'mount':    mount,
-                'percent':  pct,
+                'mount': mount,
+                'percent': pct,
                 'barClass': 'danger' if pct >= 90 else 'warning' if pct >= 75 else 'success',
-                'size':     parts[1].replace('M', ' MiB'),
-                'used':     parts[2].replace('M', ' MiB'),
+                'size': parts[1].replace('M', ' MiB'),
+                'used': parts[2].replace('M', ' MiB')
             })
         except (ValueError, IndexError):
             pass
 
     pools = []
-    for line in run(
-        ['zpool', 'list', '-H', '-o', 'name,health'],
-        timeout=3, cache_key='zpool', cache_ttl=15,
-    ).splitlines():
+    for line in run(['zpool', 'list', '-H', '-o', 'name,health'], timeout=3, cache_key='zpool', cache_ttl=15).splitlines():
         if '\t' in line:
             n, h = line.split('\t', 1)
             pools.append({'name': n.strip(), 'health': h.strip()})
@@ -677,17 +722,18 @@ def _collect_storage() -> dict:
 
 def _collect_network() -> dict:
     rx_bps, tx_bps = get_net_io()
+
     def parse_ps(out: str) -> list:
         result = []
-        for line in out.splitlines()[1:6]:
-            parts = line.strip().rsplit(None, 1)
-            if len(parts) == 2 and parts[1] not in ('%CPU', '%MEM'):
+        for l in out.splitlines()[1:6]:
+            parts = l.strip().rsplit(None, 1)
+            if len(parts) == 2:
                 result.append({'name': parts[0][:16], 'val': parts[1] + '%'})
         return result
 
     return {
-        'netRx':  human_bps(rx_bps),
-        'netTx':  human_bps(tx_bps),
+        'netRx': human_bps(rx_bps),
+        'netTx': human_bps(tx_bps),
         'topCpu': parse_ps(run(['ps', 'ax', '--format', 'comm,%cpu', '--sort', '-%cpu'], timeout=2)),
         'topMem': parse_ps(run(['ps', 'ax', '--format', 'comm,%mem', '--sort', '-%mem'], timeout=2)),
     }
@@ -721,7 +767,7 @@ def _build_alerts(stats: dict) -> list:
 
     return alerts
 
-_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix='noba-worker')
+_pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix='noba-worker')
 
 def collect_stats(qs: dict) -> dict:
     stats: dict = {'timestamp': datetime.now().strftime('%H:%M:%S')}
@@ -734,15 +780,31 @@ def collect_stats(qs: dict) -> dict:
     stats.update(_collect_network())
 
     svc_list = [s.strip() for s in qs.get('services', [''])[0].split(',') if s.strip()]
-    ip_list  = [ip.strip() for ip in qs.get('radar',    [''])[0].split(',') if ip.strip()]
-    ph_url   = qs.get('pihole',    [''])[0]
+    ip_list  = [ip.strip() for ip in qs.get('radar', [''])[0].split(',') if ip.strip()]
+    ph_url   = qs.get('pihole', [''])[0]
     ph_tok   = qs.get('piholetok', [''])[0]
+
+    plex_url   = qs.get('plexUrl', [''])[0]
+    plex_tok   = qs.get('plexToken', [''])[0]
+    kuma_url   = qs.get('kumaUrl', [''])[0]
+    bmc_map    = [x.strip() for x in qs.get('bmcMap', [''])[0].split(',') if x.strip()]
+
+    bmc_list = []
+    for entry in bmc_map:
+        parts = entry.split('|')
+        if len(parts) == 2:
+            bmc_list.append((parts[0].strip(), parts[1].strip()))
 
     svc_futs  = {_pool.submit(get_service_status, s): s for s in svc_list}
     ping_futs = {_pool.submit(ping_host, ip): ip for ip in ip_list}
+    bmc_futs  = {_pool.submit(ping_host, bmc_ip): (os_ip, bmc_ip) for os_ip, bmc_ip in bmc_list}
+
     ph_fut    = _pool.submit(get_pihole, ph_url, ph_tok) if ph_url else None
+    plex_fut  = _pool.submit(get_plex, plex_url, plex_tok) if plex_url else None
+    kuma_fut  = _pool.submit(get_kuma, kuma_url) if kuma_url else None
     ct_fut    = _pool.submit(get_containers)
 
+    # ── Services ──
     services = []
     for fut, svc in svc_futs.items():
         try:
@@ -752,6 +814,7 @@ def collect_stats(qs: dict) -> dict:
         services.append({'name': svc, 'status': status, 'is_user': is_user})
     stats['services'] = services
 
+    # ── Network Radar (Native Ping Only) ──
     radar = []
     for fut, ip in ping_futs.items():
         try:
@@ -761,17 +824,40 @@ def collect_stats(qs: dict) -> dict:
             radar.append({'ip': ip, 'status': 'Down', 'ms': 0})
     stats['radar'] = radar
 
+    # ── Uptime Kuma ──
+    try:
+        stats['kuma'] = kuma_fut.result(timeout=4) if kuma_fut else []
+    except Exception:
+        stats['kuma'] = []
+
+    # ── Alerts & BMC Watchdog ──
+    stats['alerts'] = _build_alerts(stats)
+
+    for fut, (os_ip, bmc_ip) in bmc_futs.items():
+        try:
+            _, bmc_up, _ = fut.result(timeout=4)
+            os_status = next((r['status'] for r in radar if r['ip'] == os_ip), None)
+            if os_status == 'Down' and bmc_up:
+                 stats['alerts'].append({'level': 'danger', 'msg': f'BMC Sentinel: {os_ip} OS offline, but BMC ({bmc_ip}) reachable! Likely BIOS/RAID boot priority reset.'})
+        except Exception:
+            pass
+
+    # ── Integrations ──
     try:
         stats['pihole'] = ph_fut.result(timeout=4) if ph_fut else None
     except Exception:
         stats['pihole'] = None
 
     try:
+        stats['plex'] = plex_fut.result(timeout=4) if plex_fut else None
+    except Exception:
+        stats['plex'] = None
+
+    try:
         stats['containers'] = ct_fut.result(timeout=5)
     except Exception:
         stats['containers'] = []
 
-    stats['alerts'] = _build_alerts(stats)
     return stats
 
 # ── Background collector ──────────────────────────────────────────────────────
@@ -787,7 +873,6 @@ class BackgroundCollector:
             self._qs = dict(qs)
 
     def get(self) -> dict:
-        # OPTIMIZED: Lockless read for faster API response
         return self._latest
 
     def start(self) -> None:
@@ -798,8 +883,7 @@ class BackgroundCollector:
             try:
                 with self._lock:
                     qs = dict(self._qs)
-                data = collect_stats(qs)
-                self._latest = data # atomic swap
+                self._latest = collect_stats(qs)
             except Exception as e:
                 logger.warning('Collector error: %s', e)
             _shutdown_flag.wait(self._interval)
@@ -820,7 +904,6 @@ _job_lock = threading.Lock()
 
 class Handler(http.server.SimpleHTTPRequestHandler):
 
-    # Hide the exact Python and OS version from the Server header
     server_version = f"noba-web/{VERSION}"
     sys_version = ""
 
@@ -834,7 +917,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.client_address[0] if self.client_address else '0.0.0.0'
 
     def _json(self, data: object, status: int = 200) -> None:
-        # OPTIMIZED: Strip whitespace for smaller payload and faster parsing
         body = json.dumps(data, separators=(',', ':'), ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
@@ -849,9 +931,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
         except ValueError:
             length = 0
+
         if length > MAX_BODY_BYTES:
             self._json({'error': 'Request body too large'}, 413)
             return None
+
         raw = self.rfile.read(length)
         try:
             return json.loads(raw)
@@ -876,7 +960,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
-        # Authenticate all remaining endpoints
         username, role = authenticate_request(self.headers, qs)
         if not username:
             self.send_error(401, 'Unauthorized')
@@ -904,21 +987,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-cache')
             self.send_header('Connection',    'keep-alive')
             self.end_headers()
+
             last_heartbeat = time.time()
             try:
                 first = _bg.get() or collect_stats(qs)
-                # Use standard dumps here to match SSE formatting requirements
                 self.wfile.write(f'data: {json.dumps(first)}\n\n'.encode())
                 self.wfile.flush()
+
                 while not _shutdown_flag.is_set():
                     _shutdown_flag.wait(5)
                     if _shutdown_flag.is_set():
                         break
+
                     now  = time.time()
                     data = _bg.get()
                     if data:
                         self.wfile.write(f'data: {json.dumps(data)}\n\n'.encode())
                         self.wfile.flush()
+
                     if now - last_heartbeat >= 15:
                         self.wfile.write(b': ping\n\n')
                         self.wfile.flush()
@@ -942,6 +1028,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     text = 'No backup log found.'
             else:
                 text = 'Unknown log type.'
+
             body = (text or 'Empty.').encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
@@ -962,7 +1049,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with _job_lock:
                 self._json(dict(_active_job) if _active_job else {'status': 'idle'})
 
-        # Admin endpoint – list users (GET /api/admin/users)
         elif path == '/api/admin/users':
             if role != 'admin':
                 self._json({'error': 'Forbidden'}, 403)
@@ -985,38 +1071,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = self._read_body()
             if body is None:
                 return
+
             username = body.get('username', '')
             password = body.get('password', '')
 
-            # Try old single‑user auth.conf first (backward compatibility)
             user_old = load_old_user()
-            if user_old and secrets.compare_digest(username, user_old[0]) and \
-                    verify_password(user_old[1], password):
+            if user_old and secrets.compare_digest(username, user_old[0]) and verify_password(user_old[1], password):
                 _rate_limiter.reset(ip)
-                token = generate_token(username, 'admin')  # old users are admin
+                token = generate_token(username, 'admin')
                 self._json({'token': token})
                 return
 
-            # Try multi‑user database
             with users_db_lock:
                 user_data = users_db.get(username)
+
             if user_data and verify_password(user_data[0], password):
                 _rate_limiter.reset(ip)
                 token = generate_token(username, user_data[1])
                 self._json({'token': token})
                 return
 
-            # Login failed
             locked = _rate_limiter.record_failure(ip)
-            # Explicit logging for auditing/fail2ban integration
             logger.warning("Failed login attempt for user '%s' from IP %s", username, ip)
-            msg    = ('Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials')
+            msg = 'Too many failed attempts. Try again shortly.' if locked else 'Invalid credentials'
             self._json({'error': msg}, 401)
             return
 
         if path == '/api/logout':
-            qs    = parse_qs(urlparse(self.path).query)
-            auth  = self.headers.get('Authorization', '')
+            qs = parse_qs(urlparse(self.path).query)
+            auth = self.headers.get('Authorization', '')
             token = auth[7:] if auth.startswith('Bearer ') else qs.get('token', [''])[0]
             if token:
                 revoke_token(token)
@@ -1028,7 +1111,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(401, 'Unauthorized')
             return
 
-        # ── Settings (admin only) ─────────────────────────────────────────────
         if path == '/api/settings':
             if role != 'admin':
                 self._json({'error': 'Forbidden'}, 403)
@@ -1037,16 +1119,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if body is None:
                 return
             ok = write_yaml_settings(body)
-            self._json(
-                {'status': 'ok'} if ok else {'error': 'Failed to write settings'},
-                200 if ok else 500,
-            )
+            self._json({'status': 'ok'} if ok else {'error': 'Failed to write settings'}, 200 if ok else 500)
 
         elif path == '/api/run':
             body = self._read_body()
             if body is None:
                 return
             script = body.get('script', '')
+            args_in = body.get('args', '')
+
+            safe_args = []
+            if isinstance(args_in, str) and args_in.strip():
+                try:
+                    safe_args = shlex.split(args_in)
+                except ValueError:
+                    safe_args = args_in.split()
+            elif isinstance(args_in, list):
+                safe_args = [str(a) for a in args_in if str(a).strip()]
 
             global _active_job
             with _job_lock:
@@ -1059,25 +1148,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     'started': datetime.now().isoformat(),
                 }
 
-            # NOTE: Synchronous execution is REQUIRED here.
-            # ThreadingHTTPServer already allocates a background thread per request.
-            # If we return instantly, the frontend modal log-polling will prematurely close.
             status = 'error'
             p = None
             try:
                 ts = datetime.now().strftime('%H:%M:%S')
                 with open(ACTION_LOG, 'w') as f:
-                    f.write(f'>> [{ts}] Initiating: {script}\n\n')
+                    f.write(f'>> [{ts}] Initiating: {script} {" ".join(safe_args)}\n\n')
 
                 if script == 'speedtest':
                     with open(ACTION_LOG, 'a') as f:
-                        p = subprocess.Popen(['speedtest-cli', '--simple'], stdout=f, stderr=subprocess.STDOUT)
+                        p = subprocess.Popen(['speedtest-cli', '--simple'] + safe_args, stdout=f, stderr=subprocess.STDOUT)
                 elif script in SCRIPT_MAP:
                     sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
                     if os.path.isfile(sfile):
                         with open(ACTION_LOG, 'a') as f:
                             p = subprocess.Popen(
-                                [sfile, '--verbose'], stdout=f, stderr=subprocess.STDOUT, cwd=SCRIPT_DIR,
+                                [sfile, '--verbose'] + safe_args, stdout=f, stderr=subprocess.STDOUT, cwd=SCRIPT_DIR,
                             )
                     else:
                         with open(ACTION_LOG, 'a') as f:
@@ -1093,7 +1179,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         p.wait(timeout=300)
                         status = 'done' if p.returncode == 0 else 'failed'
                     except subprocess.TimeoutExpired:
-                        p.kill()  # Force process reap to prevent zombies
+                        p.kill()
                         p.wait()
                         with open(ACTION_LOG, 'a') as f:
                             f.write('\n[ERROR] Script timed out after 300s. Process killed.\n')
@@ -1118,7 +1204,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             svc     = body.get('service', '').strip()
             action  = body.get('action', '').strip()
 
-            # Explicit boolean evaluation to prevent mapping "false" strings to True
             is_user_val = body.get('is_user', False)
             is_user = (is_user_val is True) or (str(is_user_val).lower() in ('true', '1', 'yes', 't', 'y'))
 
@@ -1131,15 +1216,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not validate_service_name(svc):
                 self._json({'success': False, 'error': 'Invalid service name'})
                 return
-            cmd = (['systemctl', '--user', action, svc]
-                   if is_user else ['sudo', '-n', 'systemctl', action, svc])
+
+            cmd = (['systemctl', '--user', action, svc] if is_user else ['sudo', '-n', 'systemctl', action, svc])
             try:
                 r = subprocess.run(cmd, timeout=10, capture_output=True)
                 self._json({'success': r.returncode == 0, 'stderr': r.stderr.decode().strip()})
             except Exception as e:
                 self._json({'success': False, 'error': str(e)})
 
-        # Admin-only user management endpoints (POST /api/admin/users)
         elif path == '/api/admin/users':
             if role != 'admin':
                 self._json({'error': 'Forbidden'}, 403)
@@ -1156,6 +1240,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 new_username = body.get('username', '').strip()
                 password     = body.get('password', '')
                 new_role     = body.get('role', VALID_ROLES[0])
+
                 if not new_username or not password:
                     self._json({'error': 'Missing username or password'}, 400)
                     return
@@ -1165,6 +1250,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if new_role not in VALID_ROLES:
                     self._json({'error': f'Invalid role. Must be one of: {", ".join(VALID_ROLES)}'}, 400)
                     return
+
                 with users_db_lock:
                     if new_username in users_db:
                         self._json({'error': 'User already exists'}, 409)
@@ -1202,7 +1288,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     salt        = secrets.token_hex(16)
                     dk          = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
                     hashval     = f'pbkdf2:{salt}:{dk.hex()}'
-                    # use a distinct variable so we don't shadow the authenticated user's role
                     user_role   = users_db[target][1]
                     users_db[target] = (hashval, user_role)
                 save_users()
@@ -1218,7 +1303,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         else:
             self.send_error(404)
-
 
 # ── Server ────────────────────────────────────────────────────────────────────
 class ThreadingHTTPServer(socketserver.ThreadingTCPServer):

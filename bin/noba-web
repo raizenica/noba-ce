@@ -1,5 +1,5 @@
 #!/bin/bash
-# Noba Command Center Launcher (full version with multi‑user support)
+# Noba Command Center Launcher (v1.6.1)
 
 set -euo pipefail
 
@@ -16,7 +16,7 @@ source "$LIB_DIR/noba-web-functions.sh"
 # Defaults
 PORT=8080
 HOST="0.0.0.0"
-HTML_DIR="/tmp/noba-web"               # runtime directory, always use /tmp
+HTML_DIR="$WEB_DIR" # Now permanently points to the deployed ~/.../web directory
 SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
 SERVER_URL_FILE="${SERVER_URL_FILE:-/tmp/noba-web-server.url}"
 LOG_FILE="${LOG_FILE:-/tmp/noba-web.log}"
@@ -35,45 +35,102 @@ REMOVE_USER=false
 CHANGE_PASS=false
 USERNAME=""
 PASSWORD=""
-ROLE="admin"
+ROLE="viewer"
 
 # Source optional config
 CONFIG_FILE="${HOME}/.config/noba-web.conf"
 # shellcheck source=/dev/null
-[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
 
 # Parse arguments
-PARSED_ARGS=$(getopt -o kv -l host:,kill,verbose,help,version,set-password,restart,status,generate-systemd,add-user,list-users,remove-user:,change-password -- "$@" 2>/dev/null) || { log_error "Invalid argument. Run with --help for usage."; exit 1; }
+PARSED_ARGS=$(getopt -o kv -l host:,kill,verbose,help,version,set-password,restart,status,generate-systemd,add-user,list-users,remove-user:,change-password -- "$@" 2>/dev/null) || {
+    log_error "Invalid argument. Run with --help for usage."
+    exit 1
+}
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        --host)              HOST="$2"; shift 2 ;;
-        -k|--kill)           KILL_ONLY=true;    shift   ;;
-        -v|--verbose)        VERBOSE=true;      shift   ;;
-        --set-password)      SET_PASSWORD=true; shift   ;;
-        --restart)           KILL_ONLY=true; RESTART=true; shift ;;
-        --status)            SHOW_STATUS=true;  shift   ;;
-        --generate-systemd)  GEN_SYSTEMD=true;  shift   ;;
-        --add-user)          ADD_USER=true;     shift   ;;
-        --list-users)        LIST_USERS=true;   shift   ;;
-        --remove-user)       REMOVE_USER=true; USERNAME="$2"; shift 2 ;;
-        --change-password)   CHANGE_PASS=true;  shift   ;;
-        --help)              show_help; exit 0 ;;
-        --version)           echo "noba-web version 1.2.0"; exit 0 ;;
-        --)                  shift; break ;;
-        *)                   log_error "Unknown argument: $1"; exit 1 ;;
+        --host)
+            HOST="$2"
+            shift 2
+            ;;
+        -k|--kill)
+            KILL_ONLY=true
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=true
+            shift
+            ;;
+        --set-password)
+            SET_PASSWORD=true
+            shift
+            ;;
+        --restart)
+            KILL_ONLY=true
+            RESTART=true
+            shift
+            ;;
+        --status)
+            SHOW_STATUS=true
+            shift
+            ;;
+        --generate-systemd)
+            GEN_SYSTEMD=true
+            shift
+            ;;
+        --add-user)
+            ADD_USER=true
+            shift
+            ;;
+        --list-users)
+            LIST_USERS=true
+            shift
+            ;;
+        --remove-user)
+            REMOVE_USER=true
+            USERNAME="$2"
+            shift 2
+            ;;
+        --change-password)
+            CHANGE_PASS=true
+            shift
+            ;;
+        --help)
+            show_help
+            exit 0
+            ;;
+        --version)
+            echo "noba-web version 1.6.1"
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            log_error "Unknown argument: $1"
+            exit 1
+            ;;
     esac
 done
 
 # Handle user management commands (interactive)
 if [[ "$ADD_USER" == true ]]; then
     read -rp "Username: " username
-    read -rs -p "Password: " password; echo
-    read -rs -p "Confirm password: " password2; echo
-    [[ "$password" != "$password2" ]] && { log_error "Passwords do not match."; exit 1; }
-    read -rp "Role (admin/user) [admin]: " role
-    role=${role:-admin}
+    read -rs -p "Password: " password
+    echo
+    read -rs -p "Confirm password: " password2
+    echo
+    if [[ "$password" != "$password2" ]]; then
+        log_error "Passwords do not match."
+        exit 1
+    fi
+    read -rp "Role (admin/viewer) [viewer]: " role
+    role=${role:-viewer}
     add_user "$username" "$password" "$role"
     exit 0
 fi
@@ -90,9 +147,14 @@ fi
 
 if [[ "$CHANGE_PASS" == true ]]; then
     read -rp "Username: " username
-    read -rs -p "New password: " password; echo
-    read -rs -p "Confirm new password: " password2; echo
-    [[ "$password" != "$password2" ]] && { log_error "Passwords do not match."; exit 1; }
+    read -rs -p "New password: " password
+    echo
+    read -rs -p "Confirm new password: " password2
+    echo
+    if [[ "$password" != "$password2" ]]; then
+        log_error "Passwords do not match."
+        exit 1
+    fi
     change_password "$username" "$password"
     exit 0
 fi
@@ -115,7 +177,9 @@ fi
 
 if [[ "$KILL_ONLY" == true ]]; then
     kill_server "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$HTML_DIR"
-    [[ "$RESTART" != true ]] && exit 0
+    if [[ "$RESTART" != true ]]; then
+        exit 0
+    fi
 fi
 
 # Check dependencies
@@ -140,19 +204,23 @@ if [[ ! -d "$WEB_DIR" ]]; then
     exit 1
 fi
 
-mkdir -p "$HTML_DIR"
-cp "$WEB_DIR/server.py" "$HTML_DIR/"
-cp "$WEB_DIR/index.html" "$HTML_DIR/"
-
 # Ensure YAML config exists
 create_default_yaml "$NOBA_YAML"
 
 # Kill any existing server (if restarting)
 if [[ "$RESTART" == true ]]; then
     kill_server "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$HTML_DIR"
+
+    log_info "Waiting for port $PORT to be released..."
+    for i in {1..10}; do
+        if ! ss -ltn 2>/dev/null | grep -q ":$PORT " && ! lsof -i ":$PORT" -t &>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
 fi
 
-# Launch server
+# Launch server directly from the persistent path
 export PORT HOST PID_FILE="$SERVER_PID_FILE" NOBA_SCRIPT_DIR="$HOME/.local/bin" NOBA_CONFIG="$NOBA_YAML"
 cd "$HTML_DIR"
 : > "$LOG_FILE"
@@ -165,7 +233,8 @@ DISPLAY_IP=$(local_ip)
 echo "http://${DISPLAY_IP}:${PORT}" > "$SERVER_URL_FILE"
 
 # Wait for server to be healthy
-MAX_WAIT=10; WAITED=0
+MAX_WAIT=10
+WAITED=0
 while true; do
     if command -v curl &>/dev/null; then
         CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || true)
@@ -173,10 +242,17 @@ while true; do
         CODE=$(wget -qO- "http://127.0.0.1:${PORT}/api/health" 2>/dev/null \
                | python3 -c "import sys,json; print(200 if json.load(sys.stdin).get('status')=='ok' else 0)" 2>/dev/null || true)
     else
-        log_error "Neither curl nor wget found."; exit 1
+        log_error "Neither curl nor wget found."
+        exit 1
     fi
-    [[ "$CODE" == "200" ]] && break
-    sleep 1; WAITED=$((WAITED+1))
+
+    if [[ "$CODE" == "200" ]]; then
+        break
+    fi
+
+    sleep 1
+    WAITED=$((WAITED+1))
+
     if [[ $WAITED -ge $MAX_WAIT ]]; then
         log_error "Server did not respond within ${MAX_WAIT}s. Last 20 lines of log:"
         tail -20 "$LOG_FILE" | sed 's/^/  /' >&2
@@ -195,4 +271,6 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 wait "$SERVER_PID"
-[[ -n "${TAIL_PID:-}" ]] && kill "$TAIL_PID" 2>/dev/null || true
+if [[ -n "${TAIL_PID:-}" ]]; then
+    kill "$TAIL_PID" 2>/dev/null || true
+fi
