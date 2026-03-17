@@ -29,7 +29,7 @@ trap '[[ $? -ne 0 ]] && echo "ERROR: exited with code $? at line $LINENO" >&2' E
 
 # ── Test harness compliance ─────────────────────────────────────────────────
 if [[ "${1:-}" == "--help"           ]]; then echo "Usage: noba-web.sh [OPTIONS]"; exit 0; fi
-if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 8.4.0";  exit 0; fi
+if [[ "${1:-}" == "--version"        ]]; then echo "noba-web.sh version 1.0.0";  exit 0; fi
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -153,7 +153,7 @@ EOF
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-show_version() { echo "noba-web.sh version 8.4.0"; exit 0; }
+show_version() { echo "noba-web.sh version 1.0.0"; exit 0; }
 
 show_help() {
     cat <<EOF
@@ -1324,7 +1324,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
-VERSION    = '8.4.0'
+VERSION    = '1.0.0'
 PORT       = int(os.environ.get('PORT', 8080))
 HOST       = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
