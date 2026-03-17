@@ -1,6 +1,6 @@
 #!/bin/bash
 # noba-tui.sh – Terminal UI (dialog) for launching Nobara scripts
-# Version: 2.2.3
+# Version: 2.4.0
 
 set -euo pipefail
 
@@ -13,12 +13,12 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "noba-tui.sh version 2.2.3"
+    echo "noba-tui.sh version 2.4.0"
     exit 0
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./noba-lib.sh
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -26,9 +26,6 @@ source "$SCRIPT_DIR/lib/noba-lib.sh"
 # -------------------------------------------------------------------
 DIALOG="${DIALOG:-dialog}"
 
-# -------------------------------------------------------------------
-# Load user configuration
-# -------------------------------------------------------------------
 if command -v get_config &>/dev/null; then
     DIALOG="$(get_config ".tui.dialog_cmd" "$DIALOG")"
 fi
@@ -37,7 +34,7 @@ fi
 # Helper functions
 # -------------------------------------------------------------------
 show_version() {
-    echo "noba-tui.sh version 2.2.3"
+    echo "noba-tui.sh version 2.4.0"
     exit 0
 }
 
@@ -54,11 +51,6 @@ EOF
     exit 0
 }
 
-# FIX #4 – run_script: guard against missing / non-executable scripts
-# Previous issue: if a script was absent or not executable, the
-# pipeline silently produced no output and the programbox closed
-# immediately with no user-visible error.
-# Fix: test -x before doing anything else and show an error dialog.
 run_script() {
     local script="$1"
     local title="$2"
@@ -70,7 +62,6 @@ run_script() {
         return 1
     fi
 
-    # Ask for common flags
     if $DIALOG --title "$title Options" --yesno "Run with --dry-run?" 7 40; then
         extra_args+=("--dry-run")
     fi
@@ -78,13 +69,12 @@ run_script() {
         extra_args+=("--verbose")
     fi
 
-    # Run script and pipe live output to programbox, stripping ANSI color codes
     "$script" "${extra_args[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | \
         $DIALOG --title "Running: $title" --programbox 22 80
 }
 
 # -------------------------------------------------------------------
-# Pre-flight checks & Setup
+# Pre-flight checks
 # -------------------------------------------------------------------
 if ! command -v "$DIALOG" &>/dev/null; then
     die "Dialog ($DIALOG) not found. Please install it (e.g., 'sudo dnf install dialog')."
@@ -94,7 +84,6 @@ fi
 # Main menu
 # -------------------------------------------------------------------
 while true; do
-    # If user presses ESC or Cancel, exit loop directly via the if statement
     if ! choice=$($DIALOG --clear --title "Nobara Automation Suite" \
         --cancel-label "Exit" \
         --menu "Choose a script to execute:" 22 65 15 \
@@ -112,7 +101,7 @@ while true; do
         "ConfigCheck" "Run config-check.sh" \
         "CronSetup"   "Run noba-cron-setup.sh" \
         "MOTD"        "Show motd-generator.sh" \
-        "Web"         "Start noba-web.sh dashboard" \
+        "Web"         "Start noba-web dashboard" \
         "Quit"        "Exit TUI" 3>&1 1>&2 2>&3 3>&-); then
         break
     fi
@@ -142,16 +131,26 @@ while true; do
             fi
             ;;
         Web)
-            if [[ ! -x "$SCRIPT_DIR/noba-web.sh" ]]; then
-                $DIALOG --title "Error" --msgbox \
-                    "Script not found or not executable:\n\n$SCRIPT_DIR/noba-web.sh" 8 65
-            else
-                "$SCRIPT_DIR/noba-web.sh" &
+            # Find the new standalone noba-web launcher binary
+            WEB_BIN=""
+            if command -v noba-web &>/dev/null; then
+                WEB_BIN="$(command -v noba-web)"
+            elif [[ -x "$HOME/.local/bin/noba-web" ]]; then
+                WEB_BIN="$HOME/.local/bin/noba-web"
+            fi
+
+            if [[ -n "$WEB_BIN" ]]; then
+                "$WEB_BIN" &
                 $DIALOG --title "Web Dashboard" \
                     --msgbox "Dashboard started in the background.\nCheck http://localhost:8080" 7 45
+            else
+                $DIALOG --title "Error" --msgbox \
+                    "noba-web launcher not found in PATH or ~/.local/bin/.\nPlease run install.sh to deploy the Web UI." 8 65
             fi
             ;;
-        Quit|"") break ;;
+        Quit|"")
+            break
+            ;;
     esac
 done
 

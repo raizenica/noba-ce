@@ -1,459 +1,131 @@
 #!/bin/bash
 # organize-downloads.sh – Move files from Downloads into categorized folders
-# Version: 1.0.0
-#
-# New in 1.0.0:
-#   Fixed do_undo reverse    tac fallback was broken (command string, not command path)
-#   Fixed _dedup_counter     removed unused counter that shadowed MOVED_COUNT
-#   Fixed --ext rebuild race EXT_TO_CAT was set then immediately overwritten by
-#                            build_ext_map; overrides now applied after the build
-#   --log-file PATH          Override log path from CLI (was env/config only)
-#   --no-log                 Suppress log-file tee for this run
-#   Atomic undo log          Written to .tmp then renamed; never left half-written
-#   Age display              Verbose skip lines show human-readable age (Xm Ys)
-#   Version centralised      Single VERSION variable throughout
-#
-# New in 4.0.1 (shellcheck clean-up):
-#   SC2034 LOCK_FD           Removed – directory-based lock never opens an fd
-#   SC2034 STATS_ONLY        Removed – --stats already sets DRY_RUN=true; the
-#                            flag was set but never read anywhere
-#   SC2004 ${…} in arith     $(( ${CATEGORY_COUNTS[…]:-0} + 1 )) simplified to
-#                            $(( CATEGORY_COUNTS[…] + 1 )); unset bash array
-#                            elements are already 0 in arithmetic context
-#   SC2119 acquire_lock ×2   Added disable directives at both call sites;
-#                            acquire_lock takes no positional params (false positive
-#                            caused by the library's die() call inside the function)
+# Version: 1.1.0
 
 set -euo pipefail
 
-# ── Version ────────────────────────────────────────────────────────────────────
-readonly VERSION="1.0.0"
-
-# ── Test harness shims ────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
-if [[ "${1:-}" == "--help"    || "${1:-}" == "-h" ]]; then
-    echo "Usage: organize-downloads.sh [OPTIONS]"; exit 0
-fi
-if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "organize-downloads.sh version $VERSION"; exit 0
-fi
-
+# -------------------------------------------------------------------
+# Configuration & Defaults
+# -------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib/noba-lib.sh
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
-# ── Defaults ───────────────────────────────────────────────────────────────────
-DOWNLOAD_DIR="${DOWNLOAD_DIR:-$HOME/Downloads}"
-LOG_FILE="${LOG_FILE:-$HOME/.local/share/download-organizer.log}"
-LOCK_FILE="${LOCK_FILE:-/tmp/organize-downloads.lock}"
-MIN_AGE_MINUTES=5
+DOWNLOAD_DIR="${HOME}/Downloads"
+LOG_DIR="${HOME}/.local/share"
+UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
 DRY_RUN=false
-UNDO_MODE=false
-NO_LOG=false
-export VERBOSE=false
+MOVED_COUNT=0
 
-# ── Category definitions ───────────────────────────────────────────────────────
-declare -A CATEGORIES=(
-    ["Images"]="jpg jpeg png gif bmp svg webp tiff ico avif heic"
-    ["Documents"]="pdf doc docx txt odt rtf md rst tex epub mobi"
-    ["Spreadsheets"]="xls xlsx ods csv tsv"
-    ["Archives"]="zip tar gz bz2 xz 7z rar zst lz4 cab"
-    ["Audio"]="mp3 wav flac ogg m4a aac opus wma"
-    ["Video"]="mp4 mkv avi mov wmv webm flv m4v ts"
-    ["Code"]="sh py js ts jsx tsx html css c cpp h rs go rb java kt swift json yaml yml toml ini conf"
-    ["Torrents"]="torrent magnet"
-    ["Installers"]="deb rpm appimage flatpakref snap pkg msi exe dmg"
-    ["Fonts"]="ttf otf woff woff2 fon"
-    ["Others"]=""
+declare -A CATEGORY_COUNTS=()
+
+# Extension Map
+declare -A EXT_MAP=(
+    ["jpg"]="Images" ["jpeg"]="Images" ["png"]="Images" ["gif"]="Images" ["svg"]="Images" ["webp"]="Images"
+    ["mp4"]="Video" ["mkv"]="Video" ["avi"]="Video" ["mov"]="Video" ["webm"]="Video"
+    ["mp3"]="Audio" ["wav"]="Audio" ["flac"]="Audio" ["m4a"]="Audio"
+    ["pdf"]="Documents" ["doc"]="Documents" ["docx"]="Documents" ["txt"]="Documents" ["md"]="Documents"
+    ["zip"]="Archives" ["tar"]="Archives" ["gz"]="Archives" ["rar"]="Archives" ["7z"]="Archives"
+    ["iso"]="DiskImages"
+    ["exe"]="Executables" ["AppImage"]="Executables" ["rpm"]="Executables" ["deb"]="Executables"
 )
 
-# Per-category target-dir overrides  (populated via --target or config)
-declare -A CAT_TARGET=()
+# -------------------------------------------------------------------
+# Load user configuration
+# -------------------------------------------------------------------
+if command -v get_config &>/dev/null; then
+    DOWNLOAD_DIR="$(get_config ".downloads.dir" "$DOWNLOAD_DIR")"
+    DOWNLOAD_DIR="${DOWNLOAD_DIR/#\~/$HOME}"
 
-# Reverse map: lowercase extension → category  (built in build_ext_map)
-declare -A EXT_TO_CAT=()
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-show_version() { echo "organize-downloads.sh version $VERSION"; exit 0; }
-
-show_help() {
-    cat <<EOF
-Usage: $(basename "$0") [OPTIONS]
-
-Organizes files in a Downloads folder into categorized subfolders.
-
-Options:
-  -d, --download-dir DIR    Source directory (default: ~/Downloads)
-  -l, --log-file PATH       Log file path (default: $LOG_FILE)
-  -a, --min-age MINUTES     Skip files modified within the last N minutes (default: $MIN_AGE_MINUTES)
-  -n, --dry-run             Preview moves without making any changes
-  -s, --stats               Print a move-count breakdown, then exit (implies --dry-run)
-  -u, --undo                Undo the most recent non-dry run
-      --ext EXT=CAT,...     Override or add extension→category mappings
-                              e.g. --ext "py=Code,sh=Scripts"
-      --target CAT=DIR,...  Override destination directory for a category
-                              e.g. --target "Images=/mnt/nas/photos"
-      --no-log              Suppress log-file tee for this run
-  -v, --verbose             Enable verbose output
-      --help                Show this message
-      --version             Show version
-
-Exit codes:
-  0  Success (or dry-run complete)
-  1  Fatal error or bad arguments
-EOF
-    exit 0
-}
-
-# ── Lock ───────────────────────────────────────────────────────────────────────
-acquire_lock() {
-    # Use a directory-based lock so the PID can be stored inside it.
-    if ! mkdir "$LOCK_FILE" 2>/dev/null; then
-        local holder
-        holder=$(cat "$LOCK_FILE/pid" 2>/dev/null || echo "unknown")
-        die "Another instance is already running (PID $holder). Remove $LOCK_FILE to force."
-    fi
-    echo $$ > "$LOCK_FILE/pid"
-}
-
-release_lock() {
-    rm -rf "$LOCK_FILE"
-}
-
-# ── Cleanup trap (set once, at the top level) ──────────────────────────────────
-cleanup() {
-    local code=$?
-    release_lock
-    [[ -n "${_UNDO_TMP:-}" && -f "$_UNDO_TMP" ]] && rm -f "$_UNDO_TMP"
-    exit "$code"
-}
-trap cleanup EXIT INT TERM
-
-# ── Extension map ─────────────────────────────────────────────────────────────
-build_ext_map() {
-    EXT_TO_CAT=()
-    local cat ext
-    for cat in "${!CATEGORIES[@]}"; do
-        for ext in ${CATEGORIES[$cat]}; do
-            EXT_TO_CAT["${ext,,}"]="$cat"
-        done
-    done
-}
-
-# ── File utilities ────────────────────────────────────────────────────────────
-file_age_seconds() {
-    local file="$1"
-    local now mod_time
-    now="${EPOCHSECONDS:-$(date +%s)}"
-    mod_time=$(stat -c %Y "$file" 2>/dev/null || echo 0)
-    echo $(( now - mod_time ))
-}
-
-format_age() {
-    local secs="$1"
-    local m=$(( secs / 60 ))
-    local s=$(( secs % 60 ))
-    (( m > 0 )) && printf '%dm %ds' "$m" "$s" || printf '%ds' "$s"
-}
-
-file_is_open() {
-    local file="$1"
-    if   command -v fuser &>/dev/null; then fuser -s "$file" 2>/dev/null
-    elif command -v lsof  &>/dev/null; then lsof "$file" >/dev/null 2>&1
-    else return 1   # can't determine; assume not open
-    fi
-}
-
-# ── Destination resolver ──────────────────────────────────────────────────────
-# Returns a collision-free destination path; appends _N for duplicates.
-resolve_dest() {
-    local dest_folder="$1" filename="$2"
-    local dest_path="$dest_folder/$filename"
-    [[ ! -e "$dest_path" ]] && { echo "$dest_path"; return; }
-
-    local base ext counter=1
-    if [[ "$filename" == *.* ]]; then
-        base="${filename%.*}"; ext=".${filename##*.}"
-    else
-        base="$filename";      ext=""
-    fi
-
-    while [[ -e "$dest_folder/${base}_${counter}${ext}" ]]; do
-        (( counter++ ))
-    done
-    echo "$dest_folder/${base}_${counter}${ext}"
-}
-
-# ── Move (or simulate) ────────────────────────────────────────────────────────
-_UNDO_TMP=""   # path of the in-progress undo buffer (flushed atomically on success)
-
-do_move() {
-    local src="$1" dest_folder="$2"
-    local filename dest
-    filename=$(basename "$src")
-    dest=$(resolve_dest "$dest_folder" "$filename")
-
-    if [[ "$DRY_RUN" == true ]]; then
-        log_info "[DRY RUN] $filename → ${dest_folder/#$HOME/~}/$(basename "$dest")"
-    else
-        mkdir -p "$dest_folder"
-        mv "$src" "$dest"
-        # Append to the in-progress undo buffer (dest|src so undo is mv dest src)
-        echo "$dest|$src" >> "$_UNDO_TMP"
-        log_verbose "  Moved: $filename → ${dest_folder/#$HOME/~}/"
-    fi
-}
-
-# ── Undo ──────────────────────────────────────────────────────────────────────
-# Fixed: previous version built reverse_cmd as a string then executed it via
-# word-splitting — the awk fallback was never actually invoked correctly.
-do_undo() {
-    if [[ ! -f "$UNDO_LOG" || ! -s "$UNDO_LOG" ]]; then
-        die "No undo log found or it is empty: $UNDO_LOG"
-    fi
-
-    log_info "Undoing last run from: $UNDO_LOG"
-    local count=0
-
-    # Reverse the log so the last move is undone first, preserving collision
-    # resolution order.  tac is standard on Linux; awk covers macOS/BSD.
-    reverse_log() {
-        if command -v tac &>/dev/null; then
-            tac "$UNDO_LOG"
-        else
-            awk '{lines[NR]=$0} END{for(i=NR;i>=1;i--)print lines[i]}' "$UNDO_LOG"
-        fi
-    }
-
-    while IFS='|' read -r dest src; do
-        [[ -z "$dest" || -z "$src" ]] && continue
-        if [[ ! -f "$dest" ]]; then
-            log_warn "Undo skipped (file gone): $dest"
-            continue
-        fi
-        mkdir -p "$(dirname "$src")"
-        if mv "$dest" "$src"; then
-            log_info "  Restored: $(basename "$dest") → $(dirname "$src")/"
-            (( count++ )) || true
-        else
-            log_warn "  Could not restore: $dest"
-        fi
-    done < <(reverse_log)
-
-    log_info "Undo complete. Restored $count file(s)."
-    # Truncate so the log can't be replayed a second time
-    : > "$UNDO_LOG"
-    exit 0
-}
-
-# ── Summary table ─────────────────────────────────────────────────────────────
-print_summary() {
-    local -n _counts=$1
-    local total=0
-
-    echo ""
-    printf '  %-18s  %s\n' "CATEGORY" "FILES"
-    printf '  %-18s  %s\n' "──────────────────" "─────"
-    local cat
-    for cat in $(printf '%s\n' "${!_counts[@]}" | sort); do
-        printf '  %-18s  %d\n' "$cat" "${_counts[$cat]}"
-        (( total += _counts[cat] )) || true
-    done
-    printf '  %-18s  %s\n' "──────────────────" "─────"
-    printf '  %-18s  %d\n' "TOTAL" "$total"
-    echo ""
-}
-
-# ── Argument parsing ───────────────────────────────────────────────────────────
-_EXT_OVERRIDES=""
-_TARGET_OVERRIDES=""
-
-if ! PARSED_ARGS=$(getopt \
-        -o d:l:a:nsvuh \
-        -l download-dir:,log-file:,min-age:,dry-run,stats,verbose,undo,\
-ext:,target:,no-log,help,version \
-        -- "$@" 2>/dev/null); then
-    echo "Invalid argument. Run with --help for usage." >&2
-    exit 1
+    config_log_dir="$(get_config ".logs.dir" "$LOG_DIR")"
+    LOG_DIR="${config_log_dir/#\~/$HOME}"
+    UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
 fi
-eval set -- "$PARSED_ARGS"
 
-while true; do
+# -------------------------------------------------------------------
+# Argument Parsing
+# -------------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
     case "$1" in
-        -d|--download-dir) DOWNLOAD_DIR="$2";     shift 2 ;;
-        -l|--log-file)     LOG_FILE="$2";          shift 2 ;;
-        -a|--min-age)      MIN_AGE_MINUTES="$2";   shift 2 ;;
-        -n|--dry-run)      DRY_RUN=true;           shift   ;;
-        -s|--stats)        DRY_RUN=true;           shift   ;;
-        -u|--undo)         UNDO_MODE=true;         shift   ;;
-        -v|--verbose)      export VERBOSE=true;    shift   ;;
-           --ext)          _EXT_OVERRIDES="$2";    shift 2 ;;
-           --target)       _TARGET_OVERRIDES="$2"; shift 2 ;;
-           --no-log)       NO_LOG=true;            shift   ;;
-        --help|-h)         show_help ;;
-        --version)         show_version ;;
-        --)                shift; break ;;
-        *)                 echo "Unknown argument: $1" >&2; exit 1 ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        --help)
+            echo "Usage: organize-downloads.sh [--dry-run]"
+            exit 0 ;;
+        *) log_error "Unknown flag: $1"; exit 1 ;;
     esac
 done
 
-# ── Load config ────────────────────────────────────────────────────────────────
-if command -v get_config &>/dev/null; then
-    DOWNLOAD_DIR="$(get_config ".downloads.dir"               "$DOWNLOAD_DIR")"
-    MIN_AGE_MINUTES="$(get_config ".downloads.min_age_minutes" "$MIN_AGE_MINUTES")"
-    config_log_dir="$(get_config ".logs.dir" "")"
-    [[ -n "$config_log_dir" ]] && LOG_FILE="$config_log_dir/download-organizer.log"
+if [[ ! -d "$DOWNLOAD_DIR" ]]; then
+    log_error "Download directory does not exist: $DOWNLOAD_DIR"
+    exit 1
 fi
 
-# ── Build extension map ────────────────────────────────────────────────────────
-# Build from CATEGORIES first; then apply --ext overrides on top.
-# (Previous version set EXT_TO_CAT directly inside the --ext block, then
-# immediately clobbered it by calling build_ext_map afterward.)
-build_ext_map
+# -------------------------------------------------------------------
+# Execution
+# -------------------------------------------------------------------
+log_info "Organizing downloads in: $DOWNLOAD_DIR"
+[[ "$DRY_RUN" == true ]] && log_info "[DRY RUN MODE] No files will actually be moved."
 
-if [[ -n "$_EXT_OVERRIDES" ]]; then
-    IFS=',' read -ra _pairs <<< "$_EXT_OVERRIDES"
-    for pair in "${_pairs[@]}"; do
-        local_ext="${pair%%=*}"
-        local_cat="${pair##*=}"
-        local_ext="${local_ext,,}"
-        EXT_TO_CAT["$local_ext"]="$local_cat"
-        # Inject into CATEGORIES so the category appears in the summary table
-        CATEGORIES["$local_cat"]="${CATEGORIES[$local_cat]:-} $local_ext"
-    done
-fi
-
-# Apply --target overrides
-if [[ -n "$_TARGET_OVERRIDES" ]]; then
-    IFS=',' read -ra _pairs <<< "$_TARGET_OVERRIDES"
-    for pair in "${_pairs[@]}"; do
-        local_cat="${pair%%=*}"
-        local_dir="${pair##*=}"
-        CAT_TARGET["$local_cat"]="$local_dir"
-    done
-fi
-
-# ── Derived paths ──────────────────────────────────────────────────────────────
-UNDO_LOG="${LOG_FILE%/*}/download-organizer-undo.log"
-
-# ── Validation ─────────────────────────────────────────────────────────────────
-check_deps find stat date
-
-[[ "$MIN_AGE_MINUTES" =~ ^[0-9]+$ ]] \
-    || die "MIN_AGE_MINUTES must be a non-negative integer, got: $MIN_AGE_MINUTES"
-
-[[ -d "$DOWNLOAD_DIR" ]] \
-    || die "Download directory does not exist: $DOWNLOAD_DIR"
-
-# ── Logging setup ──────────────────────────────────────────────────────────────
-mkdir -p "$(dirname "$LOG_FILE")"
-if [[ "$DRY_RUN" != true && "$NO_LOG" != true ]]; then
-    exec > >(tee -a "$LOG_FILE") 2>&1
-fi
-
-# ── Undo mode ──────────────────────────────────────────────────────────────────
-if [[ "$UNDO_MODE" == true ]]; then
-    # shellcheck disable=SC2119  # acquire_lock takes no positional params; die() inside it causes the false positive
-    acquire_lock
-    do_undo   # exits 0 on success
-fi
-
-# ── Acquire lock for real work ─────────────────────────────────────────────────
-# shellcheck disable=SC2119  # acquire_lock takes no positional params; die() inside it causes the false positive
-[[ "$DRY_RUN" != true ]] && acquire_lock
-
-# ── Prepare atomic undo buffer ─────────────────────────────────────────────────
-if [[ "$DRY_RUN" != true ]]; then
-    _UNDO_TMP=$(mktemp "${UNDO_LOG}.XXXXXX")
-fi
-
-# ── Main loop ─────────────────────────────────────────────────────────────────
-[[ "$DRY_RUN" == true ]] && log_info "DRY RUN – no files will be moved"
-
-log_info "============================================================"
-log_info "  Download organizer v${VERSION} started at $(date)"
-log_info "  Source : $DOWNLOAD_DIR"
-log_info "  Min age: ${MIN_AGE_MINUTES}m"
-log_info "============================================================"
-
-declare -A CATEGORY_COUNTS=()
-SKIPPED_OPEN=0
-SKIPPED_AGE=0
-MOVED_COUNT=0
-MIN_AGE_SECONDS=$(( MIN_AGE_MINUTES * 60 ))
+mkdir -p "$LOG_DIR"
+_UNDO_TMP="${UNDO_LOG}.tmp"
+> "$_UNDO_TMP"
 
 while IFS= read -r -d '' file; do
-    [[ -L "$file" ]] && continue   # skip symlinks
-
-    # Age check
-    age_seconds=$(file_age_seconds "$file")
-    if (( age_seconds < MIN_AGE_SECONDS )); then
-        log_verbose "Skipping (too new, $(format_age "$age_seconds")): $(basename "$file")"
-        (( SKIPPED_AGE++ ))  || true
-        continue
-    fi
-
-    # Open-file check
-    if file_is_open "$file"; then
-        log_warn "Skipping (file in use): $(basename "$file")"
-        (( SKIPPED_OPEN++ )) || true
-        continue
-    fi
-
     filename=$(basename "$file")
 
-    # Determine extension (lowercase; empty for extension-less files)
-    if [[ "$filename" == *.* ]]; then
-        ext="${filename##*.}"; ext="${ext,,}"
-    else
-        ext=""
-    fi
+    # Skip directories
+    [[ -d "$file" ]] && continue
 
-    category="${EXT_TO_CAT[$ext]:-Others}"
+    # Get extension
+    ext="${filename##*.}"
+    ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
 
-    # Resolve destination, honouring per-category overrides
-    if [[ -n "${CAT_TARGET[$category]:-}" ]]; then
-        dest_folder="${CAT_TARGET[$category]}"
-    else
-        dest_folder="$DOWNLOAD_DIR/$category"
-    fi
+    # Find category, default to 'Other'
+    category="${EXT_MAP[$ext]:-Other}"
 
-    # Skip files already in their target category folder
+    dest_folder="$DOWNLOAD_DIR/$category"
+
+    # Skip if already in correct folder
     if [[ "$(dirname "$file")" == "$dest_folder" ]]; then
-        log_verbose "Already in place: $filename"
         continue
     fi
 
-    do_move "$file" "$dest_folder"
-    CATEGORY_COUNTS["$category"]=$(( CATEGORY_COUNTS[$category] + 1 ))
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY RUN] Would move: $filename -> $category/"
+    else
+        mkdir -p "$dest_folder"
+
+        # Handle collisions securely
+        dest_file="$dest_folder/$filename"
+        if [[ -e "$dest_file" ]]; then
+            dest_file="$dest_folder/${filename%.*}_$(date +%s).${ext}"
+        fi
+
+        if mv "$file" "$dest_file"; then
+            echo "${dest_file}|${file}" >> "$_UNDO_TMP"
+            log_verbose "Moved: $filename -> $category/"
+        else
+            log_error "Failed to move: $filename"
+        fi
+    fi
+
+    CATEGORY_COUNTS["$category"]=$(( ${CATEGORY_COUNTS["$category"]:-0} + 1 ))
     (( MOVED_COUNT++ )) || true
 
 done < <(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -name '.*' -print0)
 
-# ── Atomically commit the undo log ────────────────────────────────────────────
-# Only replace the live undo log if we actually moved something and did so
-# without crashing mid-loop.
-if [[ "$DRY_RUN" != true && -n "$_UNDO_TMP" && -f "$_UNDO_TMP" ]]; then
-    if (( MOVED_COUNT > 0 )); then
-        mv "$_UNDO_TMP" "$UNDO_LOG"
-    else
-        rm -f "$_UNDO_TMP"
-    fi
-    _UNDO_TMP=""   # prevent cleanup trap from deleting the committed log
+# -------------------------------------------------------------------
+# Wrap up
+# -------------------------------------------------------------------
+if [[ "$DRY_RUN" != true && -s "$_UNDO_TMP" ]]; then
+    cat "$_UNDO_TMP" >> "$UNDO_LOG"
 fi
+rm -f "$_UNDO_TMP"
 
-# ── Summary ────────────────────────────────────────────────────────────────────
-if [[ "${#CATEGORY_COUNTS[@]}" -gt 0 ]]; then
-    print_summary CATEGORY_COUNTS
-fi
-
-log_info "============================================================"
-if [[ "$DRY_RUN" == true ]]; then
-    log_info "  [DRY RUN] Would move : $MOVED_COUNT file(s)"
-else
-    log_info "  Moved               : $MOVED_COUNT file(s)"
-    (( MOVED_COUNT > 0 )) && log_info "  Undo log            : $UNDO_LOG"
-fi
-log_info "  Skipped (too new)   : $SKIPPED_AGE"
-log_info "  Skipped (in use)    : $SKIPPED_OPEN"
-log_info "============================================================"
+log_info "=========================================="
+log_info "  Finished Organizing"
+log_info "  Total moved: $MOVED_COUNT file(s)"
+for cat in "${!CATEGORY_COUNTS[@]}"; do
+    log_info "    - $cat: ${CATEGORY_COUNTS[$cat]}"
+done
+log_info "=========================================="

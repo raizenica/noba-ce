@@ -1214,6 +1214,24 @@
             box-shadow: 0 0 0 2px var(--accent-glow);
         }
 
+        .help-text {
+            font-size: .68rem;
+            color: var(--text-muted);
+            margin-top: .35rem;
+            line-height: 1.4;
+            font-family: var(--font-ui);
+        }
+
+        .help-text code {
+            background: var(--surface);
+            padding: .1rem .3rem;
+            border-radius: 3px;
+            border: 1px solid var(--border);
+            font-family: var(--font-data);
+            font-size: .62rem;
+            color: var(--text);
+        }
+
         .settings-footer {
             display: flex;
             justify-content: flex-end;
@@ -1684,10 +1702,10 @@
             <div class="card-body" x-show="!collapsed.radar">
                 <template x-for="t in radar" :key="t.ip">
                     <div class="radar-row">
-                        <div class="status-dot" :class="t.status==='Up'?'dot-up':'dot-down'"></div>
+                        <div class="status-dot" :class="t.status==='Up'?'dot-up':t.status==='Pending'?'dot-pending':'dot-down'"></div>
                         <span class="radar-ip copy-hover" @click="copyVal(t.ip, $event)" x-text="t.ip" title="Copy"></span>
-                        <span class="badge" :class="t.status==='Up'?'bs':'bd'" x-text="t.status"></span>
-                        <span class="radar-ms" x-show="t.status==='Up'" x-text="t.ms + 'ms'"></span>
+                        <span class="badge" :class="t.status==='Up'?'bs':t.status==='Pending'?'bw':'bd'" x-text="t.status"></span>
+                        <span class="radar-ms" x-show="t.status==='Up'" x-text="t.ms > 0 ? t.ms + 'ms' : ''"></span>
                     </div>
                 </template>
                 <div x-show="!radar || radar.length === 0" class="empty-msg">No radar IPs configured.</div>
@@ -1820,6 +1838,7 @@
                         <option value="syserr">System Errors (journalctl)</option>
                         <option value="action">Action Log</option>
                         <option value="backup">NAS Backup Log</option>
+                        <option value="cloud">Cloud Backup Log</option>
                     </select>
                     <div class="icon-btn" @click="fetchLog()" title="Refresh">
                         <i class="fas fa-sync" :class="logLoading?'fa-spin':''"></i>
@@ -1838,30 +1857,150 @@
             </div>
             <div class="card-body action-list" x-show="!collapsed.actions">
 
-                <div class="action-group" x-data="{ opt: false, arg: '' }">
+                <div class="action-group" x-data="{ opt: false, target: 'all', dryRun: false, verify: false }">
                     <button class="btn btn-primary" :disabled="runningScript" @click="opt = !opt">
-                        <i class="fas fa-database"></i> Force NAS Backup
+                        <i class="fas fa-database"></i> NAS Backup Job
                         <i class="fas fa-chevron-down" style="margin-left:auto; font-size:.7rem; transition:transform .2s" :style="opt?'transform:rotate(180deg)':''"></i>
                     </button>
                     <div class="action-opts" x-show="opt" style="display:none">
-                        <input type="text" class="field-input" x-model="arg" placeholder="Optional args (e.g. --dry-run)" @keyup.enter="runScript('backup', arg); opt=false" style="margin-bottom:.5rem; padding:.35rem .6rem; font-size:.75rem">
-                        <div style="display:flex; gap:.4rem">
-                            <button class="btn btn-sm btn-primary" @click="runScript('backup', arg); opt=false">Run</button>
-                            <button class="btn btn-sm" @click="arg='--dry-run'; runScript('backup', arg); opt=false">Dry Run</button>
+                        <div style="margin-bottom:.75rem;">
+                            <label class="field-label">Source Target</label>
+                            <select class="theme-select" style="width:100%; margin-bottom:.5rem;" x-model="target">
+                                <option value="all">All Sources (Full Run)</option>
+                                <template x-for="src in backupSources" :key="src">
+                                    <option :value="src" x-text="src"></option>
+                                </template>
+                            </select>
+                        </div>
+
+                        <div style="margin-bottom:.75rem;">
+                            <label class="field-label">Destination</label>
+                            <div class="badge bn" style="text-transform:none; font-family:var(--font-data);" x-text="backupDest || 'Not configured'"></div>
+                        </div>
+
+                        <div style="display:flex; gap:1rem; margin-bottom:.75rem;">
+                            <label class="toggle-item"><input type="checkbox" x-model="dryRun"> Dry Run</label>
+                            <label class="toggle-item"><input type="checkbox" x-model="verify"> Verify</label>
+                        </div>
+
+                        <button class="btn btn-sm btn-primary" style="width:100%" @click="
+                            let args = [];
+                            if (target !== 'all') args.push('--source', target);
+                            if (dryRun) args.push('--dry-run');
+                            if (verify) args.push('--verify');
+                            runScript('backup', args.join(' '));
+                            opt = false;
+                        "><i class="fas fa-play"></i> Execute Job</button>
+                    </div>
+                </div>
+
+                <div class="action-group" x-data="{ opt: false, dryRun: false }">
+                    <button class="btn" :disabled="runningScript" @click="opt = !opt">
+                        <i class="fas fa-cloud-upload-alt"></i> Cloud Sync Job
+                        <span x-show="cloudRemotes.length > 0" class="badge ba" style="margin-left:.4rem;text-transform:none;font-size:.6rem" x-text="cloudRemotes.length + ' remote' + (cloudRemotes.length !== 1 ? 's' : '')"></span>
+                        <span x-show="rcloneAvailable === false" class="badge bd" style="margin-left:.4rem;font-size:.6rem">no rclone</span>
+                        <i class="fas fa-chevron-down" style="margin-left:auto; font-size:.7rem; transition:transform .2s" :style="opt?'transform:rotate(180deg)':''"></i>
+                    </button>
+                    <div class="action-opts" x-show="opt" style="display:none">
+
+                        <!-- rclone not installed -->
+                        <div x-show="rcloneAvailable === false" style="padding:.65rem .75rem;margin-bottom:.75rem;background:var(--danger-dim);border:1px solid rgba(255,23,68,.25);border-radius:4px;font-size:.78rem;color:var(--danger)">
+                            <i class="fas fa-times-circle" style="margin-right:.4rem"></i>
+                            <strong>rclone is not installed</strong> on this system.
+                            Install it at <code style="background:rgba(0,0,0,.3);padding:.1rem .3rem;border-radius:2px">rclone.org</code> to unlock cloud sync.
+                        </div>
+
+                        <!-- Remotes available -->
+                        <div x-show="rcloneAvailable !== false && cloudRemotes.length > 0">
+                            <label class="field-label">Target Remote</label>
+                            <select class="theme-select" style="width:100%;margin-bottom:.65rem" x-model="selectedCloudRemote">
+                                <template x-for="r in cloudRemotes" :key="r.name">
+                                    <option :value="r.name" x-text="r.name + ' — ' + r.label"></option>
+                                </template>
+                            </select>
+
+                            <!-- Selected remote info card -->
+                            <template x-for="r in cloudRemotes.filter(r => r.name === selectedCloudRemote)" :key="r.name">
+                                <div style="margin-bottom:.75rem;padding:.6rem .8rem;background:var(--surface-2);border-radius:4px;border-left:3px solid" :style="'border-color:' + (r.color || 'var(--accent)')">
+                                    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
+                                        <i :class="r.icon" :style="'color:' + (r.color || 'var(--accent)')"></i>
+                                        <span style="font-size:.82rem;font-weight:600" x-text="r.name + ':'"></span>
+                                        <span class="badge" :style="'background:' + (r.color||'var(--accent)') + '22;color:' + (r.color||'var(--accent)') + ';border-color:' + (r.color||'var(--accent)') + '44;font-size:.6rem'" x-text="r.label"></span>
+                                    </div>
+                                    <!-- Quota bar -->
+                                    <div x-show="r.quota" style="margin-top:.3rem">
+                                        <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--text-muted);margin-bottom:.25rem">
+                                            <span x-text="humanBytes(r.quota?.used) + ' used'"></span>
+                                            <span x-text="humanBytes(r.quota?.total) + ' total'"></span>
+                                        </div>
+                                        <div class="prog-track">
+                                            <div class="prog-fill" :class="(r.quota?.percent||0)>90?'f-danger':(r.quota?.percent||0)>75?'f-warning':'f-accent'" :style="'width:' + (r.quota?.percent||0) + '%'"></div>
+                                        </div>
+                                        <div style="font-size:.63rem;color:var(--text-muted);margin-top:.2rem" x-text="humanBytes(r.quota?.free) + ' free · ' + (r.quota?.percent||0) + '% used'"></div>
+                                    </div>
+                                    <!-- Test result inline -->
+                                    <div x-show="cloudTestResults[r.name]" style="margin-top:.45rem;font-size:.72rem">
+                                        <span x-show="cloudTestResults[r.name]?.testing" style="color:var(--text-muted)"><i class="fas fa-spinner fa-spin"></i> Testing…</span>
+                                        <span x-show="!cloudTestResults[r.name]?.testing && cloudTestResults[r.name]?.success" style="color:var(--success)"><i class="fas fa-check-circle"></i> Connection OK</span>
+                                        <span x-show="!cloudTestResults[r.name]?.testing && cloudTestResults[r.name]?.success === false" style="color:var(--danger)"><i class="fas fa-times-circle"></i> <span x-text="cloudTestResults[r.name]?.error || 'Failed'"></span></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- No remotes, rclone available -->
+                        <div x-show="rcloneAvailable !== false && !cloudRemotesLoading && cloudRemotes.length === 0" style="padding:.6rem .75rem;margin-bottom:.75rem;background:var(--warning-dim);border:1px solid rgba(255,179,0,.25);border-radius:4px;font-size:.78rem;color:var(--warning)">
+                            <i class="fas fa-exclamation-triangle" style="margin-right:.4rem"></i>
+                            No remotes configured. Run <code style="background:rgba(0,0,0,.3);padding:.1rem .3rem;border-radius:2px">rclone config</code> to add a provider.
+                        </div>
+
+                        <div x-show="cloudRemotesLoading" style="padding:.4rem 0;font-size:.75rem;color:var(--text-muted)">
+                            <i class="fas fa-spinner fa-spin"></i> Scanning remotes…
+                        </div>
+
+                        <div style="display:flex; gap:1rem; margin-bottom:.75rem;">
+                            <label class="toggle-item"><input type="checkbox" x-model="dryRun"> Dry Run</label>
+                        </div>
+
+                        <div style="display:flex;gap:.4rem">
+                            <button class="btn btn-sm btn-primary" style="flex:1"
+                                    :disabled="rcloneAvailable === false || cloudRemotes.length === 0 || !selectedCloudRemote"
+                                    @click="
+                                        let args = [];
+                                        if (selectedCloudRemote) args.push('--remote', selectedCloudRemote + ':');
+                                        if (dryRun) args.push('--dry-run');
+                                        runScript('cloud', args.join(' '));
+                                        opt = false;
+                                    ">
+                                <i class="fas fa-play"></i> Execute Job
+                            </button>
+                            <button class="btn btn-sm" title="Test connection" :disabled="!selectedCloudRemote || (cloudTestResults[selectedCloudRemote] && cloudTestResults[selectedCloudRemote].testing)" @click="testCloudRemote(selectedCloudRemote)">
+                                <i class="fas fa-plug"></i>
+                            </button>
+                            <button class="btn btn-sm" title="Refresh remote list" @click="fetchCloudRemotes()">
+                                <i class="fas fa-sync" :class="cloudRemotesLoading?'fa-spin':''"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                <div class="action-group" x-data="{ opt: false, arg: '' }">
+                <div class="action-group" x-data="{ opt: false, dryRun: false }">
                     <button class="btn" :disabled="runningScript" @click="opt = !opt">
                         <i class="fas fa-folder-open"></i> Organize Downloads
                         <i class="fas fa-chevron-down" style="margin-left:auto; font-size:.7rem; transition:transform .2s" :style="opt?'transform:rotate(180deg)':''"></i>
                     </button>
                     <div class="action-opts" x-show="opt" style="display:none">
-                        <input type="text" class="field-input" x-model="arg" placeholder="Target folder (e.g. /home/user/Downloads)" @keyup.enter="runScript('organize', arg); opt=false" style="margin-bottom:.5rem; padding:.35rem .6rem; font-size:.75rem">
-                        <div style="display:flex; gap:.4rem">
-                            <button class="btn btn-sm btn-primary" @click="runScript('organize', arg); opt=false">Run</button>
+                        <div style="margin-bottom:.75rem;">
+                            <label class="field-label">Target Directory</label>
+                            <div class="badge bn" style="text-transform:none; font-family:var(--font-data);" x-text="downloadsDir || 'Not configured'"></div>
                         </div>
+                        <div style="display:flex; gap:1rem; margin-bottom:.75rem;">
+                            <label class="toggle-item"><input type="checkbox" x-model="dryRun"> Dry Run</label>
+                        </div>
+                        <button class="btn btn-sm btn-primary" style="width:100%" @click="
+                            runScript('organize', dryRun ? '--dry-run' : '');
+                            opt = false;
+                        "><i class="fas fa-play"></i> Execute Job</button>
                     </div>
                 </div>
 
@@ -1873,9 +2012,6 @@
                 </button>
                 <button class="btn" :disabled="runningScript" @click="runScript('check_updates')">
                     <i class="fas fa-arrow-circle-up"></i> Check Updates
-                </button>
-                <button class="btn" :disabled="runningScript" @click="runScript('speedtest')">
-                    <i class="fas fa-tachometer-alt"></i> Speed Test
                 </button>
             </div>
         </div>
@@ -1928,6 +2064,10 @@
             <button class="stab" :class="settingsTab==='data'?'active':''" @click="settingsTab='data'">
                 <i class="fas fa-database"></i> General
             </button>
+            <button class="stab" :class="settingsTab==='cloud'?'active':''" @click="settingsTab='cloud'; fetchCloudRemotes()">
+                <i class="fas fa-cloud"></i> Cloud
+                <span x-show="cloudRemotes.length > 0" class="badge ba" style="margin-left:.3rem;font-size:.55rem;padding:.08rem .35rem" x-text="cloudRemotes.length"></span>
+            </button>
             <button class="stab" :class="settingsTab==='integrations'?'active':''" @click="settingsTab='integrations'">
                 <i class="fas fa-plug"></i> Integrations
             </button>
@@ -1967,32 +2107,228 @@
                 <span class="s-label">Data Sources</span>
                 <div style="display:flex;flex-direction:column;gap:.7rem">
                     <div>
-                        <label class="field-label">Services (comma-separated)</label>
+                        <label class="field-label">Services to Monitor</label>
                         <input class="field-input" type="text" x-model="monitoredServices">
+                        <p class="help-text">Comma-separated systemd services to track (e.g., <code>sshd, docker, NetworkManager</code>).</p>
                     </div>
                     <div>
-                        <label class="field-label">Radar IPs (comma-separated, native ping)</label>
+                        <label class="field-label">Radar IPs (Native Ping)</label>
                         <input class="field-input" type="text" x-model="radarIps">
+                        <p class="help-text">Comma-separated IPs for live ICMP latency tracking (e.g., <code>192.168.100.111, 1.1.1.1</code>).</p>
                     </div>
                     <div>
-                        <label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label>
+                        <label class="field-label">Homelab Bookmarks</label>
                         <textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea>
+                        <p class="help-text">Format: <code>Label|URL|fa-icon-name</code> (comma-separated). E.g., <code>Router|http://192.168.1.1|fa-network-wired, TrueNAS|http://vnnas|fa-server</code>.</p>
                     </div>
                 </div>
             </div>
         </div>
 
+        <div x-show="settingsTab==='cloud'">
+            <div class="s-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem">
+                    <span class="s-label" style="margin-bottom:0">Configured Cloud Remotes</span>
+                    <div style="display:flex;align-items:center;gap:.5rem">
+                        <span x-show="rcloneVersion" style="font-family:var(--font-data);font-size:.65rem;color:var(--text-muted);padding:.2rem .5rem;background:var(--surface-2);border:1px solid var(--border);border-radius:3px" x-text="'rclone ' + rcloneVersion"></span>
+                        <button class="btn btn-sm" @click="fetchCloudRemotes()">
+                            <i class="fas fa-sync" :class="cloudRemotesLoading?'fa-spin':''"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- rclone not installed -->
+                <div x-show="rcloneAvailable === false"
+                     style="padding:1rem;background:var(--danger-dim);border:1px solid rgba(255,23,68,.2);border-radius:4px;margin-bottom:.875rem;line-height:1.7">
+                    <div style="font-size:.84rem;font-weight:600;color:var(--danger);margin-bottom:.4rem">
+                        <i class="fas fa-times-circle" style="margin-right:.4rem"></i>rclone is not installed
+                    </div>
+                    <div style="font-size:.78rem;color:var(--text-muted)">
+                        Install rclone to enable cloud sync to Google Drive, Dropbox, S3, and 40+ other providers:
+                    </div>
+                    <div style="margin-top:.5rem;padding:.5rem .75rem;background:rgba(0,0,0,.3);border-radius:3px;font-family:var(--font-data);font-size:.78rem;color:var(--accent)">
+                        curl https://rclone.org/install.sh | sudo bash
+                    </div>
+                </div>
+
+                <!-- Remotes list -->
+                <div x-show="rcloneAvailable !== false && cloudRemotes.length > 0"
+                     style="display:flex;flex-direction:column;gap:.55rem;margin-bottom:.875rem">
+                    <template x-for="r in cloudRemotes" :key="r.name">
+                        <div style="padding:.7rem .9rem;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;border-left:3px solid;transition:box-shadow .2s"
+                             :style="'border-left-color:' + (r.color||'var(--accent)') + (selectedCloudRemote===r.name ? ';box-shadow:0 0 0 1px ' + (r.color||'var(--accent)') + '44' : '')">
+                            <div style="display:flex;align-items:center;gap:.7rem;flex-wrap:wrap">
+                                <i :class="r.icon" style="width:18px;text-align:center;font-size:1rem;flex-shrink:0" :style="'color:' + (r.color||'var(--accent)')"></i>
+                                <div style="flex:1;min-width:0">
+                                    <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+                                        <span style="font-family:var(--font-data);font-size:.84rem;font-weight:600" x-text="r.name + ':'"></span>
+                                        <span class="badge" :style="'background:' + (r.color||'var(--accent)') + '22;color:' + (r.color||'var(--accent)') + ';border-color:' + (r.color||'var(--accent)') + '44;font-size:.6rem'" x-text="r.label"></span>
+                                        <span x-show="selectedCloudRemote===r.name" class="badge bs" style="font-size:.6rem">default</span>
+                                    </div>
+                                    <div style="font-size:.66rem;color:var(--text-muted);margin-top:.1rem;font-family:var(--font-data)" x-text="'rclone type: ' + (r.type || 'unknown')"></div>
+                                </div>
+                                <!-- Action buttons -->
+                                <div style="display:flex;gap:.35rem;flex-shrink:0">
+                                    <!-- Test button -->
+                                    <button class="btn btn-sm" style="font-size:.65rem"
+                                            :disabled="cloudTestResults[r.name] && cloudTestResults[r.name].testing"
+                                            @click="testCloudRemote(r.name)"
+                                            :title="'Test connection to ' + r.name">
+                                        <i class="fas" :class="cloudTestResults[r.name]?.testing ? 'fa-spinner fa-spin' : cloudTestResults[r.name]?.success === true ? 'fa-check-circle' : cloudTestResults[r.name]?.success === false ? 'fa-times-circle' : 'fa-plug'"
+                                           :style="cloudTestResults[r.name]?.success === true ? 'color:var(--success)' : cloudTestResults[r.name]?.success === false ? 'color:var(--danger)' : ''"></i>
+                                        <span x-text="cloudTestResults[r.name]?.testing ? 'Testing…' : cloudTestResults[r.name]?.success === true ? 'OK' : cloudTestResults[r.name]?.success === false ? 'Failed' : 'Test'"></span>
+                                    </button>
+                                    <!-- Set default -->
+                                    <button class="btn btn-sm" style="font-size:.65rem"
+                                            :class="selectedCloudRemote===r.name ? 'btn-primary' : ''"
+                                            @click="selectedCloudRemote = r.name">
+                                        <i class="fas" :class="selectedCloudRemote===r.name ? 'fa-star' : 'fa-star'"></i>
+                                        <span x-text="selectedCloudRemote===r.name ? 'Default' : 'Set Default'"></span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Test error message -->
+                            <div x-show="cloudTestResults[r.name]?.success === false && cloudTestResults[r.name]?.error"
+                                 style="margin-top:.45rem;font-family:var(--font-data);font-size:.7rem;color:var(--danger);padding:.3rem .5rem;background:var(--danger-dim);border-radius:3px"
+                                 x-text="cloudTestResults[r.name]?.error"></div>
+
+                            <!-- Quota bar -->
+                            <div x-show="r.quota" style="margin-top:.55rem">
+                                <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--text-muted);margin-bottom:.25rem">
+                                    <span x-text="humanBytes(r.quota?.used) + ' used of ' + humanBytes(r.quota?.total)"></span>
+                                    <span x-text="humanBytes(r.quota?.free) + ' free · ' + (r.quota?.percent||0) + '%'"></span>
+                                </div>
+                                <div class="prog-track">
+                                    <div class="prog-fill"
+                                         :class="(r.quota?.percent||0)>90?'f-danger':(r.quota?.percent||0)>75?'f-warning':'f-accent'"
+                                         :style="'width:' + (r.quota?.percent||0) + '%;background:' + (r.color||'var(--accent)')"></div>
+                                </div>
+                            </div>
+                            <div x-show="!r.quota" style="font-size:.65rem;color:var(--text-dim);margin-top:.35rem;font-style:italic">Quota not available for this provider</div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- No remotes, rclone present -->
+                <div x-show="rcloneAvailable !== false && !cloudRemotesLoading && cloudRemotes.length === 0"
+                     style="padding:1rem;background:var(--surface-2);border:1px dashed var(--border);border-radius:4px;line-height:1.7;margin-bottom:.875rem">
+                    <div style="font-size:.84rem;font-weight:600;margin-bottom:.4rem;color:var(--text)">
+                        <i class="fas fa-plug" style="color:var(--accent);margin-right:.4rem"></i>No remotes configured
+                    </div>
+                    <div style="font-size:.78rem;color:var(--text-muted)">Run the following in a terminal, then click Refresh:</div>
+                    <div style="margin-top:.45rem;padding:.45rem .75rem;background:rgba(0,0,0,.3);border-radius:3px;font-family:var(--font-data);font-size:.8rem;color:var(--accent)">rclone config</div>
+                    <div style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.35rem">
+                        <span class="badge bn"><i class="fab fa-google-drive"></i> Google Drive</span>
+                        <span class="badge bn"><i class="fab fa-dropbox"></i> Dropbox</span>
+                        <span class="badge bn"><i class="fab fa-aws"></i> Amazon S3</span>
+                        <span class="badge bn"><i class="fas fa-fire"></i> Backblaze B2</span>
+                        <span class="badge bn"><i class="fab fa-microsoft"></i> OneDrive</span>
+                        <span class="badge bn"><i class="fas fa-leaf"></i> Wasabi</span>
+                        <span class="badge bn"><i class="fas fa-cloud"></i> +35 more</span>
+                    </div>
+                </div>
+
+                <div x-show="cloudRemotesLoading" style="padding:.5rem 0;font-size:.78rem;color:var(--text-muted)">
+                    <i class="fas fa-spinner fa-spin" style="margin-right:.4rem"></i>Scanning for rclone remotes…
+                </div>
+
+                <div x-show="!cloudRemotesLoading && cloudRemotes.length > 0" style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem">
+                    <i class="fas fa-check-circle" style="color:var(--success)"></i>
+                    <span x-text="cloudRemotes.length + ' remote' + (cloudRemotes.length!==1?'s':'') + ' available'"></span>
+                    <span x-show="rcloneVersion" x-text="' · rclone ' + rcloneVersion"></span>
+                </div>
+                <p class="help-text" style="margin-top:.6rem">
+                    Remotes are read live from <code>~/.config/rclone/rclone.conf</code>.
+                    No credentials are ever stored in this dashboard.
+                    The <strong>Default</strong> remote is pre-selected in Quick Actions → Cloud Sync Job.
+                </p>
+            </div>
+        </div>
+
         <div x-show="settingsTab==='integrations'">
             <div class="s-section">
-                <span class="s-label">Pi-hole</span>
+                <span class="s-label">Cloud Remotes <span style="font-size:.6rem;color:var(--text-muted);font-weight:400;letter-spacing:.05em">· via rclone</span></span>
+
+                <!-- rclone not installed notice -->
+                <div x-show="rcloneAvailable === false" style="padding:.65rem .8rem;background:var(--danger-dim);border:1px solid rgba(255,23,68,.2);border-radius:4px;font-size:.78rem;color:var(--danger);margin-bottom:.75rem">
+                    <i class="fas fa-times-circle" style="margin-right:.4rem"></i>rclone is not installed.
+                    <a href="https://rclone.org" target="_blank" style="color:var(--danger);text-decoration:underline;margin-left:.25rem">rclone.org</a>
+                </div>
+
+                <!-- Populated remotes list -->
+                <div x-show="rcloneAvailable !== false && cloudRemotes.length > 0" style="display:flex;flex-direction:column;gap:.4rem;margin-bottom:.75rem">
+                    <template x-for="r in cloudRemotes" :key="r.name">
+                        <div style="display:flex;align-items:center;gap:.7rem;padding:.5rem .75rem;background:var(--surface-2);border:1px solid var(--border);border-left:3px solid;border-radius:4px"
+                             :style="'border-left-color:' + (r.color||'var(--accent)') + (selectedCloudRemote===r.name ? ';box-shadow:0 0 0 1px ' + (r.color||'var(--accent)') + '33' : '')">
+                            <i :class="r.icon" style="width:16px;text-align:center;font-size:.9rem;flex-shrink:0" :style="'color:' + (r.color||'var(--accent)')"></i>
+                            <div style="flex:1;min-width:0">
+                                <div style="font-family:var(--font-data);font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" x-text="r.name + ':'"></div>
+                                <div style="font-size:.64rem;color:var(--text-muted);margin-top:.1rem" x-text="r.label + (r.quota ? ' · ' + humanBytes(r.quota.used) + ' / ' + humanBytes(r.quota.total) : '')"></div>
+                            </div>
+                            <!-- Test result dot -->
+                            <div x-show="cloudTestResults[r.name]" style="font-size:.7rem">
+                                <span x-show="cloudTestResults[r.name]?.testing" style="color:var(--text-muted)"><i class="fas fa-spinner fa-spin"></i></span>
+                                <span x-show="!cloudTestResults[r.name]?.testing && cloudTestResults[r.name]?.success" style="color:var(--success)"><i class="fas fa-check-circle"></i></span>
+                                <span x-show="!cloudTestResults[r.name]?.testing && cloudTestResults[r.name]?.success === false" style="color:var(--danger)"><i class="fas fa-times-circle"></i></span>
+                            </div>
+                            <button class="btn btn-sm" style="font-size:.62rem;padding:.18rem .45rem"
+                                    :class="selectedCloudRemote===r.name ? 'btn-primary' : ''"
+                                    @click="selectedCloudRemote = r.name"
+                                    x-text="selectedCloudRemote===r.name ? '✓ Default' : 'Set Default'">
+                            </button>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- No remotes -->
+                <div x-show="rcloneAvailable !== false && !cloudRemotesLoading && cloudRemotes.length === 0"
+                     style="padding:.75rem;background:var(--surface-2);border:1px dashed var(--border);border-radius:4px;font-size:.8rem;color:var(--text-muted);margin-bottom:.75rem;line-height:1.6">
+                    <i class="fas fa-info-circle" style="color:var(--accent);margin-right:.4rem"></i>
+                    No rclone remotes detected. Run <code style="background:rgba(0,0,0,.3);padding:.1rem .35rem;border-radius:2px;color:var(--accent)">rclone config</code> on this machine to add
+                    <strong style="color:var(--text)">Google Drive, Dropbox, S3, Backblaze B2, OneDrive</strong>, and 40+ other providers.
+                </div>
+
+                <!-- Loading -->
+                <div x-show="cloudRemotesLoading" style="padding:.5rem 0;font-size:.78rem;color:var(--text-muted)">
+                    <i class="fas fa-spinner fa-spin" style="margin-right:.4rem"></i> Scanning rclone remotes…
+                </div>
+
+                <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+                    <button class="btn btn-sm" @click="fetchCloudRemotes()">
+                        <i class="fas fa-sync" :class="cloudRemotesLoading?'fa-spin':''"></i> Refresh
+                    </button>
+                    <button class="btn btn-sm" x-show="cloudRemotes.length > 0 && selectedCloudRemote"
+                            :disabled="cloudTestResults[selectedCloudRemote]?.testing"
+                            @click="testCloudRemote(selectedCloudRemote)"
+                            title="Test default remote">
+                        <i class="fas fa-plug"></i> Test Default
+                    </button>
+                    <span x-show="cloudRemotes.length > 0" style="font-size:.72rem;color:var(--text-muted)">
+                        <i class="fas fa-check-circle" style="color:var(--success)"></i>
+                        <span x-text="cloudRemotes.length + ' remote' + (cloudRemotes.length!==1?'s':'') + ' found'"></span>
+                    </span>
+                </div>
+                <p class="help-text" style="margin-top:.6rem">
+                    Remotes are discovered automatically from your <code>~/.config/rclone/rclone.conf</code>.
+                    The selected default is used by the Cloud Sync Job in Quick Actions.
+                    To add or reconfigure a remote, run <code>rclone config</code> in a terminal, then hit Refresh.
+                    For full quota bars and per-remote testing, see the <strong>Cloud</strong> tab.
+                </p>
+            </div>
+
+            <div class="s-section">
+                <span class="s-label">Pi-hole DNS</span>
                 <div class="field-2">
                     <div>
                         <label class="field-label">URL / IP</label>
-                        <input class="field-input" type="text" x-model="piholeUrl" placeholder="dnsa01.example.org">
+                        <input class="field-input" type="text" x-model="piholeUrl" placeholder="http://192.168.100.111">
+                        <p class="help-text">The address of your primary Pi-hole (e.g., <code>http://192.168.100.111</code> for dnsa01).</p>
                     </div>
                     <div>
                         <label class="field-label">App Password (v6)</label>
                         <input class="field-input" type="password" x-model="piholeToken">
+                        <p class="help-text">Generate a new token in the Pi-hole UI: <code>Settings &gt; API &gt; App Passwords</code>.</p>
                     </div>
                 </div>
             </div>
@@ -2001,12 +2337,14 @@
                 <span class="s-label">Media Stack (Plex API)</span>
                 <div class="field-2">
                     <div>
-                        <label class="field-label">Base URL (e.g. http://192.168.1.50:32400)</label>
+                        <label class="field-label">Base URL</label>
                         <input class="field-input" type="text" x-model="plexUrl" placeholder="http://vnnas.example.org:32400">
+                        <p class="help-text">The exact local network URL and port for your vnnas Plex server.</p>
                     </div>
                     <div>
                         <label class="field-label">X-Plex-Token</label>
                         <input class="field-input" type="password" x-model="plexToken">
+                        <p class="help-text">To find this: Open Plex Web, click "Get Info" on any media item, click "View XML", and copy the string after <code>X-Plex-Token=</code> in the URL bar.</p>
                     </div>
                 </div>
             </div>
@@ -2014,18 +2352,18 @@
             <div class="s-section">
                 <span class="s-label">Uptime Kuma (Prometheus Metrics)</span>
                 <div>
-                    <label class="field-label">Base URL (e.g. http://kuma.example.org:3001)</label>
+                    <label class="field-label">Base URL</label>
                     <input class="field-input" type="text" x-model="kumaUrl" placeholder="http://vnnas.example.org:3001">
-                    <p style="font-size: .65rem; color: var(--text-muted); margin-top: .3rem;">Imports Kuma monitors directly into the dedicated Uptime Kuma dashboard card.</p>
+                    <p class="help-text">Points to Kuma running on vnnas. Do <strong>not</strong> add <code>/metrics</code> to the end; the backend handles the endpoint resolution automatically.</p>
                 </div>
             </div>
 
             <div class="s-section">
-                <span class="s-label">Hardware Watchdog (BMC Mapping)</span>
+                <span class="s-label">Hardware Watchdog (Site B BMC Mapping)</span>
                 <div>
-                    <label class="field-label">Map OS IP to IPMI/BMC IP (Format: OS_IP|BMC_IP, comma-separated)</label>
+                    <label class="field-label">Map OS IP to IPMI/BMC IP</label>
                     <input class="field-input" type="text" x-model="bmcMap" placeholder="192.168.100.20|192.168.100.21">
-                    <p style="font-size: .65rem; color: var(--text-muted); margin-top: .3rem;">Generates critical alerts if an OS drops off the network but its BMC remains reachable.</p>
+                    <p class="help-text">Format: <code>OS_IP|IPMI_IP</code>. E.g., for vdhnas: <code>10.0.0.50|10.0.0.51</code>. Generates critical alerts if the OS stops responding to pings but the IPMI interface remains reachable (detects Avago RAID boot priority drops).</p>
                 </div>
             </div>
         </div>
@@ -2210,6 +2548,7 @@ function dashboard() {
     return {
         theme: autoTheme,
         vis:   { ...DEF_VIS, ...JSON.parse(localStorage.getItem('noba-vis') || '{}') },
+
         piholeUrl:         localStorage.getItem('noba-pihole')    || '',
         piholeToken:       localStorage.getItem('noba-pihole-tok')|| '',
         bookmarksStr:      localStorage.getItem('noba-bookmarks') || DEF_BOOKMARKS,
@@ -2219,6 +2558,20 @@ function dashboard() {
         plexToken:         localStorage.getItem('noba-plex-tok')  || '',
         kumaUrl:           localStorage.getItem('noba-kuma-url')  || '',
         bmcMap:            localStorage.getItem('noba-bmc-map')   || '',
+
+        // Automation Job Targets (dynamically populated from YAML via API)
+        backupSources: [],
+        backupDest: '',
+        cloudRemote: '',
+        downloadsDir: '',
+
+        // Cloud-Aware: rclone remote list (populated from /api/cloud-remotes)
+        cloudRemotes: [],
+        selectedCloudRemote: '',
+        cloudRemotesLoading: false,
+        rcloneAvailable: null,   // null=unknown, true/false after first fetch
+        rcloneVersion: '',
+        cloudTestResults: {},    // { remoteName: { testing, success, error } }
 
         timestamp:'--:--', uptime:'--', loadavg:'--', memory:'--', hostname:'--', defaultIp:'--',
         memPercent:0, cpuPercent:0, cpuHistory:[], cpuTemp:'N/A', gpuTemp:'N/A',
@@ -2308,6 +2661,7 @@ function dashboard() {
             if (this.authenticated) {
                 await this.fetchUserInfo();
                 await this.fetchSettings();
+                await this.fetchCloudRemotes();
                 await this.fetchLog();
                 if (this.userRole === 'admin') await this.fetchUsers();
 
@@ -2316,6 +2670,8 @@ function dashboard() {
                 setInterval(() => {
                     if (this.vis.logs) this.fetchLog();
                 }, 12000);
+
+                setInterval(() => { this.fetchCloudRemotes(); }, 300000);
 
                 setInterval(() => {
                     if (this.connStatus === 'sse' && this._lastHeartbeat) {
@@ -2480,20 +2836,83 @@ function dashboard() {
                 const res = await fetch('/api/settings', { headers: { 'Authorization': 'Bearer ' + token } });
                 if (res.ok) {
                     const s = await res.json();
-                    if (s.piholeUrl != null) this.piholeUrl = s.piholeUrl;
-                    if (s.piholeToken != null) this.piholeToken = s.piholeToken;
+
+                    if (s.piholeUrl != null)         this.piholeUrl = s.piholeUrl;
+                    if (s.piholeToken != null)       this.piholeToken = s.piholeToken;
                     if (s.monitoredServices != null) this.monitoredServices = s.monitoredServices;
-                    if (s.radarIps != null) this.radarIps = s.radarIps;
-                    if (s.bookmarksStr != null) this.bookmarksStr = s.bookmarksStr;
-                    if (s.plexUrl != null) this.plexUrl = s.plexUrl;
-                    if (s.plexToken != null) this.plexToken = s.plexToken;
-                    if (s.kumaUrl != null) this.kumaUrl = s.kumaUrl;
-                    if (s.bmcMap != null) this.bmcMap = s.bmcMap;
+                    if (s.radarIps != null)          this.radarIps = s.radarIps;
+                    if (s.bookmarksStr != null)      this.bookmarksStr = s.bookmarksStr;
+                    if (s.plexUrl != null)           this.plexUrl = s.plexUrl;
+                    if (s.plexToken != null)         this.plexToken = s.plexToken;
+                    if (s.kumaUrl != null)           this.kumaUrl = s.kumaUrl;
+                    if (s.bmcMap != null)            this.bmcMap = s.bmcMap;
+
+                    // Automation Job Targets
+                    if (s.backupSources != null)     this.backupSources = s.backupSources;
+                    if (s.backupDest != null)        this.backupDest = s.backupDest;
+                    if (s.cloudRemote != null)       this.cloudRemote = s.cloudRemote;
+                    if (s.downloadsDir != null)      this.downloadsDir = s.downloadsDir;
+
                     this.saveSettings();
                 }
             } catch (e) {
                 console.warn('Could not fetch settings', e);
             }
+        },
+
+        async fetchCloudRemotes() {
+            if (!this.authenticated) return;
+            this.cloudRemotesLoading = true;
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/cloud-remotes', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (res.ok) {
+                    const d = await res.json();
+                    this.rcloneAvailable = d.available ?? true;
+                    this.rcloneVersion   = d.version  ?? '';
+                    this.cloudRemotes    = d.remotes  ?? (Array.isArray(d) ? d : []);
+                    // Auto-select remote matching YAML config, or first found
+                    if (this.cloudRemotes.length > 0) {
+                        const match = this.cloudRemotes.find(r => r.name === this.cloudRemote);
+                        this.selectedCloudRemote = match ? match.name : this.cloudRemotes[0].name;
+                    }
+                }
+            } catch (e) {
+                console.warn('fetchCloudRemotes error', e);
+            } finally {
+                this.cloudRemotesLoading = false;
+            }
+        },
+
+        async testCloudRemote(name) {
+            this.cloudTestResults = { ...this.cloudTestResults, [name]: { testing: true } };
+            const token = localStorage.getItem('noba-token');
+            try {
+                const res = await fetch('/api/cloud-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ remote: name })
+                });
+                const d = await res.json();
+                this.cloudTestResults = { ...this.cloudTestResults, [name]: { testing: false, ...d } };
+                setTimeout(() => {
+                    const r = { ...this.cloudTestResults };
+                    delete r[name];
+                    this.cloudTestResults = r;
+                }, 8000);
+            } catch {
+                this.cloudTestResults = { ...this.cloudTestResults, [name]: { testing: false, success: false, error: 'Network error' } };
+            }
+        },
+
+        humanBytes(bytes) {
+            if (!bytes || bytes <= 0) return '—';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            let v = bytes, i = 0;
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return v.toFixed(1) + ' ' + units[i];
         },
 
         async saveSettings() {
@@ -2658,6 +3077,7 @@ function dashboard() {
                     this.authenticated = true;
                     await this.fetchUserInfo();
                     await this.fetchSettings();
+                    await this.fetchCloudRemotes();
                     if (this.userRole === 'admin') await this.fetchUsers();
                     this.init();
                 } else {

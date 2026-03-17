@@ -1,26 +1,11 @@
 #!/bin/bash
 # backup-to-nas.sh – Incremental hardlink backup to NAS with retention, space check, and report
-# Version: 1.0.0
-#
-# New in 1.0.0:
-#   Atomic snapshots      Written to <TIMESTAMP>.partial, renamed on success; broken
-#                         snapshots are never used as a link-dest or counted toward
-#                         keep-count.
-#   --log-file PATH       Override log file path from the CLI (was env/config only).
-#   --no-email            Suppress the email report for this run.
-#   --verify-count N      Number of files to spot-check (default: 20).
-#   --max-delete N        Pass --max-delete=N to rsync to cap runaway deletions.
-#   --rsync-opts OPTS     Append extra rsync options verbatim (space-separated).
-#   Dynamic lock FD       No longer uses a hard-coded file descriptor (200).
-#   Duration formatting   Reported as Xh Ym Zs instead of raw seconds.
-#   Fixed run_verify      Source path reconstruction now works for multiple sources.
-#   rsync --stats         Per-source transfer statistics written to the log.
-#   Exit codes:           0=success  1=partial (some sources failed)  2=fatal abort
+# Version: 1.1.0
 
 set -euo pipefail
 
 # ── Version ────────────────────────────────────────────────────────────────────
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 
 # ── Test harness shims (must come before sourcing the library) ─────────────────
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
@@ -47,6 +32,7 @@ export VERBOSE=false
 LOCK_FILE="/tmp/backup-to-nas.lock"
 LOCK_FD=""
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/backup-to-nas.log}"
+STATE_FILE="${STATE_FILE:-$HOME/.local/share/backup-to-nas.state}"
 RETENTION_DAYS=7
 KEEP_COUNT=0
 SPACE_MARGIN_PERCENT=10
@@ -430,7 +416,7 @@ fi
 LATEST_BACKUP=""
 while IFS= read -r -d '' d; do
     LATEST_BACKUP="$d"
-done < <(find "$DEST" -maxdepth 1 -type d -name "????????-??????" -print0 2>/dev/null \
+done < <(find "$DEST" -maxdepth 1 -type d -name "????????-?????" -print0 2>/dev/null \
          | sort -z)
 
 # ── Space check ───────────────────────────────────────────────────────────────
@@ -658,6 +644,18 @@ log_info "  Duration: ${DURATION_FMT}   Size: ${BACKUP_SIZE}"
 (( ${#FAILED_SOURCES[@]} > 0 )) && \
     log_error "  Failed sources: ${FAILED_SOURCES[*]}"
 log_info "============================================================"
+
+# ── Write State File for backup-notify.sh ─────────────────────────────────────
+if [[ "$DRY_RUN" != true ]]; then
+    {
+        echo "exit_code=$EXIT_CODE"
+        echo "timestamp=$(date '+%Y-%m-%d %H:%M:%S')"
+        echo "failed_sources=${FAILED_SOURCES[*]:-}"
+        echo "duration=${DURATION:-0}"
+        echo "snapshot=${TIMESTAMP:-}"
+    } > "$STATE_FILE"
+    log_verbose "Wrote state file to $STATE_FILE"
+fi
 
 # ── Optional post-run notification hook ───────────────────────────────────────
 if [[ "$DRY_RUN" != true ]] && command -v backup-notify.sh &>/dev/null; then

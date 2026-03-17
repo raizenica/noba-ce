@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v1.6.1 (Integrations & Watchdogs)"""
+"""Nobara Command Center – Backend v1.8.0 (Cloud-Aware rclone API)"""
 
 import glob
 import hashlib
@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VERSION        = '1.6.1'
+VERSION        = '1.8.0'
 PORT           = int(os.environ.get('PORT', 8080))
 HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -43,6 +43,7 @@ STATS_INTERVAL = 5
 
 SCRIPT_MAP = {
     'backup':        'backup-to-nas.sh',
+    'cloud':         'cloud-backup.sh',
     'verify':        'backup-verifier.sh',
     'organize':      'organize-downloads.sh',
     'diskcheck':     'disk-sentinel.sh',
@@ -273,23 +274,44 @@ def read_yaml_settings() -> dict:
         'plexUrl': '',
         'plexToken': '',
         'kumaUrl': '',
-        'bmcMap': ''
+        'bmcMap': '',
+        'backupSources': [],
+        'backupDest': '',
+        'cloudRemote': '',
+        'downloadsDir': ''
     }
 
     if not os.path.exists(NOBA_YAML):
         return defaults
 
     try:
+        # Extract the entire config tree to parse automation targets
         r = subprocess.run(
-            ['yq', 'eval', '-o=json', '.web', NOBA_YAML],
+            ['yq', 'eval', '-o=json', '.', NOBA_YAML],
             capture_output=True, text=True, timeout=5,
         )
         if r.returncode == 0 and r.stdout.strip():
-            web = json.loads(r.stdout)
-            if isinstance(web, dict):
-                for k in defaults:
+            full_conf = json.loads(r.stdout)
+            if isinstance(full_conf, dict):
+                web = full_conf.get('web', {})
+                for k in ['piholeUrl', 'piholeToken', 'monitoredServices', 'radarIps', 'bookmarksStr', 'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap']:
                     if k in web:
                         defaults[k] = web[k]
+
+                backup = full_conf.get('backup', {})
+                if 'sources' in backup:
+                    defaults['backupSources'] = backup['sources']
+                if 'dest' in backup:
+                    defaults['backupDest'] = backup['dest']
+
+                cloud = full_conf.get('cloud', {})
+                if 'remote' in cloud:
+                    defaults['cloudRemote'] = cloud['remote']
+
+                downloads = full_conf.get('downloads', {})
+                if 'dir' in downloads:
+                    defaults['downloadsDir'] = downloads['dir']
+
     except Exception as e:
         logger.warning('Failed to read YAML settings: %s', e)
 
@@ -301,9 +323,10 @@ def write_yaml_settings(settings: dict) -> bool:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
-                if isinstance(v, str):
-                    v = json.dumps(v)
-                tmp.write(f'  {k}: {v}\n')
+                if k in ['piholeUrl', 'piholeToken', 'monitoredServices', 'radarIps', 'bookmarksStr', 'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap']:
+                    if isinstance(v, str):
+                        v = json.dumps(v)
+                    tmp.write(f'  {k}: {v}\n')
             tmp_path = tmp.name
 
         if os.path.exists(NOBA_YAML):
@@ -316,6 +339,7 @@ def write_yaml_settings(settings: dict) -> bool:
             except Exception as be:
                 logger.warning('Could not rotate YAML backups: %s', be)
 
+            # Only overwrite the `.web` block, preserving automation definitions
             r = subprocess.run(
                 ['yq', 'eval-all', 'select(fileIndex==0) * select(fileIndex==1)', NOBA_YAML, tmp_path],
                 capture_output=True, text=True, timeout=5,
@@ -633,6 +657,142 @@ def get_containers() -> list:
         except Exception:
             continue
     return []
+
+# ── rclone remote discovery ───────────────────────────────────────────────────
+_RCLONE_TYPE_META: dict = {
+    'drive':      {'label': 'Google Drive',    'icon': 'fab fa-google-drive',  'color': '#4285F4'},
+    'dropbox':    {'label': 'Dropbox',          'icon': 'fab fa-dropbox',       'color': '#0061FF'},
+    's3':         {'label': 'Amazon S3',        'icon': 'fab fa-aws',           'color': '#FF9900'},
+    'b2':         {'label': 'Backblaze B2',     'icon': 'fas fa-fire',          'color': '#CC0000'},
+    'onedrive':   {'label': 'OneDrive',         'icon': 'fab fa-microsoft',     'color': '#0078D4'},
+    'box':        {'label': 'Box',              'icon': 'fas fa-box',           'color': '#0061D5'},
+    'azureblob':  {'label': 'Azure Blob',       'icon': 'fab fa-microsoft',     'color': '#0078D4'},
+    'gcs':        {'label': 'Google Cloud',     'icon': 'fab fa-google',        'color': '#34A853'},
+    'mega':       {'label': 'Mega',             'icon': 'fas fa-cloud',         'color': '#D9272E'},
+    'pcloud':     {'label': 'pCloud',           'icon': 'fas fa-cloud',         'color': '#1ABCFE'},
+    'sftp':       {'label': 'SFTP',             'icon': 'fas fa-server',        'color': '#00C8FF'},
+    'ftp':        {'label': 'FTP',              'icon': 'fas fa-server',        'color': '#00C8FF'},
+    'webdav':     {'label': 'WebDAV',           'icon': 'fas fa-server',        'color': '#00C8FF'},
+    'smb':        {'label': 'SMB / NAS',        'icon': 'fas fa-hdd',           'color': '#4a7a9b'},
+    'swift':      {'label': 'OpenStack Swift',  'icon': 'fas fa-cloud',         'color': '#ED1944'},
+    'wasabi':     {'label': 'Wasabi S3',        'icon': 'fas fa-leaf',          'color': '#3DAA55'},
+    'storj':      {'label': 'Storj',            'icon': 'fas fa-satellite',     'color': '#003AFF'},
+    'jottacloud': {'label': 'Jottacloud',       'icon': 'fas fa-cloud',         'color': '#24B5FF'},
+    'hidrive':    {'label': 'HiDrive',          'icon': 'fas fa-cloud',         'color': '#5C6BC0'},
+    'opendrive':  {'label': 'OpenDrive',        'icon': 'fas fa-cloud',         'color': '#00C8FF'},
+    'putio':      {'label': 'Put.io',           'icon': 'fas fa-cloud',         'color': '#3F51B5'},
+}
+
+_REMOTE_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9 ._-]{0,63}$')
+
+def _fetch_remote_meta(name: str) -> dict:
+    """Fetch type, label, icon, color and optional quota for a single rclone remote."""
+    rtype = ''
+    try:
+        r = subprocess.run(
+            ['rclone', 'config', 'show', name + ':'],
+            capture_output=True, text=True, timeout=4,
+        )
+        for cfg_line in r.stdout.splitlines():
+            stripped = cfg_line.strip()
+            if stripped.startswith('type') and '=' in stripped:
+                rtype = stripped.split('=', 1)[1].strip()
+                break
+    except Exception:
+        pass
+
+    meta = _RCLONE_TYPE_META.get(
+        rtype,
+        {'label': rtype.capitalize() if rtype else 'Cloud Remote',
+         'icon': 'fas fa-cloud', 'color': '#00c8ff'},
+    )
+
+    # Optional: storage quota via `rclone about --json`
+    quota: dict | None = None
+    try:
+        ra = subprocess.run(
+            ['rclone', 'about', name + ':', '--json'],
+            capture_output=True, text=True, timeout=6,
+        )
+        if ra.returncode == 0 and ra.stdout.strip():
+            q = json.loads(ra.stdout)
+            total = q.get('total', 0) or 0
+            used  = q.get('used',  0) or 0
+            free  = q.get('free',  0) or (total - used)
+            if total > 0:
+                quota = {
+                    'total':   total,
+                    'used':    used,
+                    'free':    free,
+                    'percent': round(100.0 * used / total, 1),
+                }
+    except Exception:
+        pass
+
+    return {
+        'name':  name,
+        'type':  rtype,
+        'label': meta['label'],
+        'icon':  meta['icon'],
+        'color': meta['color'],
+        'quota': quota,
+    }
+
+
+def get_rclone_remotes() -> dict:
+    """Discover rclone remotes in parallel. Returns availability, version, and remote list."""
+    cached = _cache.get('rclone-remotes-full', 60)
+    if cached is not None:
+        return cached
+
+    # ── 1. Detect rclone ──
+    version_str = ''
+    try:
+        vr = subprocess.run(['rclone', 'version'], capture_output=True, text=True, timeout=4)
+        if vr.returncode != 0:
+            result = {'available': False, 'version': '', 'remotes': []}
+            _cache.set('rclone-remotes-full', result)
+            return result
+        first_line = vr.stdout.splitlines()[0] if vr.stdout else ''
+        # e.g. "rclone v1.65.2" → "v1.65.2"
+        version_str = first_line.split()[-1] if first_line else ''
+    except FileNotFoundError:
+        result = {'available': False, 'version': '', 'remotes': []}
+        _cache.set('rclone-remotes-full', result)
+        return result
+    except Exception:
+        result = {'available': False, 'version': '', 'remotes': []}
+        _cache.set('rclone-remotes-full', result)
+        return result
+
+    # ── 2. List remotes ──
+    try:
+        lr = subprocess.run(['rclone', 'listremotes'], capture_output=True, text=True, timeout=5)
+        names = [l.strip().rstrip(':') for l in lr.stdout.splitlines() if l.strip()] if lr.returncode == 0 else []
+    except Exception:
+        names = []
+
+    if not names:
+        result = {'available': True, 'version': version_str, 'remotes': []}
+        _cache.set('rclone-remotes-full', result)
+        return result
+
+    # ── 3. Parallel metadata + quota fetch ──
+    futs = {_pool.submit(_fetch_remote_meta, n): n for n in names}
+    remotes: list = []
+    for fut, name in futs.items():
+        try:
+            remotes.append(fut.result(timeout=14))
+        except Exception:
+            remotes.append({
+                'name': name, 'type': '', 'label': 'Cloud Remote',
+                'icon': 'fas fa-cloud', 'color': '#00c8ff', 'quota': None,
+            })
+
+    result = {'available': True, 'version': version_str, 'remotes': remotes}
+    _cache.set('rclone-remotes-full', result)
+    return result
+
 
 # ── Stats assembly ────────────────────────────────────────────────────────────
 def _collect_system() -> dict:
@@ -980,6 +1140,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path == '/api/settings':
             self._json(read_yaml_settings())
 
+        elif path == '/api/cloud-remotes':
+            try:
+                self._json(get_rclone_remotes())
+            except Exception as e:
+                logger.warning('cloud-remotes error: %s', e)
+                self._json({'available': False, 'version': '', 'remotes': []})
+
         elif path == '/api/stream':
             _bg.update_qs(qs)
             self.send_response(200)
@@ -1026,6 +1193,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     text  = strip_ansi('\n'.join(lines[-30:]))
                 except Exception:
                     text = 'No backup log found.'
+            elif log_type == 'cloud':
+                try:
+                    lines = _read_file(os.path.join(LOG_DIR, 'cloud-backup.log'), 'No cloud backup log found.').splitlines()
+                    text  = strip_ansi('\n'.join(lines[-30:]))
+                except Exception:
+                    text = 'No cloud backup log found.'
             else:
                 text = 'Unknown log type.'
 
@@ -1196,6 +1369,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         _active_job['finished'] = datetime.now().isoformat()
 
             self._json({'success': status == 'done', 'status': status, 'script': script})
+
+        elif path == '/api/cloud-test':
+            body = self._read_body()
+            if body is None:
+                return
+            remote = body.get('remote', '').strip()
+            if not remote or not _REMOTE_NAME_RE.match(remote):
+                self._json({'success': False, 'error': 'Invalid remote name'}, 400)
+                return
+            try:
+                r = subprocess.run(
+                    ['rclone', 'lsd', remote + ':', '--max-depth', '1'],
+                    capture_output=True, text=True, timeout=15,
+                )
+                stderr_clean = r.stderr.strip()
+                # Extract just the first meaningful error line
+                err_line = next(
+                    (l for l in stderr_clean.splitlines() if l.strip() and not l.startswith('NOTICE')),
+                    stderr_clean[:120] if stderr_clean else '',
+                )
+                self._json({'success': r.returncode == 0, 'error': err_line if r.returncode != 0 else ''})
+            except subprocess.TimeoutExpired:
+                self._json({'success': False, 'error': 'Connection timed out (15 s)'})
+            except FileNotFoundError:
+                self._json({'success': False, 'error': 'rclone not found on this system'})
+            except Exception as e:
+                self._json({'success': False, 'error': str(e)})
 
         elif path == '/api/service-control':
             body = self._read_body()

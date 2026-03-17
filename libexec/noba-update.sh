@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # noba-update.sh – Pull latest scripts from git and optionally update system
-# Version: 2.3.0
+# Version: 2.4.0
 
 set -euo pipefail
 
-VERSION="2.3.0"
+VERSION="2.4.0"
 
 # -------------------------------------------------------------------
 # Test harness compliance
@@ -25,7 +25,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=./noba-lib.sh
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 
 # -------------------------------------------------------------------
@@ -57,8 +57,7 @@ show_version() {
 }
 
 show_help() {
-
-cat <<EOF
+    cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
 Pull the latest version of all noba scripts from git and update the system.
@@ -73,8 +72,7 @@ Options:
   --help            Show this help message
   --version         Show version information
 EOF
-
-exit 0
+    exit 0
 }
 
 # -------------------------------------------------------------------
@@ -91,16 +89,44 @@ eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        --repo)      REPO_DIR="$2"; shift 2 ;;
-        --remote)    REMOTE="$2"; shift 2 ;;
-        --branch)    BRANCH="$2"; shift 2 ;;
-        --system)    UPDATE_SYSTEM=true; shift ;;
-        --auto-yes)  AUTO_YES=true; shift ;;
-        --dry-run)   DRY_RUN=true; shift ;;
-        --help)      show_help ;;
-        --version)   show_version ;;
-        --)          shift; break ;;
-        *)           log_error "Internal argument parser error."; exit 1 ;;
+        --repo)
+            REPO_DIR="$2"
+            shift 2
+            ;;
+        --remote)
+            REMOTE="$2"
+            shift 2
+            ;;
+        --branch)
+            BRANCH="$2"
+            shift 2
+            ;;
+        --system)
+            UPDATE_SYSTEM=true
+            shift
+            ;;
+        --auto-yes)
+            AUTO_YES=true
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help)
+            show_help
+            ;;
+        --version)
+            show_version
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            log_error "Internal argument parser error."
+            exit 1
+            ;;
     esac
 done
 
@@ -124,7 +150,6 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 
     # Check for local modifications
     if ! git diff --quiet || ! git diff --cached --quiet; then
-
         log_warn "Uncommitted changes detected in repository."
 
         if [[ "$AUTO_YES" != true && "$DRY_RUN" != true ]]; then
@@ -137,7 +162,6 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if [[ "$DRY_RUN" == true ]]; then
         log_info "[DRY RUN] Would fetch and pull $REMOTE/$BRANCH"
     else
-
         log_info "Fetching updates from $REMOTE..."
         git fetch "$REMOTE" "$BRANCH"
 
@@ -145,7 +169,6 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         if ! git pull --ff-only "$REMOTE" "$BRANCH"; then
             log_warn "Fast-forward pull failed. Manual merge may be required."
         fi
-
     fi
 
 else
@@ -158,36 +181,28 @@ fi
 if [[ "$UPDATE_SYSTEM" == true ]]; then
 
     if command -v dnf >/dev/null 2>&1; then
-
         if [[ "$DRY_RUN" == true ]]; then
             log_info "[DRY RUN] Would run: sudo dnf update"
         else
-
             log_info "Running DNF system update..."
-
             if [[ "$AUTO_YES" == true ]]; then
                 sudo -n dnf update -y || log_warn "DNF update failed or sudo password required."
             else
                 sudo dnf update || log_warn "DNF update failed."
             fi
-
         fi
     fi
 
     if command -v flatpak >/dev/null 2>&1; then
-
         if [[ "$DRY_RUN" == true ]]; then
             log_info "[DRY RUN] Would run: flatpak update"
         else
-
             log_info "Running Flatpak update..."
-
             if [[ "$AUTO_YES" == true ]]; then
                 flatpak update -y || log_warn "Flatpak update failed."
             else
                 flatpak update || log_warn "Flatpak update failed."
             fi
-
         fi
     fi
 fi
@@ -196,7 +211,6 @@ fi
 # Script permissions
 # -------------------------------------------------------------------
 if [[ "$DRY_RUN" != true ]]; then
-
     log_info "Ensuring script permissions..."
 
     find "$REPO_DIR" \
