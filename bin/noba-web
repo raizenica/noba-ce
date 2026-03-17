@@ -1,0 +1,148 @@
+#!/bin/bash
+# Noba Web Launcher (repo version)
+
+set -euo pipefail
+
+# Determine repo root (this script is in repo/bin/)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+LIB_DIR="$REPO_ROOT/lib"
+SHARE_DIR="$REPO_ROOT/share/noba-web"
+
+# Source the functions file (we'll create it next)
+source "$LIB_DIR/noba-web-functions.sh"
+
+# Defaults
+PORT=8080
+HOST="0.0.0.0"
+HTML_DIR="${HTML_DIR:-/tmp/noba-web}"
+SERVER_PID_FILE="${SERVER_PID_FILE:-/tmp/noba-web-server.pid}"
+SERVER_URL_FILE="${SERVER_URL_FILE:-/tmp/noba-web-server.url}"
+LOG_FILE="${LOG_FILE:-/tmp/noba-web.log}"
+KILL_ONLY=false
+RESTART=false
+VERBOSE=false
+SET_PASSWORD=false
+SHOW_STATUS=false
+GEN_SYSTEMD=false
+NOBA_YAML="${NOBA_CONFIG:-$HOME/.config/noba/config.yaml}"
+
+# Source optional config
+CONFIG_FILE="${HOME}/.config/noba-web.conf"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+# Parse arguments
+PARSED_ARGS=$(getopt -o kv -l host:,kill,verbose,help,version,set-password,restart,status,generate-systemd -- "$@" 2>/dev/null) || { log_error "Invalid argument. Run with --help for usage."; exit 1; }
+eval set -- "$PARSED_ARGS"
+
+while true; do
+    case "$1" in
+        --host)              HOST="$2";         shift 2 ;;
+        -k|--kill)           KILL_ONLY=true;    shift   ;;
+        -v|--verbose)        VERBOSE=true;      shift   ;;
+        --set-password)      SET_PASSWORD=true; shift   ;;
+        --restart)           KILL_ONLY=true; RESTART=true; shift ;;
+        --status)            SHOW_STATUS=true;  shift   ;;
+        --generate-systemd)  GEN_SYSTEMD=true;  shift   ;;
+        --help)              show_help; exit 0 ;;
+        --version)           echo "noba-web version 1.0.1"; exit 0 ;;
+        --)                  shift; break ;;
+        *)                   log_error "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
+# Handle special commands
+if [[ "$SHOW_STATUS" == true ]]; then
+    show_status "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$LOG_FILE"
+    exit 0
+fi
+
+if [[ "$GEN_SYSTEMD" == true ]]; then
+    generate_systemd "$0" "$HOST"
+    exit 0
+fi
+
+if [[ "$SET_PASSWORD" == true ]]; then
+    set_password "$NOBA_YAML"
+    exit 0
+fi
+
+if [[ "$KILL_ONLY" == true ]]; then
+    kill_server "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$HTML_DIR"
+    [[ "$RESTART" != true ]] && exit 0
+fi
+
+# Check dependencies
+check_deps python3 yq
+
+# Verify yq is the Go version
+if ! yq --version 2>/dev/null | grep -q "mikefarah"; then
+    log_error "'yq' must be the Go version (mikefarah/yq). Install from https://github.com/mikefarah/yq"
+    exit 1
+fi
+
+# Python version check
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
+if ! awk -v ver="$PYTHON_VERSION" 'BEGIN { split(ver,v,"."); exit !(v[1]>3||(v[1]==3&&v[2]>=7)); }'; then
+    log_error "Python 3.7+ required (found $PYTHON_VERSION)."
+    exit 1
+fi
+
+# Prepare HTML directory and copy static files
+mkdir -p "$HTML_DIR"
+cp "$SHARE_DIR/index.html" "$HTML_DIR/"
+cp "$SHARE_DIR/server.py" "$HTML_DIR/"
+
+# Ensure YAML config exists
+create_default_yaml "$NOBA_YAML"
+
+# Kill any existing server (if restarting)
+if [[ "$RESTART" == true ]]; then
+    kill_server "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$HTML_DIR"
+fi
+
+# Launch server
+export PORT HOST PID_FILE="$SERVER_PID_FILE" NOBA_SCRIPT_DIR="$HOME/.local/bin" NOBA_CONFIG="$NOBA_YAML"
+cd "$HTML_DIR"
+: > "$LOG_FILE"
+
+nohup python3 server.py >> "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+echo "$SERVER_PID" > "$SERVER_PID_FILE"
+
+DISPLAY_IP=$(local_ip)
+echo "http://${DISPLAY_IP}:${PORT}" > "$SERVER_URL_FILE"
+
+# Wait for server to be healthy
+MAX_WAIT=10; WAITED=0
+while true; do
+    if command -v curl &>/dev/null; then
+        CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || true)
+    elif command -v wget &>/dev/null; then
+        CODE=$(wget -qO- "http://127.0.0.1:${PORT}/api/health" 2>/dev/null \
+               | python3 -c "import sys,json; print(200 if json.load(sys.stdin).get('status')=='ok' else 0)" 2>/dev/null || true)
+    else
+        log_error "Neither curl nor wget found."; exit 1
+    fi
+    [[ "$CODE" == "200" ]] && break
+    sleep 1; WAITED=$((WAITED+1))
+    if [[ $WAITED -ge $MAX_WAIT ]]; then
+        log_error "Server did not respond within ${MAX_WAIT}s. Last 20 lines of log:"
+        tail -20 "$LOG_FILE" | sed 's/^/  /' >&2
+        kill "$SERVER_PID" 2>/dev/null || true
+        exit 1
+    fi
+done
+
+log_success "Dashboard live → http://${DISPLAY_IP}:${PORT}"
+
+# If verbose, tail log
+if [[ "$VERBOSE" == true ]]; then
+    log_info "Tailing log (Ctrl+C to stop)…"
+    tail -f "$LOG_FILE" &
+    TAIL_PID=$!
+fi
+
+wait "$SERVER_PID"
+[[ -n "$TAIL_PID" ]] && kill "$TAIL_PID" 2>/dev/null || true
