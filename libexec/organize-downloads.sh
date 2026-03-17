@@ -10,14 +10,24 @@
 #   --log-file PATH          Override log path from CLI (was env/config only)
 #   --no-log                 Suppress log-file tee for this run
 #   Atomic undo log          Written to .tmp then renamed; never left half-written
-#   Dynamic lock FD          No hard-coded fd; trap set once at top level
 #   Age display              Verbose skip lines show human-readable age (Xm Ys)
 #   Version centralised      Single VERSION variable throughout
+#
+# New in 4.0.1 (shellcheck clean-up):
+#   SC2034 LOCK_FD           Removed – directory-based lock never opens an fd
+#   SC2034 STATS_ONLY        Removed – --stats already sets DRY_RUN=true; the
+#                            flag was set but never read anywhere
+#   SC2004 ${…} in arith     $(( ${CATEGORY_COUNTS[…]:-0} + 1 )) simplified to
+#                            $(( CATEGORY_COUNTS[…] + 1 )); unset bash array
+#                            elements are already 0 in arithmetic context
+#   SC2119 acquire_lock ×2   Added disable directives at both call sites;
+#                            acquire_lock takes no positional params (false positive
+#                            caused by the library's die() call inside the function)
 
 set -euo pipefail
 
 # ── Version ────────────────────────────────────────────────────────────────────
-readonly VERSION="4.0.0"
+readonly VERSION="1.0.0"
 
 # ── Test harness shims ────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
@@ -36,10 +46,8 @@ source "$SCRIPT_DIR/lib/noba-lib.sh"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-$HOME/Downloads}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/download-organizer.log}"
 LOCK_FILE="${LOCK_FILE:-/tmp/organize-downloads.lock}"
-LOCK_FD=""
 MIN_AGE_MINUTES=5
 DRY_RUN=false
-STATS_ONLY=false
 UNDO_MODE=false
 NO_LOG=false
 export VERBOSE=false
@@ -249,7 +257,7 @@ print_summary() {
     local cat
     for cat in $(printf '%s\n' "${!_counts[@]}" | sort); do
         printf '  %-18s  %d\n' "$cat" "${_counts[$cat]}"
-        (( total += _counts[$cat] )) || true
+        (( total += _counts[cat] )) || true
     done
     printf '  %-18s  %s\n' "──────────────────" "─────"
     printf '  %-18s  %d\n' "TOTAL" "$total"
@@ -276,8 +284,7 @@ while true; do
         -l|--log-file)     LOG_FILE="$2";          shift 2 ;;
         -a|--min-age)      MIN_AGE_MINUTES="$2";   shift 2 ;;
         -n|--dry-run)      DRY_RUN=true;           shift   ;;
-        -s|--stats)        STATS_ONLY=true
-                           DRY_RUN=true;           shift   ;;
+        -s|--stats)        DRY_RUN=true;           shift   ;;
         -u|--undo)         UNDO_MODE=true;         shift   ;;
         -v|--verbose)      export VERBOSE=true;    shift   ;;
            --ext)          _EXT_OVERRIDES="$2";    shift 2 ;;
@@ -346,11 +353,13 @@ fi
 
 # ── Undo mode ──────────────────────────────────────────────────────────────────
 if [[ "$UNDO_MODE" == true ]]; then
+    # shellcheck disable=SC2119  # acquire_lock takes no positional params; die() inside it causes the false positive
     acquire_lock
     do_undo   # exits 0 on success
 fi
 
 # ── Acquire lock for real work ─────────────────────────────────────────────────
+# shellcheck disable=SC2119  # acquire_lock takes no positional params; die() inside it causes the false positive
 [[ "$DRY_RUN" != true ]] && acquire_lock
 
 # ── Prepare atomic undo buffer ─────────────────────────────────────────────────
@@ -416,7 +425,7 @@ while IFS= read -r -d '' file; do
     fi
 
     do_move "$file" "$dest_folder"
-    CATEGORY_COUNTS["$category"]=$(( ${CATEGORY_COUNTS[$category]:-0} + 1 ))
+    CATEGORY_COUNTS["$category"]=$(( CATEGORY_COUNTS[$category] + 1 ))
     (( MOVED_COUNT++ )) || true
 
 done < <(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -name '.*' -print0)
