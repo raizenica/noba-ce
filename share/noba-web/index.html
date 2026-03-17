@@ -147,20 +147,23 @@
         }
         .alert-dismiss:hover { opacity: 1; }
 
-        /* ── Grid ── */
+        /* ── Grid (Masonry Upgrade) ── */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-            gap: 1.125rem; align-items: start;
+            grid-auto-rows: 10px; /* Tiny rows for granular masonry packing */
+            column-gap: 1.125rem; /* Vertical gap is dynamically added via JS */
+            align-items: start;
         }
         .span-full { grid-column: 1 / -1; }
 
-        /* ── Card (Shadows upgraded, Sortable.js safe) ── */
+        /* ── Card (Shadows upgraded, Masonry compatible) ── */
         .card {
             background: var(--surface); border: 1px solid var(--border);
             border-top: 2px solid var(--accent); border-radius: 6px;
-            overflow: hidden; transition: box-shadow .2s; /* No transform transition! */
+            overflow: hidden; transition: box-shadow .2s;
             box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            align-self: start; /* Prevents the card from stretching to fill the grid row span */
         }
         .card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.4), 0 0 15px var(--accent-glow); }
         .card-hdr {
@@ -297,18 +300,19 @@
             font-family: var(--font-data); font-size: .73rem; color: var(--text-muted);
             white-space: pre-wrap; overflow-y: auto; max-height: 215px;
             border: 1px solid var(--border); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+            scroll-behavior: smooth;
         }
 
         /* ── Sortable ── */
         .sortable-ghost { opacity: .25; border: 1px dashed var(--accent) !important; background: var(--accent-dim); }
         .sortable-drag  { box-shadow: 0 20px 55px rgba(0,0,0,.8) !important; z-index: 100; }
 
-        /* ── Modal ── */
+        /* ── Modal (Widened and wrapped) ── */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.82); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 50; }
         .modal-box {
             background: var(--surface); border: 1px solid var(--border);
             border-top: 3px solid var(--accent); border-radius: 8px;
-            width: 92%; max-width: 820px; padding: 1.75rem;
+            width: 95%; max-width: 940px; padding: 1.75rem; /* Increased max-width */
             max-height: 90vh; overflow-y: auto; box-shadow: 0 15px 50px rgba(0,0,0,0.5);
         }
         .modal-title { font-size: .9rem; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 1.125rem; display: flex; align-items: center; gap: .7rem; }
@@ -317,6 +321,7 @@
             font-family: var(--font-data); font-size: .76rem;
             max-height: 50vh; overflow-y: auto; white-space: pre-wrap;
             border: 1px solid var(--border); box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);
+            scroll-behavior: smooth;
         }
         .modal-footer { display: flex; justify-content: flex-end; margin-top: 1.25rem; }
 
@@ -340,13 +345,14 @@
         .toggle-item input[type=checkbox]:checked { background: var(--accent-dim); border-color: var(--accent); }
         .toggle-item input[type=checkbox]:checked::after { background: var(--accent); transform: translateX(14px); box-shadow: 0 0 8px var(--accent-glow); }
 
-        .field-2 { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-bottom: .75rem; }
+        .field-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .75rem; margin-bottom: .75rem; }
         .field-label { display: block; font-size: .65rem; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: .28rem; }
         .field-input {
             width: 100%; background: var(--surface-2); color: var(--text);
             border: 1px solid var(--border); border-radius: 5px;
             padding: .48rem .7rem; font-family: var(--font-data); font-size: .8rem;
             outline: none; transition: border-color .15s, box-shadow .15s;
+            word-wrap: break-word; white-space: pre-wrap; /* Wrap long strings safely */
         }
         .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
         .settings-footer { display: flex; justify-content: flex-end; gap: .7rem; margin-top: 1.5rem; }
@@ -709,11 +715,10 @@
             <div style="display:flex;flex-direction:column;gap:.7rem">
                 <div><label class="field-label">Services (comma-separated)</label><input class="field-input" type="text" x-model="monitoredServices"></div>
                 <div><label class="field-label">Radar IPs (comma-separated)</label><input class="field-input" type="text" x-model="radarIps"></div>
-                <div><label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label><textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea></div>
+                <div><label class="field-label">Bookmarks (Name | URL | fa-icon, comma-separated)</label><textarea class="field-input" x-model="bookmarksStr" style="height:72px;"></textarea></div>
             </div>
         </div>
 
-        <!-- Admin section – only visible to admin users -->
         <div class="s-section" x-show="userRole === 'admin'">
             <span class="s-label">User Management</span>
             <div style="margin-bottom: 1rem;">
@@ -721,7 +726,6 @@
                 <button class="btn btn-sm btn-primary" @click="showAddUserForm = true" style="width:auto;"><i class="fas fa-plus"></i> Add User</button>
             </div>
 
-            <!-- Add user form (collapsible) -->
             <div x-show="showAddUserForm" style="margin-bottom: 1rem; padding: 1rem; background: var(--surface-2); border-radius: 4px;">
                 <div class="field-2">
                     <div><label class="field-label">Username</label><input class="field-input" type="text" x-model="newUsername" placeholder="username"></div>
@@ -738,7 +742,6 @@
                 </div>
             </div>
 
-            <!-- User list table -->
             <table class="user-table">
                 <thead>
                     <tr><th>Username</th><th>Role</th><th>Actions</th></tr>
@@ -800,18 +803,18 @@
 <script>
 function dashboard() {
     const DEF_VIS = { core:true, netio:true, hw:true, battery:true, pihole:true, storage:true, radar:true, procs:true, containers:true, services:true, logs:true, actions:true, bookmarks:true };
-    const DEF_BOOKMARKS = 'TrueNAS (vnnas)|http://vnnas.vannieuwenhove.org|fa-server, TrueNAS (vdhnas)|http://vdhnas.vannieuwenhove.org|fa-server, Pi-Hole|http://dnsa01.vannieuwenhove.org/admin|fa-shield-alt, Home Assistant|http://homeassistant.local:8123|fa-home, ROMM|http://romm.local|fa-gamepad, Prowlarr|http://localhost:9696|fa-search, ASUS Router|http://192.168.100.1|fa-network-wired';
+    const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt';
     const savedTheme = localStorage.getItem('noba-theme');
     const autoTheme  = savedTheme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'nord' : 'default');
 
     return {
         theme: autoTheme,
         vis:   { ...DEF_VIS, ...JSON.parse(localStorage.getItem('noba-vis') || '{}') },
-        piholeUrl:         localStorage.getItem('noba-pihole')    || 'dnsa01.vannieuwenhove.org',
+        piholeUrl:         localStorage.getItem('noba-pihole')    || '',
         piholeToken:       localStorage.getItem('noba-pihole-tok')|| '',
         bookmarksStr:      localStorage.getItem('noba-bookmarks') || DEF_BOOKMARKS,
-        monitoredServices: localStorage.getItem('noba-services')  || 'backup-to-nas.service, organize-downloads.service, sshd, podman, syncthing.service',
-        radarIps:          localStorage.getItem('noba-radar')     || '192.168.100.1, 1.1.1.1, 8.8.8.8',
+        monitoredServices: localStorage.getItem('noba-services')  || 'sshd, docker, NetworkManager',
+        radarIps:          localStorage.getItem('noba-radar')     || '192.168.1.1, 1.1.1.1, 8.8.8.8',
 
         timestamp:'--:--', uptime:'--', loadavg:'--', memory:'--', hostname:'--', defaultIp:'--',
         memPercent:0, cpuPercent:0, cpuHistory:[], cpuTemp:'N/A', gpuTemp:'N/A',
@@ -823,7 +826,7 @@ function dashboard() {
         selectedLog:'syserr', logContent:'Loading...', logLoading:false,
         showModal:false, showSettings:false,
         modalTitle:'', modalOutput:'', runningScript:false, refreshing:false,
-        toasts:[], _es:null, _poll:null,
+        toasts:[], _es:null, _poll:null, _lastHeartbeat: 0,
 
         authenticated: !!localStorage.getItem('noba-token'),
         loginUsername: '', loginPassword: '', loginLoading: false, loginError: '',
@@ -852,7 +855,7 @@ function dashboard() {
             return 'Offline';
         },
         get parsedBookmarks() {
-            return (this.bookmarksStr||'').split(',').map(b => {
+            return (this.bookmarksStr||'').split(',').filter(b=>b.trim()).map(b => {
                 const p = b.split('|');
                 return { name:(p[0]||'Link').trim(), url:(p[1]||'#').trim(), icon:(p[2]||'fa-link').trim() };
             });
@@ -872,6 +875,7 @@ function dashboard() {
         async init() {
             this.initSortable();
             this.initKeyboard();
+            this.initMasonry();
             if (this.authenticated) {
                 await this.fetchUserInfo();
                 await this.fetchSettings();
@@ -881,17 +885,32 @@ function dashboard() {
                 setInterval(() => { if (this.vis.logs) this.fetchLog(); }, 12000);
 
                 setInterval(() => {
-                    if (this.connStatus === 'sse' && this.timestamp && this.timestamp !== '--:--') {
-                        const [h, m, s] = this.timestamp.split(':').map(Number);
-                        const lastUpdate = new Date();
-                        lastUpdate.setHours(h, m, s);
-                        if (Date.now() - lastUpdate.getTime() > 15000 && Date.now() - lastUpdate.getTime() < 86000) {
+                    // Watchdog: If SSE is "connected" but we haven't received a local pulse in 15s, force reconnect.
+                    if (this.connStatus === 'sse' && this._lastHeartbeat) {
+                        if (Date.now() - this._lastHeartbeat > 15000) {
                             console.warn("SSE heartbeat lost. Reconnecting...");
                             this.connectSSE();
                         }
                     }
                 }, 5000);
             }
+        },
+
+        initMasonry() {
+            const observer = new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    const card = entry.target;
+                    if (card.style.display === 'none') continue;
+                    // Card has align-self: start, so its height is perfectly content-driven.
+                    // We add 18px to simulate the vertical gap, then divide by the 10px grid rows.
+                    const height = card.getBoundingClientRect().height;
+                    const rowSpan = Math.ceil((height + 18) / 10);
+                    card.style.gridRowEnd = `span ${rowSpan}`;
+                }
+            });
+            this.$nextTick(() => {
+                document.querySelectorAll('.card').forEach(c => observer.observe(c));
+            });
         },
 
         async fetchUserInfo() {
@@ -935,11 +954,17 @@ function dashboard() {
             if (this._es)   { this._es.close();           this._es   = null; }
             if (this._poll) { clearInterval(this._poll);  this._poll = null; }
             this._stopCountdown();
+            this._lastHeartbeat = Date.now();
             const token = localStorage.getItem('noba-token');
             const qs = `services=${encodeURIComponent(this.monitoredServices)}&radar=${encodeURIComponent(this.radarIps)}&pihole=${encodeURIComponent(this.piholeUrl)}&piholetok=${encodeURIComponent(this.piholeToken)}&token=${encodeURIComponent(token)}`;
             this._es = new EventSource(`/api/stream?${qs}`);
-            this._es.onopen    = () => { this.connStatus = 'sse'; this._stopCountdown(); };
-            this._es.onmessage = (e) => { try { Object.assign(this, JSON.parse(e.data)); } catch {} };
+            this._es.onopen    = () => { this.connStatus = 'sse'; this._stopCountdown(); this._lastHeartbeat = Date.now(); };
+            this._es.onmessage = (e) => {
+                try {
+                    Object.assign(this, JSON.parse(e.data));
+                    this._lastHeartbeat = Date.now(); // Track locally instead of relying on Python timestamp string
+                } catch {}
+            };
             this._es.onerror   = () => {
                 this._es.close(); this._es = null;
                 this.connStatus = 'polling';
@@ -1023,7 +1048,14 @@ function dashboard() {
             const token = localStorage.getItem('noba-token');
             try {
                 const res = await fetch('/api/log-viewer?type=' + this.selectedLog, { headers: { 'Authorization': 'Bearer ' + token } });
-                if (res.ok) this.logContent = await res.text();
+                if (res.ok) {
+                    this.logContent = await res.text();
+                    // Auto-scroll to bottom of the log viewer if it updates
+                    this.$nextTick(() => {
+                        const el = document.querySelector('.log-pre');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    });
+                }
                 else if (res.status === 401) this.authenticated = false;
             } catch { this.logContent = 'Failed to fetch log.'; }
             finally  { this.logLoading = false; }
@@ -1074,7 +1106,11 @@ function dashboard() {
                 clearInterval(poll);
                 try {
                     const r = await fetch('/api/action-log', { headers: { 'Authorization': 'Bearer ' + token } });
-                    if (r.ok) this.modalOutput = await r.text();
+                    if (r.ok) {
+                        this.modalOutput = await r.text();
+                        const el = document.getElementById('console-out');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    }
                 } catch {}
                 this.runningScript = false;
                 await this.refreshStats();

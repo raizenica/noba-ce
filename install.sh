@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh – Smart installer for Nobara Automation Suite
-# Version: 3.1.0
+# Version: 3.1.1
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Usage: install.sh [OPTIONS]"; exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "install.sh version 3.1.0"; exit 0
+    echo "install.sh version 3.1.1"; exit 0
 fi
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
@@ -300,7 +300,7 @@ while [[ $# -gt 0 ]]; do
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
         -h|--help)         show_help ;;
-        -v|--version)      echo "install.sh version 3.1.0"; exit 0 ;;
+        -v|--version)      echo "install.sh version 3.1.1"; exit 0 ;;
         *) say_err "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -308,7 +308,7 @@ done
 [[ "$UNINSTALL" == true ]] && do_uninstall
 
 # ── Begin install ─────────────────────────────────────────────────────────────
-header "Nobara Automation Suite Installer v3.1.0"
+header "Nobara Automation Suite Installer v3.1.1"
 
 detect_os
 say "OS: $OS_NAME ($OS_ID${OS_VERSION:+ $OS_VERSION})"
@@ -424,6 +424,7 @@ if [[ -f "$src" ]]; then
         say_ok "noba-web (standalone launcher)"
     fi
 fi
+
 # 5. Install Man Page
 if [[ -f "$SCRIPT_DIR/docs/noba.1" ]]; then
     if [[ "$DRY_RUN" == true ]]; then dry "cp docs/noba.1 → $MAN_DIR/"; else
@@ -449,7 +450,7 @@ logs:
   dir: "$HOME/.local/share/noba"
 
 backup:
-  dest: "/mnt/vnnas/backups/raizen"
+  dest: "$HOME/backups"
   retention_days: 7
   keep_count: 3
   sources:
@@ -458,7 +459,7 @@ backup:
     - "$HOME/.config"
 
 cloud:
-  remote: "mycloud:backups/raizen"
+  remote: "mycloud:backups/$USER"
 
 disk:
   threshold: 85

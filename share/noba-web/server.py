@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nobara Command Center – Backend v1.2.0 (multi‑user)"""
+"""Nobara Command Center – Backend v1.2.1 (multi‑user & generic)"""
 
 import glob
 import hashlib
@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VERSION        = '1.2.0'
+VERSION        = '1.2.1'
 PORT           = int(os.environ.get('PORT', 8080))
 HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
@@ -34,7 +34,7 @@ LOG_DIR        = os.path.expanduser('~/.local/share')
 PID_FILE       = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
 ACTION_LOG     = '/tmp/noba-action.log'
 AUTH_CONFIG    = os.path.expanduser('~/.config/noba-web/auth.conf')
-USER_DB        = os.path.expanduser('~/.config/noba-web/users.conf')   # new multi‑user file
+USER_DB        = os.path.expanduser('~/.config/noba-web/users.conf')
 NOBA_YAML      = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
 MAX_BODY_BYTES = 64 * 1024  # 64 KiB – guard against oversized POST bodies
 TOKEN_TTL_H    = 24
@@ -100,19 +100,28 @@ def load_users():
                         username, hashval, role = parts
                         new_db[username] = (hashval, role)
         except Exception as e:
-            logger.error(f"Failed to load users: {e}")
+            logger.error("Failed to load users: %s", e)
     with users_db_lock:
         users_db = new_db
 
 def save_users():
-    """Write users_db back to USER_DB."""
+    """Write users_db back to USER_DB atomically to prevent corruption."""
     with users_db_lock:
+        tmp_db = USER_DB + '.tmp'
         try:
-            with open(USER_DB, 'w') as f:
+            os.makedirs(os.path.dirname(USER_DB), exist_ok=True)
+            with open(tmp_db, 'w') as f:
                 for username, (hashval, role) in users_db.items():
                     f.write(f"{username}:{hashval}:{role}\n")
+            os.chmod(tmp_db, 0o600)
+            os.replace(tmp_db, USER_DB)
         except Exception as e:
-            logger.error(f"Failed to save users: {e}")
+            logger.error("Failed to save users: %s", e)
+            if os.path.exists(tmp_db):
+                try:
+                    os.unlink(tmp_db)
+                except OSError:
+                    pass
 
 # Load users at startup
 load_users()

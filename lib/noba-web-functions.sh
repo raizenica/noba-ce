@@ -80,7 +80,7 @@ _read_pid() {
 # Usage: kill_server <pid_file> <url_file> <html_dir>
 #
 # html_dir is removed only after a strict safety check — it must be a
-# non-empty path that is neither / nor any well-known system directory.
+# non-empty path that strictly resides in /tmp/ or /var/tmp/.
 kill_server() {
     local pid_file="$1" url_file="$2" html_dir="$3"
 
@@ -108,12 +108,13 @@ kill_server() {
         rm -f "$pid_file" "$url_file"
     fi
 
-    # Guard: only remove html_dir if it looks like a safe temp path.
+    # Guard: only remove html_dir if it strictly looks like a safe temp path.
     if [[ -n "$html_dir" && "$html_dir" != "/" ]] && \
-       [[ "$html_dir" =~ ^(/tmp/|/var/tmp/|$HOME/) ]]; then
+       [[ "$html_dir" =~ ^(/tmp/|/var/tmp/) ]]; then
+        log_info "Cleaning up ephemeral sandbox: $html_dir"
         rm -rf "$html_dir"
     elif [[ -n "$html_dir" && -d "$html_dir" ]]; then
-        log_warn "html_dir '$html_dir' is outside expected locations — skipping removal."
+        log_warn "html_dir '$html_dir' is outside expected ephemeral locations — skipping removal."
     fi
 }
 
@@ -231,7 +232,8 @@ set_password() {
 
     # Hash the password with PBKDF2-SHA256 (200k rounds) via Python.
     # Arguments are passed as positional params — never interpolated into code.
-    (umask 077; python3 - "$auth_dir/auth.conf" "$username" "$password" <<'PYEOF'
+    local tmp_auth="$auth_dir/auth.conf.tmp"
+    (umask 077; python3 - "$tmp_auth" "$username" "$password" <<'PYEOF'
 import hashlib, secrets, sys
 auth_file = sys.argv[1]
 username  = sys.argv[2]
@@ -243,6 +245,7 @@ with open(auth_file, 'w') as f:
     f.write(f'{username}:{hstr}:admin\n')
 PYEOF
     )
+    mv "$tmp_auth" "$auth_dir/auth.conf"
 
     log_success "Credentials saved to $auth_dir/auth.conf  (PBKDF2-SHA256, 200k rounds)"
     create_default_yaml "$yaml_file"
@@ -343,9 +346,11 @@ EOF
 NOBA_USER_DB="${NOBA_USER_DB:-$HOME/.config/noba-web/users.conf}"
 
 init_user_db() {
-    mkdir -p "$(dirname "$NOBA_USER_DB")"
-    touch "$NOBA_USER_DB"
-    chmod 600 "$NOBA_USER_DB"
+    if [[ ! -f "$NOBA_USER_DB" ]]; then
+        mkdir -p "$(dirname "$NOBA_USER_DB")"
+        touch "$NOBA_USER_DB"
+        chmod 600 "$NOBA_USER_DB"
+    fi
 }
 
 add_user() {
@@ -364,7 +369,13 @@ salt = secrets.token_hex(16)
 dk = hashlib.pbkdf2_hmac('sha256', sys.argv[1].encode(), salt.encode(), 200000)
 print('pbkdf2:' + salt + ':' + dk.hex())
 " "$password")
-    echo "$username:$hash:$role" >> "$NOBA_USER_DB"
+
+    # Atomic save
+    touch "$NOBA_USER_DB.tmp"
+    chmod 600 "$NOBA_USER_DB.tmp"
+    cp "$NOBA_USER_DB" "$NOBA_USER_DB.tmp"
+    echo "$username:$hash:$role" >> "$NOBA_USER_DB.tmp"
+    mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
     log_success "User '$username' added with role '$role'."
 }
 
@@ -390,6 +401,10 @@ remove_user() {
         log_error "User '$username' not found."
         return 1
     fi
+
+    # Atomic save
+    touch "$NOBA_USER_DB.tmp"
+    chmod 600 "$NOBA_USER_DB.tmp"
     grep -v "^$username:" "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
     mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
     log_success "User '$username' removed."
@@ -414,6 +429,10 @@ dk = hashlib.pbkdf2_hmac('sha256', sys.argv[1].encode(), salt.encode(), 200000)
 print('pbkdf2:' + salt + ':' + dk.hex())
 " "$password")
     role=$(grep "^$username:" "$NOBA_USER_DB" | cut -d: -f3)
+
+    # Atomic save
+    touch "$NOBA_USER_DB.tmp"
+    chmod 600 "$NOBA_USER_DB.tmp"
     grep -v "^$username:" "$NOBA_USER_DB" > "$NOBA_USER_DB.tmp"
     echo "$username:$hash:$role" >> "$NOBA_USER_DB.tmp"
     mv "$NOBA_USER_DB.tmp" "$NOBA_USER_DB"
