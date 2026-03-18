@@ -318,9 +318,13 @@ function dashboard() {
                     card.style.gridRowEnd = `span ${rowSpan}`;
                 }
             });
-            this.$nextTick(() => {
+            // Use rAF (not $nextTick) so the browser has finished painting the
+            // layout after x-cloak is removed from the grid — otherwise
+            // getBoundingClientRect() returns 0 for all cards and every card
+            // collapses to a 20px strip that gets covered by later cards.
+            requestAnimationFrame(() => requestAnimationFrame(() => {
                 document.querySelectorAll('.card').forEach(c => this._masonryObserver.observe(c));
-            });
+            }));
         },
 
         initSortable() {
