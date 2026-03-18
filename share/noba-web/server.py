@@ -77,7 +77,17 @@ WEB_KEYS = frozenset([
     'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap', 'truenasUrl', 'truenasKey',
     'radarrUrl', 'radarrKey', 'sonarrUrl', 'sonarrKey', 'qbitUrl', 'qbitUser', 'qbitPass',
     'customActions', 'automations', 'wanTestIp', 'lanTestIp',
-    'alertRules'
+    'alertRules',
+    'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName', 'proxmoxTokenValue',
+    # Notification channel flat keys (mapped to notifications.* in YAML)
+    'pushoverEnabled', 'pushoverAppToken', 'pushoverUserKey',
+    'gotifyEnabled',   'gotifyUrl',        'gotifyAppToken',
+])
+
+# Keys that map to notifications.* in config.yaml; excluded from web: YAML block
+_NOTIF_WEB_KEYS = frozenset([
+    'pushoverEnabled', 'pushoverAppToken', 'pushoverUserKey',
+    'gotifyEnabled',   'gotifyUrl',        'gotifyAppToken',
 ])
 
 _server_start_time = time.time()
@@ -327,7 +337,9 @@ def read_yaml_settings() -> dict:
         'sonarrUrl': '', 'sonarrKey': '', 'qbitUrl': '', 'qbitUser': '', 'qbitPass': '',
         'customActions': [], 'automations': [], 'wanTestIp': '8.8.8.8', 'lanTestIp': '',
         'notifications': {},
-        'alertRules': []
+        'alertRules': [],
+        'pushoverEnabled': False, 'pushoverAppToken': '', 'pushoverUserKey': '',
+        'gotifyEnabled': False,   'gotifyUrl': '',        'gotifyAppToken': '',
     }
     if not os.path.exists(NOBA_YAML): return defaults
     try:
@@ -347,6 +359,14 @@ def read_yaml_settings() -> dict:
                 if 'dir' in downloads: defaults['downloadsDir'] = downloads['dir']
                 notif = full_conf.get('notifications', {})
                 if notif: defaults['notifications'] = notif
+                push = notif.get('pushover', {})
+                defaults['pushoverEnabled']  = bool(push.get('enabled', False))
+                defaults['pushoverAppToken'] = str(push.get('app_token', ''))
+                defaults['pushoverUserKey']  = str(push.get('user_key', ''))
+                got = notif.get('gotify', {})
+                defaults['gotifyEnabled']  = bool(got.get('enabled', False))
+                defaults['gotifyUrl']      = str(got.get('url', ''))
+                defaults['gotifyAppToken'] = str(got.get('app_token', ''))
                 rules = full_conf.get('alertRules')
                 if rules is not None: defaults['alertRules'] = rules
     except Exception: pass
@@ -358,10 +378,25 @@ def write_yaml_settings(settings: dict) -> bool:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
-                if k not in WEB_KEYS: continue
+                if k not in WEB_KEYS or k in _NOTIF_WEB_KEYS: continue
                 tmp.write(f'  {k}: {json.dumps(v if isinstance(v, (str, list, dict)) else str(v))}\n')
             if 'alertRules' in settings:
                 tmp.write(f'alertRules: {json.dumps(settings["alertRules"])}\n')
+            # Map flat pushover/gotify keys → notifications.* YAML section
+            has_push = any(k in settings for k in ('pushoverEnabled', 'pushoverAppToken', 'pushoverUserKey'))
+            has_got  = any(k in settings for k in ('gotifyEnabled', 'gotifyUrl', 'gotifyAppToken'))
+            if has_push or has_got:
+                tmp.write('notifications:\n')
+                if has_push:
+                    tmp.write('  pushover:\n')
+                    tmp.write(f'    enabled: {json.dumps(bool(settings.get("pushoverEnabled", False)))}\n')
+                    tmp.write(f'    app_token: {json.dumps(str(settings.get("pushoverAppToken", "")))}\n')
+                    tmp.write(f'    user_key: {json.dumps(str(settings.get("pushoverUserKey", "")))}\n')
+                if has_got:
+                    tmp.write('  gotify:\n')
+                    tmp.write(f'    enabled: {json.dumps(bool(settings.get("gotifyEnabled", False)))}\n')
+                    tmp.write(f'    url: {json.dumps(str(settings.get("gotifyUrl", "")))}\n')
+                    tmp.write(f'    app_token: {json.dumps(str(settings.get("gotifyAppToken", "")))}\n')
             tmp_path = tmp.name
 
         if os.path.exists(NOBA_YAML):
@@ -519,29 +554,20 @@ def evaluate_alert_rules(stats: dict):
             logger.error(f"Error evaluating rule {rule.get('id')}: {e}")
 
 def _dispatch_notifications(level: str, msg: str, notif_cfg: dict, channels: list = None):
-    if not channels:
-        email = notif_cfg.get('email', {})
-        if email.get('enabled'): _send_email(level, msg, email)
-        tg = notif_cfg.get('telegram', {})
-        if tg.get('enabled'): _send_telegram(level, msg, tg)
-        dc = notif_cfg.get('discord', {})
-        if dc.get('enabled'): _send_discord(level, msg, dc)
-        sl = notif_cfg.get('slack', {})
-        if sl.get('enabled'): _send_slack(level, msg, sl)
-    else:
-        for ch in channels:
-            if ch == 'email':
-                email = notif_cfg.get('email', {})
-                if email.get('enabled'): _send_email(level, msg, email)
-            elif ch == 'telegram':
-                tg = notif_cfg.get('telegram', {})
-                if tg.get('enabled'): _send_telegram(level, msg, tg)
-            elif ch == 'discord':
-                dc = notif_cfg.get('discord', {})
-                if dc.get('enabled'): _send_discord(level, msg, dc)
-            elif ch == 'slack':
-                sl = notif_cfg.get('slack', {})
-                if sl.get('enabled'): _send_slack(level, msg, sl)
+    _senders = {
+        'email':    (notif_cfg.get('email',    {}), _send_email),
+        'telegram': (notif_cfg.get('telegram', {}), _send_telegram),
+        'discord':  (notif_cfg.get('discord',  {}), _send_discord),
+        'slack':    (notif_cfg.get('slack',    {}), _send_slack),
+        'pushover': (notif_cfg.get('pushover', {}), _send_pushover),
+        'gotify':   (notif_cfg.get('gotify',   {}), _send_gotify),
+    }
+    targets = channels if channels else list(_senders.keys())
+    for ch in targets:
+        cfg_fn = _senders.get(ch)
+        if cfg_fn:
+            ch_cfg, fn = cfg_fn
+            if ch_cfg.get('enabled'): fn(level, msg, ch_cfg)
 
 def _send_email(level, msg, cfg):
     try:
@@ -592,6 +618,48 @@ def _send_slack(level, msg, cfg):
             urllib.request.urlopen(req, timeout=5)
             logger.info(f"Sent Slack notification: {msg}")
     except Exception as e: logger.error(f"Slack notification failed: {e}")
+
+def _send_pushover(level, msg, cfg):
+    try:
+        app_token = cfg.get('app_token', '')
+        user_key  = cfg.get('user_key',  '')
+        if app_token and user_key:
+            priority = '1' if level in ('danger', 'critical') else '0'
+            data = urllib.parse.urlencode({
+                'token':    app_token,
+                'user':     user_key,
+                'title':    f'NOBA {level.upper()} Alert',
+                'message':  msg,
+                'priority': priority,
+            }).encode()
+            req = urllib.request.Request(
+                'https://api.pushover.net/1/messages.json',
+                data=data,
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            )
+            urllib.request.urlopen(req, timeout=5)
+            logger.info(f"Sent Pushover notification: {msg}")
+    except Exception as e: logger.error(f"Pushover notification failed: {e}")
+
+def _send_gotify(level, msg, cfg):
+    try:
+        url   = cfg.get('url', '').rstrip('/')
+        token = cfg.get('app_token', '')
+        if url and token:
+            priority = 8 if level in ('danger', 'critical') else 5
+            payload  = json.dumps({
+                'title':    f'NOBA {level.upper()} Alert',
+                'message':  msg,
+                'priority': priority,
+            }).encode()
+            req = urllib.request.Request(
+                f'{url}/message?token={token}',
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+            )
+            urllib.request.urlopen(req, timeout=5)
+            logger.info(f"Sent Gotify notification: {msg}")
+    except Exception as e: logger.error(f"Gotify notification failed: {e}")
 
 def send_notification(level: str, msg: str, category: str = None) -> None:
     cfg = read_yaml_settings()
@@ -832,15 +900,76 @@ def get_containers() -> list:
             for c in items[:16]:
                 name = c.get('Names', c.get('Name', '?'))
                 if isinstance(name, list): name = name[0] if name else '?'
+                cid = (c.get('Id', c.get('ID', '')) or '')[:12]
                 res.append({
-                    'name': name,
-                    'image': c.get('Image', c.get('Repository', '?')).split('/')[-1][:32],
-                    'state': (c.get('State', c.get('Status', '?')) or '?').lower().split()[0],
-                    'status': c.get('Status', (c.get('State', '?')) or '?').lower().split()[0]
+                    'id':     cid,
+                    'name':   name,
+                    'image':  c.get('Image', c.get('Repository', '?')).split('/')[-1][:32],
+                    'state':  (c.get('State',  c.get('Status',  '?')) or '?').lower().split()[0],
+                    'status': (c.get('Status', c.get('State',   '?')) or '?').lower().split()[0],
                 })
             return res
         except Exception: continue
     return []
+
+
+def get_proxmox(url: str, user: str, token_name: str, token_value: str) -> dict | None:
+    """Fetch nodes, VMs and LXC containers from a Proxmox VE API."""
+    if not url or not user or not token_name or not token_value: return None
+    base   = url.rstrip('/')
+    # Build PVE API token header: PVEAPIToken=USER@REALM!TOKENID=UUID
+    user_full = user if '@' in user else f'{user}@pam'
+    auth_hdr  = f'PVEAPIToken={user_full}!{token_name}={token_value}'
+    hdrs      = {'Authorization': auth_hdr, 'Accept': 'application/json'}
+    result    = {'nodes': [], 'vms': [], 'status': 'offline'}
+    try:
+        req = urllib.request.Request(f'{base}/api2/json/nodes', headers=hdrs)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            nodes_data = json.loads(r.read().decode()).get('data', [])
+        for node in nodes_data:
+            node_name = node.get('node', 'unknown')
+            maxmem    = node.get('maxmem', 1) or 1
+            result['nodes'].append({
+                'name':        node_name,
+                'status':      node.get('status', 'unknown'),
+                'cpu':         round(node.get('cpu', 0) * 100, 1),
+                'mem_percent': round(node.get('mem', 0) / maxmem * 100, 1),
+            })
+            # QEMU VMs
+            try:
+                req2 = urllib.request.Request(f'{base}/api2/json/nodes/{node_name}/qemu', headers=hdrs)
+                with urllib.request.urlopen(req2, timeout=4) as r2:
+                    for vm in json.loads(r2.read().decode()).get('data', [])[:30]:
+                        mmem = vm.get('maxmem', 1) or 1
+                        result['vms'].append({
+                            'vmid':        vm.get('vmid'),
+                            'name':        vm.get('name', f"vm-{vm.get('vmid')}"),
+                            'type':        'qemu',
+                            'node':        node_name,
+                            'status':      vm.get('status', 'unknown'),
+                            'cpu':         round(vm.get('cpu', 0) * 100, 1),
+                            'mem_percent': round(vm.get('mem', 0) / mmem * 100, 1),
+                        })
+            except Exception: pass
+            # LXC containers
+            try:
+                req3 = urllib.request.Request(f'{base}/api2/json/nodes/{node_name}/lxc', headers=hdrs)
+                with urllib.request.urlopen(req3, timeout=4) as r3:
+                    for ct in json.loads(r3.read().decode()).get('data', [])[:30]:
+                        mmem = ct.get('maxmem', 1) or 1
+                        result['vms'].append({
+                            'vmid':        ct.get('vmid'),
+                            'name':        ct.get('name', f"lxc-{ct.get('vmid')}"),
+                            'type':        'lxc',
+                            'node':        node_name,
+                            'status':      ct.get('status', 'unknown'),
+                            'cpu':         round(ct.get('cpu', 0) * 100, 1),
+                            'mem_percent': round(ct.get('mem', 0) / mmem * 100, 1),
+                        })
+            except Exception: pass
+        result['status'] = 'online'
+    except Exception: pass
+    return result
 
 # ── Stats assembly ────────────────────────────────────────────────────────────
 def _collect_system() -> dict:
@@ -974,7 +1103,8 @@ def _build_alerts(stats: dict) -> list:
                 send_notification(level, f"TrueNAS: {alert.get('text')}", category=f"tn_alert_{alert.get('text')[:20]}")
     return alerts
 
-_pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix='noba-worker')
+_WORKER_THREADS = int(os.environ.get('NOBA_WORKER_THREADS', 24))
+_pool = ThreadPoolExecutor(max_workers=_WORKER_THREADS, thread_name_prefix='noba-worker')
 
 def collect_stats(qs: dict) -> dict:
     stats: dict = {'timestamp': datetime.now().strftime('%H:%M:%S')}
@@ -1005,6 +1135,10 @@ def collect_stats(qs: dict) -> dict:
     qbit_url = cfg.get('qbitUrl',    '')
     qbit_user= cfg.get('qbitUser',   '')
     qbit_pass= cfg.get('qbitPass',   '')
+    pmx_url  = cfg.get('proxmoxUrl',        '')
+    pmx_user = cfg.get('proxmoxUser',       '')
+    pmx_tname= cfg.get('proxmoxTokenName',  '')
+    pmx_tval = cfg.get('proxmoxTokenValue', '')
 
     wan_ip   = cfg.get('wanTestIp', '')
     lan_ip   = cfg.get('lanTestIp', '')
@@ -1026,10 +1160,11 @@ def collect_stats(qs: dict) -> dict:
     kuma_fut  = _pool.submit(get_kuma, kuma_url) if kuma_url else None
     ct_fut    = _pool.submit(get_containers)
 
-    tn_fut    = _pool.submit(get_truenas, tn_url, tn_key) if tn_url else None
+    tn_fut    = _pool.submit(get_truenas,  tn_url, tn_key) if tn_url else None
     rad_fut   = _pool.submit(get_servarr, rad_url, rad_key) if rad_url else None
     son_fut   = _pool.submit(get_servarr, son_url, son_key) if son_url else None
     qbit_fut  = _pool.submit(get_qbit, qbit_url, qbit_user, qbit_pass) if qbit_url else None
+    pmx_fut   = _pool.submit(get_proxmox, pmx_url, pmx_user, pmx_tname, pmx_tval) if pmx_url else None
 
     services = []
     for fut, svc in svc_futs.items():
@@ -1077,6 +1212,9 @@ def collect_stats(qs: dict) -> dict:
 
     try: stats['qbit'] = qbit_fut.result(timeout=5) if qbit_fut else None
     except Exception: stats['qbit'] = None
+
+    try: stats['proxmox'] = pmx_fut.result(timeout=6) if pmx_fut else None
+    except Exception: stats['proxmox'] = None
 
     stats['alerts'] = _build_alerts(stats)
 
@@ -1265,6 +1403,55 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json({'error': str(e)}, 500)
             return
 
+        if path.startswith('/api/history/') and path.endswith('/export'):
+            metric = path[13:-7]   # strip /api/history/ prefix and /export suffix
+            if metric not in HISTORY_METRICS:
+                self._json({'error': 'Unknown metric'}, 400)
+                return
+            try:
+                range_h    = int(qs.get('range',      ['24'])[0])
+                resolution = int(qs.get('resolution', ['60'])[0])
+                rows = get_history(metric, range_h, resolution)
+                lines = ['timestamp_unix,datetime,value']
+                for row in rows:
+                    ts = row['time']
+                    dt = datetime.fromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%S')
+                    lines.append(f"{ts},{dt},{row['value']}")
+                body = '\n'.join(lines).encode()
+                fname = f"noba-{metric}-{range_h}h.csv"
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/csv')
+                self.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+                self.send_header('Content-Length', str(len(body)))
+                for k, v in _SECURITY_HEADERS.items(): self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self._json({'error': str(e)}, 500)
+            return
+
+        if path == '/api/config/backup':
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
+            try:
+                if os.path.exists(NOBA_YAML):
+                    with open(NOBA_YAML, 'rb') as f: body = f.read()
+                else:
+                    body = b''
+                fname = 'noba-config-backup.yaml'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-yaml')
+                self.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+                self.send_header('Content-Length', str(len(body)))
+                for k, v in _SECURITY_HEADERS.items(): self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+                audit_log('config_backup', username, 'Downloaded config backup', ip)
+            except Exception as e:
+                self._json({'error': str(e)}, 500)
+            return
+
         if path == '/api/stream':
             _bg.update_qs(qs)
             self.send_response(200)
@@ -1396,6 +1583,77 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ok = write_yaml_settings(body)
             audit_log('settings_update', username, 'Updated web settings', ip)
             self._json({'status': 'ok'} if ok else {'error': 'Failed to write settings'}, 200 if ok else 500)
+            return
+
+        if path == '/api/config/restore':
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+            except ValueError:
+                length = 0
+            if length > 512 * 1024:
+                self._json({'error': 'Upload too large (max 512 KB)'}, 413)
+                return
+            if length == 0:
+                self._json({'error': 'Empty body'}, 400)
+                return
+            raw = self.rfile.read(length)
+            # Basic YAML sanity check — must be decodable text
+            try:
+                raw.decode('utf-8')
+            except UnicodeDecodeError:
+                self._json({'error': 'Invalid file encoding (expected UTF-8 YAML)'}, 400)
+                return
+            try:
+                os.makedirs(os.path.dirname(NOBA_YAML), exist_ok=True)
+                # Write to temp file then atomically replace
+                tmp = NOBA_YAML + '.restore-tmp'
+                with open(tmp, 'wb') as f: f.write(raw)
+                os.replace(tmp, NOBA_YAML)
+                audit_log('config_restore', username, 'Restored config from upload', ip)
+                self._json({'status': 'ok'})
+            except Exception as e:
+                self._json({'error': str(e)}, 500)
+            return
+
+        if path == '/api/container-control':
+            if role != 'admin':
+                self._json({'error': 'Forbidden'}, 403)
+                return
+            body = self._read_body()
+            if body is None: return
+            ct_name   = body.get('name',   '').strip()
+            ct_action = body.get('action', '').strip()
+            if ct_action not in ('start', 'stop', 'restart'):
+                self._json({'error': 'Invalid action'}, 400)
+                return
+            if not ct_name or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$', ct_name):
+                self._json({'error': 'Invalid container name'}, 400)
+                return
+            for runtime in ('docker', 'podman'):
+                try:
+                    r = subprocess.run([runtime, ct_action, ct_name],
+                                       capture_output=True, timeout=15)
+                    if r.returncode == 0:
+                        # Bust the container list cache so the next stats call is fresh
+                        with _cache._lock:
+                            for k in list(_cache._store.keys()):
+                                if 'ps' in k: del _cache._store[k]
+                        audit_log('container_control', username,
+                                  f"{ct_action} {ct_name} via {runtime}", ip)
+                        self._json({'success': True, 'runtime': runtime})
+                        return
+                except FileNotFoundError:
+                    continue
+                except Exception as e:
+                    audit_log('container_control', username,
+                              f"{ct_action} {ct_name} error: {e}", ip)
+                    self._json({'success': False, 'error': str(e)})
+                    return
+            self._json({'success': False,
+                        'error': 'No container runtime found (docker / podman)'})
             return
 
         if path == '/api/truenas/vm':

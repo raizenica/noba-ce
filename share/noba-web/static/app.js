@@ -37,6 +37,9 @@ function dashboard() {
         'qbitUrl',    'qbitUser',  'qbitPass',
         'backupSources', 'backupDest', 'cloudRemote', 'downloadsDir',
         'customActions', 'automations',
+        'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName', 'proxmoxTokenValue',
+        'pushoverEnabled', 'pushoverAppToken', 'pushoverUserKey',
+        'gotifyEnabled', 'gotifyUrl', 'gotifyAppToken',
     ];
 
     /** Keys that live in localStorage as a local mirror (excludes complex objects
@@ -53,6 +56,8 @@ function dashboard() {
         //       flagged here — consider moving to sessionStorage for better
         //       security; it is included for parity with the original behaviour.
         'qbitPass',
+        'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName',
+        // proxmoxTokenValue is kept server-side only (like API keys)
     ];
 
     /**
@@ -65,14 +70,14 @@ function dashboard() {
         'osName', 'kernel', 'hwCpu', 'hwGpu', 'netRx', 'netTx',
         'battery', 'disks', 'services', 'zfs', 'radar', 'kuma', 'netHealth',
         'topCpu', 'topMem', 'pihole', 'plex', 'containers', 'alerts',
-        'truenas', 'radarr', 'sonarr', 'qbit',
+        'truenas', 'radarr', 'sonarr', 'qbit', 'proxmox',
     ]);
 
     const DEF_VIS = {
         core: true, netio: true, hw: true, battery: true, pihole: true,
         storage: true, radar: true, kuma: true, procs: true, containers: true,
         services: true, logs: true, actions: true, bookmarks: true, plex: true,
-        truenas: true, downloads: true, automations: true,
+        truenas: true, downloads: true, automations: true, proxmox: true,
     };
 
     const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt';
@@ -118,6 +123,16 @@ function dashboard() {
         qbitUser:   localStorage.getItem('noba-qbit-user')   || '',
         qbitPass:   localStorage.getItem('noba-qbit-pass')   || '',
 
+        // ── Proxmox VE ─────────────────────────────────────────────────────────
+        proxmoxUrl:        localStorage.getItem('noba-pmx-url')       || '',
+        proxmoxUser:       localStorage.getItem('noba-pmx-user')      || '',
+        proxmoxTokenName:  localStorage.getItem('noba-pmx-tok-name')  || '',
+        proxmoxTokenValue: '',   // never persisted client-side
+
+        // ── Notification channels ──────────────────────────────────────────────
+        pushoverEnabled: false, pushoverAppToken: '', pushoverUserKey: '',
+        gotifyEnabled:   false, gotifyUrl: '',        gotifyAppToken: '',
+
         // ── Dynamic / job settings ─────────────────────────────────────────────
         customActions: [], automations: [],
         backupSources: [], backupDest: '', cloudRemote: '', downloadsDir: '',
@@ -135,6 +150,7 @@ function dashboard() {
         netHealth: { wan: 'Down', lan: 'Down', configured: false },
         topCpu: [], topMem: [], pihole: null, plex: null, containers: [],
         alerts: [], truenas: null, radarr: null, sonarr: null, qbit: null,
+        proxmox: null,
 
         // ── App state ──────────────────────────────────────────────────────────
         selectedLog: 'syserr', logContent: 'Loading...', logLoading: false,
@@ -972,6 +988,95 @@ function dashboard() {
             if (this.userRole !== 'admin') return;
             this.showAuditModal = true;
             this.fetchAuditLog();
+        },
+
+
+        // ── 9. Container Controls ──────────────────────────────────────────────
+
+        async containerAction(name, action) {
+            if (!name) return;
+            const label = `${action} ${name}`;
+            try {
+                const res = await fetch('/api/container-control', {
+                    method:  'POST',
+                    headers: {
+                        'Content-Type':  'application/json',
+                        'Authorization': 'Bearer ' + this._token(),
+                    },
+                    body: JSON.stringify({ name, action }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.addToast(`${label} — OK`, 'success');
+                    // Refresh containers after a short delay for state to settle
+                    setTimeout(() => this.refreshStats(), 1500);
+                } else {
+                    this.addToast(data.error || `${label} failed`, 'error');
+                }
+            } catch (e) {
+                this.addToast(`${label}: ${e.message}`, 'error');
+            }
+        },
+
+
+        // ── 10. History Export ─────────────────────────────────────────────────
+
+        downloadHistoryCSV() {
+            if (!this.historyMetric) return;
+            const url = `/api/history/${encodeURIComponent(this.historyMetric)}/export`
+                + `?range=${this.historyRange}&resolution=${this.historyResolution}`;
+            // Use a temporary <a> tag so the browser triggers a file download
+            const a = document.createElement('a');
+            a.href = url + '&token=' + encodeURIComponent(this._token());
+            a.download = `noba-${this.historyMetric}-${this.historyRange}h.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        },
+
+
+        // ── 11. Config Backup / Restore ────────────────────────────────────────
+
+        downloadConfigBackup() {
+            const a = document.createElement('a');
+            a.href = '/api/config/backup?token=' + encodeURIComponent(this._token());
+            a.download = 'noba-config-backup.yaml';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        },
+
+        async uploadConfigRestore(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            if (!file.name.match(/\.(yaml|yml)$/i)) {
+                this.addToast('Please select a .yaml or .yml file', 'error');
+                return;
+            }
+            try {
+                const body = await file.arrayBuffer();
+                const res  = await fetch('/api/config/restore', {
+                    method:  'POST',
+                    headers: {
+                        'Content-Type':   'application/x-yaml',
+                        'Content-Length': String(body.byteLength),
+                        'Authorization':  'Bearer ' + this._token(),
+                    },
+                    body,
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    this.addToast('Config restored — reloading settings…', 'success');
+                    await this.fetchSettings();
+                } else {
+                    this.addToast(data.error || 'Restore failed', 'error');
+                }
+            } catch (e) {
+                this.addToast('Restore error: ' + e.message, 'error');
+            } finally {
+                // Reset the file input so the same file can be re-selected
+                event.target.value = '';
+            }
         },
 
     };

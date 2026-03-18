@@ -610,10 +610,71 @@
                             <span class="ct-name" x-text="c.name"></span>
                             <span class="ct-img" x-text="c.image"></span>
                             <span class="badge" :class="c.state==='running'?'bs':c.state==='exited'?'bw':'bn'" x-text="c.state"></span>
+                            <div class="svc-actions" x-show="userRole==='admin'">
+                                <button class="svc-btn" title="Start"   @click.stop="containerAction(c.name,'start')"   aria-label="Start container"><i class="fas fa-play"   aria-hidden="true"></i></button>
+                                <button class="svc-btn" title="Stop"    @click.stop="containerAction(c.name,'stop')"    aria-label="Stop container"><i class="fas fa-stop"   aria-hidden="true"></i></button>
+                                <button class="svc-btn" title="Restart" @click.stop="containerAction(c.name,'restart')" aria-label="Restart container"><i class="fas fa-sync" aria-hidden="true"></i></button>
+                            </div>
                         </div>
                     </template>
                 </div>
                 <div x-show="!containers || containers.length === 0" class="empty-msg">No containers running.</div>
+            </div>
+        </div>
+
+        <!-- ── Proxmox VE ──────────────────────────────────────────────────── -->
+        <div class="card" data-id="card-proxmox" x-show="vis.proxmox && proxmoxUrl">
+            <div class="card-hdr">
+                <i class="fas fa-server card-icon" aria-hidden="true"></i>
+                <span class="card-title">Proxmox VE</span>
+                <span class="card-count"
+                      x-show="proxmox && proxmox.vms && proxmox.vms.length > 0"
+                      x-text="(proxmox.vms.length) + ' guests'"></span>
+                <span class="badge" :class="proxmox && proxmox.status==='online' ? 'bs' : 'bn'"
+                      x-text="proxmox ? proxmox.status : 'offline'"
+                      style="margin-left:auto;margin-right:.25rem"></span>
+                <button class="collapse-btn fas fa-chevron-down"
+                        :class="collapsed.proxmox ? 'is-collapsed' : ''"
+                        @click="toggleCollapse('proxmox')"
+                        :aria-expanded="!collapsed.proxmox"
+                        aria-controls="body-proxmox"
+                        aria-label="Toggle Proxmox VE"></button>
+                <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
+            </div>
+            <div class="card-body" id="body-proxmox" x-show="!collapsed.proxmox">
+                <template x-if="proxmox && proxmox.status === 'online'">
+                    <div>
+                        <!-- Nodes -->
+                        <template x-for="node in (proxmox.nodes || [])" :key="node.name">
+                            <div class="row" style="margin-bottom:.35rem">
+                                <div class="status-dot" :class="node.status==='online'?'dot-up':'dot-down'" aria-hidden="true"></div>
+                                <span class="row-label" x-text="node.name"></span>
+                                <span class="badge bn" style="font-size:.65rem" x-text="'CPU ' + node.cpu + '%'"></span>
+                                <span class="badge bn" style="font-size:.65rem" x-text="'MEM ' + node.mem_percent + '%'"></span>
+                            </div>
+                        </template>
+                        <!-- VMs / LXC -->
+                        <div style="margin-top:.5rem; max-height:260px; overflow-y:auto">
+                            <template x-for="vm in (proxmox.vms || [])" :key="vm.vmid + '-' + vm.node">
+                                <div class="ct-row">
+                                    <div class="status-dot"
+                                         :class="vm.status==='running'?'dot-up':'dot-down'"
+                                         :aria-label="vm.status"></div>
+                                    <span class="ct-name" x-text="vm.name"></span>
+                                    <span class="ct-img" x-text="'#' + vm.vmid + ' · ' + vm.type.toUpperCase()"></span>
+                                    <span class="badge" :class="vm.status==='running'?'bs':vm.status==='stopped'?'bw':'bn'"
+                                          x-text="vm.status"></span>
+                                    <span x-show="vm.status==='running'" class="badge bn"
+                                          style="font-size:.62rem" x-text="vm.cpu + '% cpu'"></span>
+                                </div>
+                            </template>
+                        </div>
+                        <div x-show="!proxmox.vms || proxmox.vms.length === 0" class="empty-msg">No VMs or containers found.</div>
+                    </div>
+                </template>
+                <template x-if="!proxmox || proxmox.status !== 'online'">
+                    <div class="empty-msg">Proxmox unreachable — configure API token in Settings.</div>
+                </template>
             </div>
         </div>
 
@@ -932,6 +993,12 @@
         </div>
 
         <div class="modal-footer">
+            <button class="btn btn-sm btn-secondary"
+                    @click="downloadHistoryCSV()"
+                    title="Download as CSV"
+                    style="margin-right:.5rem">
+                <i class="fas fa-download" aria-hidden="true"></i> Export CSV
+            </button>
             <button class="btn btn-sm" @click="showHistoryModal=false">Close</button>
         </div>
     </div>
@@ -1057,6 +1124,7 @@
                     <label class="toggle-item"><input type="checkbox" x-model="vis.automations"> Automation Deck</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.actions"> Quick Actions</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.bookmarks"> Homelab Links</label>
+                    <label class="toggle-item"><input type="checkbox" x-model="vis.proxmox"> Proxmox VE</label>
                 </div>
             </div>
         </div>
@@ -1091,6 +1159,19 @@
                         <label class="field-label" for="s-lan-ip">LAN DNS IP</label>
                         <input id="s-lan-ip" class="field-input" type="text" x-model="lanTestIp" placeholder="192.168.100.111">
                     </div>
+                </div>
+            </div>
+            <div class="s-section" x-show="userRole==='admin'">
+                <span class="s-label">Configuration Backup &amp; Restore</span>
+                <p class="help-text" style="margin-bottom:.6rem">Download the current config.yaml or restore from a previous backup. Admin only.</p>
+                <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
+                    <button class="btn btn-sm" @click="downloadConfigBackup()">
+                        <i class="fas fa-download" aria-hidden="true"></i> Download config.yaml
+                    </button>
+                    <label class="btn btn-sm btn-secondary" style="cursor:pointer" title="Upload a previously exported config.yaml">
+                        <i class="fas fa-upload" aria-hidden="true"></i> Restore config.yaml
+                        <input type="file" accept=".yaml,.yml" style="display:none" @change="uploadConfigRestore($event)">
+                    </label>
                 </div>
             </div>
         </div>
@@ -1180,6 +1261,61 @@
                 <div>
                     <label class="field-label" for="s-bmc-map">Map OS IP to IPMI/BMC IP</label>
                     <input id="s-bmc-map" class="field-input" type="text" x-model="bmcMap" placeholder="10.0.0.50|10.0.0.51">
+                </div>
+            </div>
+            <div class="s-section">
+                <span class="s-label">Pushover Notifications</span>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label" for="s-push-tok">App Token</label>
+                        <input id="s-push-tok" class="field-input" type="password" x-model="pushoverAppToken" autocomplete="off" placeholder="aTokenxxxx">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-push-user">User Key</label>
+                        <input id="s-push-user" class="field-input" type="password" x-model="pushoverUserKey" autocomplete="off" placeholder="uUserKeyxxx">
+                    </div>
+                </div>
+                <label class="toggle-item" style="margin-top:.4rem">
+                    <input type="checkbox" x-model="pushoverEnabled"> Enable Pushover alerts
+                </label>
+            </div>
+            <div class="s-section">
+                <span class="s-label">Gotify Notifications</span>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label" for="s-gotify-url">Server URL</label>
+                        <input id="s-gotify-url" class="field-input" type="url" x-model="gotifyUrl" placeholder="http://gotify.example.com">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-gotify-tok">App Token</label>
+                        <input id="s-gotify-tok" class="field-input" type="password" x-model="gotifyAppToken" autocomplete="off">
+                    </div>
+                </div>
+                <label class="toggle-item" style="margin-top:.4rem">
+                    <input type="checkbox" x-model="gotifyEnabled"> Enable Gotify alerts
+                </label>
+            </div>
+            <div class="s-section">
+                <span class="s-label">Proxmox VE</span>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label" for="s-pmx-url">Base URL</label>
+                        <input id="s-pmx-url" class="field-input" type="url" x-model="proxmoxUrl" placeholder="https://192.168.1.100:8006">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-pmx-user">User (user@realm)</label>
+                        <input id="s-pmx-user" class="field-input" type="text" x-model="proxmoxUser" placeholder="root@pam">
+                    </div>
+                </div>
+                <div class="field-2" style="margin-top:.4rem">
+                    <div>
+                        <label class="field-label" for="s-pmx-tok-name">API Token Name</label>
+                        <input id="s-pmx-tok-name" class="field-input" type="text" x-model="proxmoxTokenName" placeholder="noba">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-pmx-tok-val">API Token Value</label>
+                        <input id="s-pmx-tok-val" class="field-input" type="password" x-model="proxmoxTokenValue" autocomplete="off">
+                    </div>
                 </div>
             </div>
         </div>
