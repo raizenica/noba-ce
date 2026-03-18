@@ -1,0 +1,17 @@
+# docker-compose.yml
+services:
+  noba-dashboard:
+    build: .
+    container_name: noba-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Europe/Brussels # Users will change this to their timezone
+    volumes:
+      # Maps the container's config folder to the host so users can edit config.yaml easily
+      - ./data/config:/app/config
+      # Maps the container's logs to the host
+      - ./data/logs:/root/.local/share
+      # Optional: Maps the host Docker socket so the dashboard can read container states
+      - /var/run/docker.sock:/var/run/docker.sock:ro
