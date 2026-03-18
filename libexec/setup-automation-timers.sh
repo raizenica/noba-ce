@@ -17,7 +17,7 @@ if [[ "${1:-}" == "--version" ]]; then
     exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_DIR="${HOME}/.local/libexec/noba"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/noba-lib.sh"
 

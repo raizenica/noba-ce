@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # noba-cron-setup.sh – Interactive setup of cron jobs for automation scripts
-# Version: 2.3.0
+# Version: 2.4.0
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "noba-cron-setup.sh version 2.3.0"
+    echo "noba-cron-setup.sh version 2.4.0"
     exit 0
 fi
 
@@ -25,7 +25,8 @@ source "$SCRIPT_DIR/lib/noba-lib.sh"
 # -------------------------------------------------------------------
 # Default configuration
 # -------------------------------------------------------------------
-SCRIPTS_DIR="${HOME}/.local/bin"
+# ALIGNED WITH NEW ARCHITECTURE
+SCRIPTS_DIR="${HOME}/.local/libexec/noba"
 DRY_RUN=false
 DEFAULT_SCHEDULE="0 2 * * *"
 

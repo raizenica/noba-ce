@@ -658,8 +658,8 @@ if [[ "$DRY_RUN" != true ]]; then
 fi
 
 # ── Optional post-run notification hook ───────────────────────────────────────
-if [[ "$DRY_RUN" != true ]] && command -v backup-notify.sh &>/dev/null; then
-    backup-notify.sh || true
+if [[ "$DRY_RUN" != true ]] && [[ -x "$SCRIPT_DIR/backup-notify.sh" ]]; then
+    "$SCRIPT_DIR/backup-notify.sh" || true
 fi
 
 exit "$EXIT_CODE"
