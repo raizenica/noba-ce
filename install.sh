@@ -406,9 +406,9 @@ if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
     fi
 fi
 
-# 4. Install Web Dashboard
+# 4. Install Web Dashboard (MODULAR FIX)
 header "Installing Web Dashboard"
-mkdir -p "$LIBEXEC_DIR/web"
+mkdir -p "$LIBEXEC_DIR/web/static"
 
 # Install backend and frontend
 for f in server.py index.html; do
@@ -424,6 +424,21 @@ for f in server.py index.html; do
             fi
             record_install "$dst"
             say_ok "Web component: $f"
+        fi
+    fi
+done
+
+# Install static assets (CSS/JS)
+for f in style.css app.js; do
+    src="$SCRIPT_DIR/share/noba-web/static/$f"
+    dst="$LIBEXEC_DIR/web/static/$f"
+    if [[ -f "$src" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            dry "cp share/noba-web/static/$f → $LIBEXEC_DIR/web/static/"
+        else
+            cp "$src" "$dst"
+            record_install "$dst"
+            say_ok "Web static asset: $f"
         fi
     fi
 done
