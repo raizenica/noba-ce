@@ -1,28 +1,63 @@
-# share/noba-web/server/routers/auth.py
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
-from ..security import verify_password, create_access_token, rate_limiter
+# share/noba-web/server/database.py
+import sqlite3
+import threading
+import json
+import os
+from pathlib import Path
 
-router = APIRouter()
+DB_PATH = Path(os.path.expanduser("~/.local/share/noba-history.db"))
 
-# In production, this would query a users.db file or load from your config.yaml.
-# For now, this is 'admin' with the password 'admin' (hashed securely via bcrypt)
-MOCK_USER_DB = {
-    "admin": "$2a$12$D24Xj8bI0jAovD88Q6zD5eA/RkI.P1E5J6b6X7ZpG2tV4xL9f3H3G"
-}
+class Database:
+    _instance = None
+    _lock = threading.Lock()
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(Database, cls).__new__(cls)
+                cls._instance._init_db()
+            return cls._instance
 
-@router.post("/login")
-async def login(request: Request, credentials: LoginRequest):
-    # CRITICAL: Strict rate limiting to prevent password guessing
-    rate_limiter(request, limit=5, window=60)
+    def _init_db(self):
+        # check_same_thread=False allows FastAPI's async threadpool to share the connection safely
+        self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp INTEGER,
+                    cpu_percent REAL,
+                    memory_percent REAL,
+                    memory_used_gb REAL,
+                    disks_json TEXT,
+                    net_sent INTEGER,
+                    net_recv INTEGER,
+                    temps_json TEXT
+                )
+            ''')
+            self.conn.commit()
 
-    hashed_pw = MOCK_USER_DB.get(credentials.username)
-    if not hashed_pw or not verify_password(credentials.password, hashed_pw):
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    def insert_metrics(self, data: dict):
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO metrics (
+                    timestamp, cpu_percent, memory_percent, memory_used_gb,
+                    disks_json, net_sent, net_recv, temps_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data["timestamp"],
+                data["cpu_percent"],
+                data["memory_percent"],
+                data["memory_used_gb"],
+                json.dumps(data.get("disks", [])),
+                data["network"]["bytes_sent"],
+                data["network"]["bytes_recv"],
+                json.dumps(data.get("temperatures", {}))
+            ))
+            self.conn.commit()
 
-    access_token = create_access_token(data={"sub": credentials.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+# Export a global safe instance
+db = Database()
