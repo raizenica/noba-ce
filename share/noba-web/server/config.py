@@ -1,45 +1,85 @@
+"""Noba – Central configuration & constants."""
+from __future__ import annotations
+
 import os
-import yaml
-from pathlib import Path
-from pydantic import BaseModel, Field, SecretStr
-from pydantic_settings import BaseSettings
+import sys
 
-CONFIG_PATH = Path(os.path.expanduser("~/.config/noba/config.yaml"))
+# ── Version ───────────────────────────────────────────────────────────────────
+VERSION = "1.12.0"
 
-class WebhookConfig(BaseModel):
-    url: str
-    method: str = "POST"
-    headers: dict = Field(default_factory=dict)
+# ── Server ────────────────────────────────────────────────────────────────────
+PORT    = int(os.environ.get("PORT",  8080))
+HOST    = os.environ.get("HOST", "0.0.0.0")
+SSL_CERT = os.environ.get("SSL_CERT", "")
+SSL_KEY  = os.environ.get("SSL_KEY",  "")
 
-class AutomationConfig(BaseModel):
-    allowed_commands: list[str] = Field(default_factory=list)
-    webhooks: dict[str, WebhookConfig] = Field(default_factory=dict)
+# ── Paths ─────────────────────────────────────────────────────────────────────
+SCRIPT_DIR  = os.environ.get("NOBA_SCRIPT_DIR", os.path.expanduser("~/.local/libexec/noba"))
+LOG_DIR     = os.path.expanduser("~/.local/share")
+PID_FILE    = os.environ.get("PID_FILE", "/tmp/noba-web-server.pid")
+ACTION_LOG  = os.path.join(LOG_DIR, "noba-action.log")
+AUTH_CONFIG = os.path.expanduser("~/.config/noba-web/auth.conf")
+USER_DB     = os.path.expanduser("~/.config/noba-web/users.conf")
+NOBA_YAML   = os.environ.get("NOBA_CONFIG", os.path.expanduser("~/.config/noba/config.yaml"))
+HISTORY_DB  = os.path.join(LOG_DIR, "noba-history.db")
 
-class ServerSettings(BaseSettings):
-    model_config = {"extra": "ignore"}
-    host: str = "0.0.0.0"
-    port: int = 8080
-    secret_key: SecretStr = Field(default=SecretStr("CHANGE_ME_IN_PRODUCTION"))
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 1440
-    automation: AutomationConfig = Field(default_factory=AutomationConfig)
+# ── Limits & tunables ────────────────────────────────────────────────────────
+MAX_BODY_BYTES        = 64 * 1024
+TOKEN_TTL_H           = 24
+STATS_INTERVAL        = 5
+NOTIFICATION_COOLDOWN = 300
+HISTORY_RETENTION_DAYS = int(os.environ.get("NOBA_HISTORY_DAYS", 30))
+_WORKER_THREADS        = int(os.environ.get("NOBA_WORKER_THREADS", 24))
+_PW_MIN_LEN            = int(os.environ.get("NOBA_PW_MIN_LEN", 8))
 
-    @classmethod
-    def load_from_yaml(cls) -> "ServerSettings":
-        if not CONFIG_PATH.exists():
-            return cls()
+# ── YAML config keys ─────────────────────────────────────────────────────────
+WEB_KEYS = frozenset([
+    "piholeUrl", "piholeToken", "monitoredServices", "radarIps", "bookmarksStr",
+    "plexUrl", "plexToken", "kumaUrl", "bmcMap", "truenasUrl", "truenasKey",
+    "radarrUrl", "radarrKey", "sonarrUrl", "sonarrKey", "qbitUrl", "qbitUser", "qbitPass",
+    "customActions", "automations", "wanTestIp", "lanTestIp",
+    "alertRules",
+    "proxmoxUrl", "proxmoxUser", "proxmoxTokenName", "proxmoxTokenValue",
+    "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
+    "gotifyEnabled",   "gotifyUrl",        "gotifyAppToken",
+])
+_NOTIF_WEB_KEYS = frozenset([
+    "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
+    "gotifyEnabled",   "gotifyUrl",        "gotifyAppToken",
+])
 
-        with open(CONFIG_PATH, 'r') as f:
-            data = yaml.safe_load(f) or {}
+# ── Script / action maps ─────────────────────────────────────────────────────
+SCRIPT_MAP = {
+    "backup":        "backup-to-nas.sh",
+    "cloud":         "cloud-backup.sh",
+    "verify":        "backup-verifier.sh",
+    "organize":      "organize-downloads.sh",
+    "diskcheck":     "disk-sentinel.sh",
+    "check_updates": "noba-update.sh",
+}
+ALLOWED_ACTIONS = frozenset({"start", "stop", "restart", "poweroff"})
+VALID_ROLES     = ("viewer", "admin")
 
-        # Extract web specific config, fallback to empty dict
-        web_data = data.get("web", {})
+HISTORY_METRICS = [
+    "cpu_percent", "mem_percent", "cpu_temp", "gpu_temp",
+    "disk_percent", "ping_ms", "net_rx_bytes", "net_tx_bytes",
+]
 
-        # Inject secret key if provided in env or yaml
-        if "NOBA_SECRET_KEY" in os.environ:
-            web_data["secret_key"] = os.environ["NOBA_SECRET_KEY"]
+# ── Security headers ──────────────────────────────────────────────────────────
+SECURITY_HEADERS = {
+    "X-Content-Type-Options":  "nosniff",
+    "X-Frame-Options":         "SAMEORIGIN",
+    "Referrer-Policy":         "same-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+        "img-src 'self' data:; connect-src 'self'"
+    ),
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+}
 
-        return cls(**web_data)
-
-# Global singleton for configuration
-settings = ServerSettings.load_from_yaml()
+# ── Stdout buffering ──────────────────────────────────────────────────────────
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
