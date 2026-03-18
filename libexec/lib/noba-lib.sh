@@ -205,7 +205,10 @@ check_deps() {
 confirm() {
     local prompt="$1"
     local default="${2:-n}"
-    [[ -t 0 ]] || [[ "$default" != "y" ]] && return 1
+    # If stdin is not a terminal, resolve non-interactively from the default.
+    if [[ ! -t 0 ]]; then
+        [[ "$default" == "y" ]] && return 0 || return 1
+    fi
     local answer
     while true; do
         read -rp "$prompt (y/n) [${default}]: " answer

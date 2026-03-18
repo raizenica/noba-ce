@@ -214,7 +214,7 @@ if [[ "$DRY_RUN" != true ]]; then
     log_info "Ensuring script permissions..."
 
     find "$REPO_DIR" \
-        -maxdepth 1 \
+        -maxdepth 2 \
         -type f \
         -name "*.sh" \
         -exec chmod +x {} +

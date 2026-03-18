@@ -298,8 +298,7 @@ fi
 # ── 2. Core dependencies (checked once, not duplicated) ───────────────────────
 _out "── Core required tools:"
 for cmd in "${CORE_REQUIRED[@]}"; do
-    check_cmd "$cmd" "$cmd" required
-    if [[ $? -ne 0 && "$FIX_MODE" == true ]]; then
+    if ! check_cmd "$cmd" "$cmd" required && [[ "$FIX_MODE" == true ]]; then
         _out "     Attempting install: $cmd"
         try_install "$cmd" && _out "     ✓ Installed" || _out "     ✗ Install failed"
     fi
@@ -308,7 +307,7 @@ done
 _out ""
 _out "── Core optional tools:"
 for cmd in "${CORE_OPTIONAL[@]}"; do
-    check_cmd "$cmd" "$cmd" optional
+    check_cmd "$cmd" "$cmd" optional || true
 done
 _out ""
 
@@ -322,10 +321,10 @@ for entry in "${SCRIPT_ENTRIES[@]}"; do
 
     _out "  $label:"
     for cmd in $req_extras; do
-        check_cmd "$cmd" "$cmd" required
+        check_cmd "$cmd" "$cmd" required || true
     done
     for cmd in $opt_extras; do
-        check_cmd "$cmd" "$cmd" optional
+        check_cmd "$cmd" "$cmd" optional || true
     done
 done
 _out ""
