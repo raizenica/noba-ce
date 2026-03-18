@@ -254,9 +254,9 @@ def _token_cleanup_loop() -> None:
             expired = [t for t, (_, _, exp) in list(_tokens.items()) if exp <= now]
             for t in expired: del _tokens[t]
         _rate_limiter.cleanup()
-        # Prune history DB every ~6 hours (12 cycles * 5 min = 60 min, ×6 = 72 cycles)
+        # Prune history DB every ~1 hour (12 cycles × 5 min = 60 min)
         _prune_counter += 1
-        if _prune_counter >= 72:
+        if _prune_counter >= 12:
             _prune_counter = 0
             prune_history_db()
 
@@ -470,14 +470,29 @@ def insert_metrics(metrics: list):
     except Exception as e:
         logger.error(f"Failed to batch insert metrics: {e}")
 
-HISTORY_RETENTION_DAYS = int(os.environ.get('NOBA_HISTORY_DAYS', 90))
+HISTORY_RETENTION_DAYS = int(os.environ.get('NOBA_HISTORY_DAYS', 30))
 
 def prune_history_db():
-    """Delete metrics older than retention period to prevent unbounded growth."""
+    """Delete metrics older than retention period to prevent unbounded growth.
+
+    At 10 metrics every 5 seconds, the DB accumulates ~172,800 rows/day.
+    Default 30-day retention keeps the DB under ~5 M rows / ~200 MB.
+    Runs once per hour via the cleanup thread.
+    """
     try:
         cutoff = int(time.time()) - HISTORY_RETENTION_DAYS * 86400
         with sqlite3.connect(HISTORY_DB) as conn:
-            conn.execute('DELETE FROM metrics WHERE timestamp < ?', (cutoff,))
+            c = conn.cursor()
+            c.execute('SELECT COUNT(*) FROM metrics WHERE timestamp < ?', (cutoff,))
+            stale = c.fetchone()[0]
+            if stale == 0:
+                return
+            c.execute('DELETE FROM metrics WHERE timestamp < ?', (cutoff,))
+            logger.info('History pruned: removed %d rows older than %d days', stale, HISTORY_RETENTION_DAYS)
+            # Reclaim disk space after large prunes (>50 k rows)
+            if stale > 50_000:
+                conn.execute('VACUUM')
+                logger.info('History DB vacuumed after large prune')
     except Exception as e:
         logger.error(f"Failed to prune history: {e}")
 
@@ -1726,7 +1741,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json({'success': False, 'error': 'Webhook not found in config'})
                 return
             try:
-                req = urllib.request.Request(hook['url'], method=hook.get('method', 'POST').upper())
+                method = hook.get('method', 'POST').upper()
+                req = urllib.request.Request(hook['url'], method=method)
+                # Inject custom headers from config (e.g. Bearer tokens, API keys)
+                custom_headers = hook.get('headers', {})
+                if isinstance(custom_headers, dict):
+                    for hdr_name, hdr_val in custom_headers.items():
+                        # Prevent header injection via newlines
+                        safe_name = str(hdr_name).replace('\n', '').replace('\r', '')
+                        safe_val  = str(hdr_val).replace('\n', '').replace('\r', '')
+                        req.add_header(safe_name, safe_val)
+                # Inject optional request body from config
+                hook_body = hook.get('body')
+                if hook_body is not None:
+                    if isinstance(hook_body, (dict, list)):
+                        req.data = json.dumps(hook_body).encode('utf-8')
+                        if 'Content-Type' not in custom_headers:
+                            req.add_header('Content-Type', 'application/json')
+                    elif isinstance(hook_body, str):
+                        req.data = hook_body.encode('utf-8')
                 with urllib.request.urlopen(req, timeout=8) as r:
                     success = r.getcode() >= 200 and r.getcode() < 300
                 audit_log('webhook', username, f"Webhook {hook_id} {success}", ip)

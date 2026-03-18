@@ -1,6 +1,6 @@
 #!/bin/bash
-# service-watch.sh – Check, report, and restart failed system services
-# Version: 2.3.0
+# service-watch.sh – Check, report, and restart failed system services & containers
+# Version: 2.4.0
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "service-watch.sh version 2.3.0"
+    echo "service-watch.sh version 2.4.0"
     exit 0
 fi
 
@@ -80,7 +80,7 @@ while [[ $# -gt 0 ]]; do
         -n|--dry-run) DRY_RUN=true; shift ;;
         -q|--quiet)   NOTIFY=false; shift ;;
         -h|--help)    show_help ;;
-        --version)    echo "service-watch.sh version 2.3.0"; exit 0 ;;
+        --version)    echo "service-watch.sh version 2.4.0"; exit 0 ;;
         -*)           log_error "Unknown option: $1"; exit 1 ;;
         *)            SERVICES+=("$1"); shift ;;
     esac
@@ -94,12 +94,112 @@ else
     SYS_CMD=("systemctl")
 fi
 
+# -------------------------------------------------------------------
+# Container helpers (docker: / podman: prefix support)
+# -------------------------------------------------------------------
+detect_runtime() {
+    if command -v docker &>/dev/null; then
+        echo "docker"
+    elif command -v podman &>/dev/null; then
+        echo "podman"
+    else
+        echo ""
+    fi
+}
+
+check_container() {
+    local runtime="$1"
+    local ct_name="$2"
+
+    if [[ -z "$runtime" ]]; then
+        log_error "No container runtime found (docker/podman) for $ct_name" >&2
+        echo "no-runtime"
+        return
+    fi
+
+    # Get the container state; "running", "exited", "dead", "created", or empty
+    local state
+    state=$("$runtime" inspect --format '{{.State.Status}}' "$ct_name" 2>/dev/null || echo "not-found")
+    echo "$state"
+}
+
+restart_container() {
+    local runtime="$1"
+    local ct_name="$2"
+
+    if "$runtime" restart "$ct_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 log_info "Checking services: ${SERVICES[*]}"
 
 # -------------------------------------------------------------------
 # Main loop
 # -------------------------------------------------------------------
+CONTAINER_RUNTIME=""
+
 for svc in "${SERVICES[@]}"; do
+
+    # ── Container targets (docker:name or podman:name) ─────────────
+    if [[ "$svc" == docker:* ]] || [[ "$svc" == podman:* ]]; then
+        prefix="${svc%%:*}"
+        ct_name="${svc#*:}"
+
+        if [[ -z "$ct_name" ]]; then
+            log_error "Empty container name in: $svc" >&2
+            echo "$svc: invalid-config"
+            continue
+        fi
+
+        # Use the explicit runtime from the prefix, or auto-detect
+        if [[ "$prefix" == "docker" ]]; then
+            rt="docker"
+        elif [[ "$prefix" == "podman" ]]; then
+            rt="podman"
+        fi
+
+        if ! command -v "$rt" &>/dev/null; then
+            log_error "$rt not found for $ct_name" >&2
+            echo "$svc: no-runtime"
+            continue
+        fi
+
+        state=$(check_container "$rt" "$ct_name")
+
+        if [[ "$state" == "running" ]]; then
+            log_debug "Container $ct_name ($rt) is running"
+            echo "$svc: running"
+        elif [[ "$state" == "not-found" ]]; then
+            log_warn "Container $ct_name ($rt) not found" >&2
+            echo "$svc: not-found"
+        elif [[ "$state" == "exited" ]] || [[ "$state" == "dead" ]] || [[ "$state" == "created" ]]; then
+            log_warn "Container $ct_name ($rt) is $state – attempting restart..." >&2
+
+            if [[ "$DRY_RUN" == true ]]; then
+                log_info "[DRY RUN] Would restart container $ct_name via $rt" >&2
+                echo "$svc: $state (dry-run restart)"
+            else
+                if restart_container "$rt" "$ct_name"; then
+                    log_success "Container $ct_name restarted via $rt" >&2
+                    send_notify "warn" "Container restarted" "$ct_name was $state and has been auto-healed via $rt."
+                    echo "$svc: restarted (auto-healed)"
+                else
+                    log_error "Failed to restart container $ct_name via $rt" >&2
+                    send_notify "error" "Container restart failed" "$ct_name ($rt) requires manual intervention."
+                    echo "$svc: $state (restart failed)"
+                fi
+            fi
+        else
+            log_warn "Container $ct_name ($rt) is in unexpected state: $state" >&2
+            echo "$svc: $state"
+        fi
+
+        continue
+    fi
+
+    # ── Systemd service targets ───────────────────────────────────
     if [[ "$svc" != *.service ]]; then
         svc_name="${svc}.service"
     else
