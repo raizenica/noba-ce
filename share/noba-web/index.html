@@ -26,6 +26,14 @@
             </div>
         </div>
         <div class="header-controls">
+
+            <div class="user-chip" x-show="authenticated && netHealth.configured" x-cloak title="Network Health Watchdog" :style="netHealth.wan==='Down' && netHealth.lan==='Up' ? 'border-color:var(--warning);box-shadow:0 0 10px var(--warning-dim)' : ''">
+                <i class="fas" :class="netHealth.wan==='Up' ? 'fa-globe' : 'fa-globe-americas'" :style="netHealth.wan==='Up' ? 'color:var(--success)' : 'color:var(--danger)'"></i>
+                <span style="margin: 0 .2rem; color:var(--text-muted)">|</span>
+                <i class="fas" :class="netHealth.lan==='Up' ? 'fa-network-wired' : 'fa-network-wired'" :style="netHealth.lan==='Up' ? 'color:var(--success)' : 'color:var(--danger)'"></i>
+                <span x-show="netHealth.wan==='Down' && netHealth.lan==='Up'" style="color:var(--warning); font-family:var(--font-ui); font-size:.7rem; font-weight:700; margin-left:.3rem">LOCAL ONLY</span>
+            </div>
+
             <div class="user-chip" x-show="authenticated && username" x-cloak>
                 <i class="fas fa-user-circle" style="color:var(--accent);font-size:.8rem"></i>
                 <span x-text="username" style="color:var(--text)"></span>
@@ -202,6 +210,29 @@
                         <div class="row" x-show="truenas.alerts.length > 0">
                             <span class="row-label">Hardware Alerts</span>
                             <span class="badge bd" x-text="truenas.alerts.length"></span>
+                        </div>
+
+                        <div x-show="truenas.vms && truenas.vms.length > 0" style="margin-top:.8rem; padding-top:.6rem; border-top:1px dashed var(--border)">
+                            <span class="s-label" style="border:none; margin-bottom:.3rem">Virtual Machines</span>
+                            <div class="ct-list">
+                                <template x-for="vm in truenas.vms" :key="vm.id">
+                                    <div class="ct-row" style="padding: .4rem .6rem">
+                                        <div class="status-dot" :class="vm.state==='RUNNING'?'dot-up':'dot-down'"></div>
+                                        <span class="ct-name" x-text="vm.name"></span>
+                                        <div class="svc-btns">
+                                            <button class="svc-btn" title="Start" :disabled="vm.state==='RUNNING'" @click="vmAction(vm.id, vm.name, 'start')">
+                                                <i class="fas fa-play"></i>
+                                            </button>
+                                            <button class="svc-btn" title="Stop" :disabled="vm.state!=='RUNNING'" @click="vmAction(vm.id, vm.name, 'stop')">
+                                                <i class="fas fa-stop"></i>
+                                            </button>
+                                            <button class="svc-btn" title="Power Off (Force)" :disabled="vm.state!=='RUNNING'" @click="vmAction(vm.id, vm.name, 'poweroff')">
+                                                <i class="fas fa-power-off"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
                         </div>
                     </div>
                 </template>
@@ -538,9 +569,25 @@
             </div>
         </div>
 
+        <div class="card" data-id="card-automations" x-show="vis.automations && automations.length > 0">
+            <div class="card-hdr">
+                <i class="fas fa-robot card-icon"></i>
+                <span class="card-title">Automation Deck</span>
+                <i class="fas fa-chevron-down collapse-btn" :class="collapsed.automations ? 'is-collapsed' : ''" @click="toggleCollapse('automations')"></i>
+                <i class="fas fa-grip-lines drag-handle"></i>
+            </div>
+            <div class="card-body action-list" x-show="!collapsed.automations">
+                <template x-for="act in automations" :key="act.id">
+                    <button class="btn btn-primary" @click="triggerWebhook(act.id, act.name)" style="margin-bottom:0.4rem;">
+                        <i class="fas" :class="act.icon || 'fa-bolt'"></i> <span x-text="act.name"></span>
+                    </button>
+                </template>
+            </div>
+        </div>
+
         <div class="card" data-id="card-actions" x-show="vis.actions">
             <div class="card-hdr">
-                <i class="fas fa-bolt card-icon"></i>
+                <i class="fas fa-terminal card-icon"></i>
                 <span class="card-title">Quick Actions</span>
                 <i class="fas fa-chevron-down collapse-btn" :class="collapsed.actions ? 'is-collapsed' : ''" @click="toggleCollapse('actions')"></i>
                 <i class="fas fa-grip-lines drag-handle"></i>
@@ -771,6 +818,7 @@
                     <label class="toggle-item"><input type="checkbox" x-model="vis.containers"> Containers</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.services"> Services</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.logs"> System Logs</label>
+                    <label class="toggle-item"><input type="checkbox" x-model="vis.automations"> Automation Deck</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.actions"> Quick Actions</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.bookmarks"> Homelab Links</label>
                 </div>
@@ -792,6 +840,21 @@
                     <div>
                         <label class="field-label">Homelab Bookmarks</label>
                         <textarea class="field-input" x-model="bookmarksStr" style="height:72px;resize:vertical"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <div class="s-section">
+                <span class="s-label">Network Watchdog</span>
+                <p class="help-text" style="margin-bottom: .6rem">Alerts if WAN is down but Local DNS survives.</p>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label">WAN Test IP (e.g. 8.8.8.8)</label>
+                        <input class="field-input" type="text" x-model="wanTestIp" placeholder="8.8.8.8">
+                    </div>
+                    <div>
+                        <label class="field-label">LAN DNS IP</label>
+                        <input class="field-input" type="text" x-model="lanTestIp" placeholder="192.168.100.111">
                     </div>
                 </div>
             </div>

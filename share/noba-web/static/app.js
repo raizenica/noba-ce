@@ -4,7 +4,7 @@ function dashboard() {
         core: true, netio: true, hw: true, battery: true, pihole: true,
         storage: true, radar: true, kuma: true, procs: true, containers: true,
         services: true, logs: true, actions: true, bookmarks: true, plex: true,
-        truenas: true, downloads: true
+        truenas: true, downloads: true, automations: true
     };
 
     const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt';
@@ -29,6 +29,8 @@ function dashboard() {
         plexToken:         localStorage.getItem('noba-plex-tok')  || '',
         kumaUrl:           localStorage.getItem('noba-kuma-url')  || '',
         bmcMap:            localStorage.getItem('noba-bmc-map')   || '',
+        wanTestIp:         localStorage.getItem('noba-wan-ip')    || '8.8.8.8',
+        lanTestIp:         localStorage.getItem('noba-lan-ip')    || '',
 
         // TrueNAS & Download Integrations
         truenasUrl:        localStorage.getItem('noba-truenas-url') || '',
@@ -43,6 +45,7 @@ function dashboard() {
 
         // Dynamic Features
         customActions:     [],
+        automations:       [],
 
         // Job Settings
         backupSources: [], backupDest: '', cloudRemote: '', downloadsDir: '',
@@ -54,7 +57,7 @@ function dashboard() {
         memPercent:0, cpuPercent:0, cpuHistory:[], cpuTemp:'N/A', gpuTemp:'N/A',
         osName:'--', kernel:'--', hwCpu:'--', hwGpu:'--', netRx:'0 B/s', netTx:'0 B/s',
         battery:{ percent:0, status:'Unknown', desktop:false },
-        disks:[], services:[], zfs:{pools:[]}, radar:[], kuma:[],
+        disks:[], services:[], zfs:{pools:[]}, radar:[], kuma:[], netHealth: { wan: 'Down', lan: 'Down', configured: false },
         topCpu:[], topMem:[], pihole:null, plex:null, containers:[], alerts:[],
         truenas:null, radarr:null, sonarr:null, qbit:null,
 
@@ -322,6 +325,8 @@ function dashboard() {
                     if (s.plexToken != null) this.plexToken = s.plexToken;
                     if (s.kumaUrl != null) this.kumaUrl = s.kumaUrl;
                     if (s.bmcMap != null) this.bmcMap = s.bmcMap;
+                    if (s.wanTestIp != null) this.wanTestIp = s.wanTestIp;
+                    if (s.lanTestIp != null) this.lanTestIp = s.lanTestIp;
 
                     if (s.truenasUrl != null) this.truenasUrl = s.truenasUrl;
                     if (s.truenasKey != null) this.truenasKey = s.truenasKey;
@@ -339,6 +344,7 @@ function dashboard() {
                     if (s.downloadsDir != null) this.downloadsDir = s.downloadsDir;
 
                     if (s.customActions != null) this.customActions = s.customActions;
+                    if (s.automations != null) this.automations = s.automations;
 
                     this.saveSettings();
                 }
@@ -374,6 +380,9 @@ function dashboard() {
             localStorage.setItem('noba-plex-tok', this.plexToken);
             localStorage.setItem('noba-kuma-url', this.kumaUrl);
             localStorage.setItem('noba-bmc-map', this.bmcMap);
+            localStorage.setItem('noba-wan-ip', this.wanTestIp);
+            localStorage.setItem('noba-lan-ip', this.lanTestIp);
+
             localStorage.setItem('noba-truenas-url', this.truenasUrl);
             localStorage.setItem('noba-truenas-key', this.truenasKey);
             localStorage.setItem('noba-radarr-url', this.radarrUrl);
@@ -396,6 +405,7 @@ function dashboard() {
                                     monitoredServices: this.monitoredServices, radarIps: this.radarIps,
                                     bookmarksStr: this.bookmarksStr, plexUrl: this.plexUrl,
                                     plexToken: this.plexToken, kumaUrl: this.kumaUrl, bmcMap: this.bmcMap,
+                                    wanTestIp: this.wanTestIp, lanTestIp: this.lanTestIp,
                                     truenasUrl: this.truenasUrl, truenasKey: this.truenasKey,
                                     radarrUrl: this.radarrUrl, radarrKey: this.radarrKey,
                                     sonarrUrl: this.sonarrUrl, sonarrKey: this.sonarrKey,
@@ -438,6 +448,37 @@ function dashboard() {
                 this.addToast(d.success ? `${action}: ${svc.name.replace('.service','')}` : `Failed: ${svc.name}`, d.success ? 'success' : 'error');
                 setTimeout(() => this.refreshStats(), 1200);
             } catch { this.addToast('Service control error', 'error'); }
+        },
+
+        // NEW: TrueNAS VM Control Wrapper
+        async vmAction(vmId, vmName, action) {
+            if (!this.authenticated) return;
+            this.addToast(`Triggering ${action} on ${vmName}...`, 'info');
+            try {
+                const res = await fetch('/api/truenas/vm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
+                                        body: JSON.stringify({ id: vmId, action: action })
+                });
+                const d = await res.json();
+                this.addToast(d.success ? `VM ${vmName}: ${action} successful` : `VM ${vmName}: ${action} failed`, d.success ? 'success' : 'error');
+                setTimeout(() => this.refreshStats(), 1500);
+            } catch { this.addToast('VM control error', 'error'); }
+        },
+
+        // NEW: Webhook Automation Wrapper
+        async triggerWebhook(actId, actName) {
+            if (!this.authenticated) return;
+            this.addToast(`Firing Webhook: ${actName}...`, 'info');
+            try {
+                const res = await fetch('/api/webhook', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
+                                        body: JSON.stringify({ id: actId })
+                });
+                const d = await res.json();
+                this.addToast(d.success ? `Webhook successful` : `Webhook failed`, d.success ? 'success' : 'error');
+            } catch { this.addToast('Webhook error', 'error'); }
         },
 
         async runScript(script, argStr = '') {

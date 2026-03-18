@@ -50,7 +50,7 @@ SCRIPT_MAP = {
     'diskcheck':     'disk-sentinel.sh',
     'check_updates': 'noba-update.sh',
 }
-ALLOWED_ACTIONS = frozenset({'start', 'stop', 'restart'})
+ALLOWED_ACTIONS = frozenset({'start', 'stop', 'restart', 'poweroff'})
 VALID_ROLES     = ('viewer', 'admin')
 
 # Fields allowed to be synced to the web config
@@ -58,7 +58,7 @@ WEB_KEYS = frozenset([
     'piholeUrl', 'piholeToken', 'monitoredServices', 'radarIps', 'bookmarksStr',
     'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap', 'truenasUrl', 'truenasKey',
     'radarrUrl', 'radarrKey', 'sonarrUrl', 'sonarrKey', 'qbitUrl', 'qbitUser', 'qbitPass',
-    'customActions'
+    'customActions', 'automations', 'wanTestIp', 'lanTestIp'
 ])
 
 _server_start_time = time.time()
@@ -113,11 +113,9 @@ def load_users():
                     parts = line.split(':', 2)
                     if len(parts) == 3: new_db[parts[0]] = (parts[1], parts[2])
         except Exception as e: logger.error("Failed to load users: %s", e)
+    with users_db_lock: users_db = new_db
 
-    with users_db_lock:
-        users_db = new_db
-
-    # BOOTSTRAP: If no users exist (fresh install), create a default admin
+    # BOOTSTRAP: Create default admin if DB is empty
     if not users_db:
         with users_db_lock:
             users_db['admin'] = (_pbkdf2_hash('admin'), 'admin')
@@ -164,8 +162,7 @@ def load_old_user() -> tuple | None:
     with _user_cache_lock:
         if time.time() - _user_cache_t < _USER_CACHE_TTL:
             return _user_cache
-    if not os.path.exists(AUTH_CONFIG):
-        return None
+    if not os.path.exists(AUTH_CONFIG): return None
     result = None
     try:
         with open(AUTH_CONFIG, encoding='utf-8') as f:
@@ -174,8 +171,7 @@ def load_old_user() -> tuple | None:
             username, rest = line.split(':', 1)
             h = rest.rsplit(':', 1)[0] if rest.count(':') >= 2 else rest
             result = (username, h)
-    except Exception:
-        return None
+    except Exception: return None
     with _user_cache_lock:
         _user_cache  = result
         _user_cache_t = time.time()
@@ -251,7 +247,6 @@ _rate_limiter = LoginRateLimiter()
 
 # ── Subprocess helper ─────────────────────────────────────────────────────────
 class TTLCache:
-    """Simple TTL-based key-value cache with bounded size (evicts oldest on overflow)."""
     def __init__(self, max_size: int = 256) -> None:
         self._store: dict = {}
         self._lock  = threading.Lock()
@@ -290,8 +285,7 @@ def get_rclone_remotes() -> dict:
         out = run(['rclone', 'listremotes'], timeout=3, cache_key='rclone_remotes', cache_ttl=10)
         lst = [{'name': line.strip().rstrip(':'), 'label': 'Cloud'} for line in out.splitlines() if line.strip()]
         return {'available': True, 'remotes': lst}
-    except Exception:
-        return {'available': False, 'remotes': []}
+    except Exception: return {'available': False, 'remotes': []}
 
 # ── YAML config ───────────────────────────────────────────────────────────────
 def read_yaml_settings() -> dict:
@@ -299,7 +293,8 @@ def read_yaml_settings() -> dict:
         'piholeUrl': '', 'piholeToken': '', 'monitoredServices': '', 'radarIps': '', 'bookmarksStr': '',
         'plexUrl': '', 'plexToken': '', 'kumaUrl': '', 'bmcMap': '', 'backupSources': [], 'backupDest': '',
         'cloudRemote': '', 'downloadsDir': '', 'truenasUrl': '', 'truenasKey': '', 'radarrUrl': '', 'radarrKey': '',
-        'sonarrUrl': '', 'sonarrKey': '', 'qbitUrl': '', 'qbitUser': '', 'qbitPass': '', 'customActions': []
+        'sonarrUrl': '', 'sonarrKey': '', 'qbitUrl': '', 'qbitUser': '', 'qbitPass': '',
+        'customActions': [], 'automations': [], 'wanTestIp': '8.8.8.8', 'lanTestIp': ''
     }
     if not os.path.exists(NOBA_YAML): return defaults
     try:
@@ -310,7 +305,6 @@ def read_yaml_settings() -> dict:
                 web = full_conf.get('web', {})
                 for k in WEB_KEYS:
                     if k in web: defaults[k] = web[k]
-
                 backup = full_conf.get('backup', {})
                 if 'sources' in backup: defaults['backupSources'] = backup['sources']
                 if 'dest' in backup: defaults['backupDest'] = backup['dest']
@@ -327,8 +321,7 @@ def write_yaml_settings(settings: dict) -> bool:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
-                if k not in WEB_KEYS:
-                    continue
+                if k not in WEB_KEYS: continue
                 tmp.write(f'  {k}: {json.dumps(v if isinstance(v, (str, list, dict)) else str(v))}\n')
             tmp_path = tmp.name
         if os.path.exists(NOBA_YAML):
@@ -357,9 +350,7 @@ _cpu_prev    = None
 _net_prev    = None
 _net_prev_t  = None
 
-def validate_service_name(name: str) -> bool:
-    return bool(re.match(r'^[a-zA-Z0-9_.@-]+$', name))
-
+def validate_service_name(name: str) -> bool: return bool(re.match(r'^[a-zA-Z0-9_.@-]+$', name))
 def validate_ip(ip: str) -> bool:
     try: ipaddress.ip_address(ip); return True
     except ValueError: return False
@@ -367,17 +358,31 @@ def validate_ip(ip: str) -> bool:
 def get_truenas(url: str, key: str) -> dict:
     if not url or not key: return None
     hdrs = {'Authorization': f'Bearer {key}', 'Accept': 'application/json'}
-    result = {'apps': [], 'alerts': [], 'status': 'offline'}
+    result = {'apps': [], 'alerts': [], 'vms': [], 'status': 'offline'}
     try:
         req1 = urllib.request.Request(f"{url.rstrip('/')}/api/v2.0/app", headers=hdrs)
         with urllib.request.urlopen(req1, timeout=4) as r:
             for app in json.loads(r.read().decode()):
                 result['apps'].append({'name': app.get('name', 'Unknown'), 'state': app.get('state', 'Unknown')})
+
         req2 = urllib.request.Request(f"{url.rstrip('/')}/api/v2.0/alert/list", headers=hdrs)
         with urllib.request.urlopen(req2, timeout=4) as r:
             for alert in json.loads(r.read().decode()):
                 if alert.get('level') in ['WARNING', 'CRITICAL'] and not alert.get('dismissed'):
                     result['alerts'].append({'level': alert.get('level'), 'text': alert.get('formatted', 'Unknown Alert')})
+
+        # NEW: Fetch all Virtual Machines for public configurability
+        try:
+            req3 = urllib.request.Request(f"{url.rstrip('/')}/api/v2.0/vm", headers=hdrs)
+            with urllib.request.urlopen(req3, timeout=4) as r:
+                for vm in json.loads(r.read().decode()):
+                    result['vms'].append({
+                        'id': vm.get('id'),
+                        'name': vm.get('name', 'Unknown'),
+                        'state': vm.get('status', {}).get('state', 'UNKNOWN')
+                    })
+        except Exception as e: logger.warning(f"TrueNAS VM fetch failed: {e}")
+
         result['status'] = 'online'
     except Exception: pass
     return result
@@ -700,6 +705,10 @@ def collect_stats(qs: dict) -> dict:
     qbit_user= cfg.get('qbitUser',   '')
     qbit_pass= cfg.get('qbitPass',   '')
 
+    # NEW: Network Watchdog IPs
+    wan_ip   = cfg.get('wanTestIp', '')
+    lan_ip   = cfg.get('lanTestIp', '')
+
     bmc_list = []
     for entry in bmc_map:
         parts = entry.split('|')
@@ -708,6 +717,10 @@ def collect_stats(qs: dict) -> dict:
     svc_futs  = {_pool.submit(get_service_status, s): s for s in svc_list}
     ping_futs = {_pool.submit(ping_host, ip): ip for ip in ip_list}
     bmc_futs  = {_pool.submit(ping_host, bmc_ip): (os_ip, bmc_ip) for os_ip, bmc_ip in bmc_list}
+
+    # NEW: Watchdog Pings
+    wan_fut   = _pool.submit(ping_host, wan_ip) if wan_ip else None
+    lan_fut   = _pool.submit(ping_host, lan_ip) if lan_ip else None
 
     ph_fut    = _pool.submit(get_pihole, ph_url, ph_tok) if ph_url else None
     plex_fut  = _pool.submit(get_plex, plex_url, plex_tok) if plex_url else None
@@ -733,6 +746,15 @@ def collect_stats(qs: dict) -> dict:
             radar.append({'ip': ip_r, 'status': 'Up' if up else 'Down', 'ms': ms if up else 0})
         except Exception: radar.append({'ip': ip, 'status': 'Down', 'ms': 0})
     stats['radar'] = radar
+
+    # NEW: Watchdog Aggregation
+    stats['netHealth'] = {'wan': 'Down', 'lan': 'Down', 'configured': bool(wan_ip or lan_ip)}
+    if wan_fut:
+        try: _, wan_up, _ = wan_fut.result(timeout=3); stats['netHealth']['wan'] = 'Up' if wan_up else 'Down'
+        except Exception: pass
+    if lan_fut:
+        try: _, lan_up, _ = lan_fut.result(timeout=3); stats['netHealth']['lan'] = 'Up' if lan_up else 'Down'
+        except Exception: pass
 
     try: stats['kuma'] = kuma_fut.result(timeout=4) if kuma_fut else []
     except Exception: stats['kuma'] = []
@@ -1000,6 +1022,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json({'status': 'ok'} if ok else {'error': 'Failed to write settings'}, 200 if ok else 500)
             return
 
+        # NEW: TrueNAS VM Control Endpoint
+        if path == '/api/truenas/vm':
+            body = self._read_body()
+            if body is None: return
+            vm_id, action = body.get('id'), body.get('action')
+            if not vm_id or action not in ALLOWED_ACTIONS:
+                self._json({'success': False, 'error': 'Invalid Request'})
+                return
+            cfg = read_yaml_settings()
+            if not cfg.get('truenasUrl') or not cfg.get('truenasKey'):
+                self._json({'success': False, 'error': 'TrueNAS API not configured'})
+                return
+            try:
+                url = f"{cfg['truenasUrl'].rstrip('/')}/api/v2.0/vm/id/{vm_id}/{action}"
+                req = urllib.request.Request(url, data=b"{}", headers={'Authorization': f"Bearer {cfg['truenasKey']}", 'Content-Type': 'application/json'}, method='POST')
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    self._json({'success': r.getcode() == 200})
+            except Exception as e:
+                self._json({'success': False, 'error': str(e)})
+            return
+
+        # NEW: Config-Driven Webhook Executor
+        if path == '/api/webhook':
+            body = self._read_body()
+            if body is None: return
+            hook_id = body.get('id')
+            cfg = read_yaml_settings()
+            automations = cfg.get('automations', [])
+            hook = next((a for a in automations if a.get('id') == hook_id), None)
+
+            if not hook or not hook.get('url'):
+                self._json({'success': False, 'error': 'Webhook not found in config'})
+                return
+
+            try:
+                req = urllib.request.Request(hook['url'], method=hook.get('method', 'POST').upper())
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    self._json({'success': r.getcode() >= 200 and r.getcode() < 300})
+            except Exception as e:
+                self._json({'success': False, 'error': str(e)})
+            return
+
         if path == '/api/run':
             body = self._read_body()
             if body is None: return
@@ -1025,7 +1089,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 ts = datetime.now().strftime('%H:%M:%S')
                 with open(ACTION_LOG, 'w') as f: f.write(f'>> [{ts}] Initiating: {script} {" ".join(safe_args)}\n\n')
 
-                # NEW: Config-driven execution
                 if script == 'custom':
                     cfg = read_yaml_settings()
                     custom_actions = cfg.get('customActions', [])
@@ -1033,7 +1096,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if act and act.get('command'):
                         cmd_str = act['command']
                         with open(ACTION_LOG, 'a') as f:
-                            # Executed via bash -c to allow chaining & piping
                             p = subprocess.Popen(['bash', '-c', cmd_str], stdout=f, stderr=subprocess.STDOUT)
                     else:
                         with open(ACTION_LOG, 'a') as f: f.write(f'[ERROR] Custom action not found or no command defined: {args_in}\n')
