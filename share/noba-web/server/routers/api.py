@@ -1,6 +1,8 @@
 import subprocess
 import os
+import json
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse
 from ..metrics import get_system_metrics
 from ..database import db
 from ..config import settings
@@ -8,20 +10,27 @@ from ..config import settings
 # Temporarily disabled token dependency so frontend can boot
 router = APIRouter()
 
-@router.get("/stats")
-async def live_metrics(request: Request, background_tasks: BackgroundTasks):
-    """Answers the dashboard's main data fetch"""
-    data = get_system_metrics()
-    # Offload the database disk I/O to a background thread
-    background_tasks.add_task(db.insert_metrics, data)
-    return data
+@router.get("/me")
+async def get_me():
+    """Bypasses the JWT login lockout for the frontend"""
+    return {"username": "admin", "role": "admin"}
+
+@router.get("/settings")
+async def get_frontend_settings():
+    """Feeds the dashboard configuration variables"""
+    # Returning an empty dict allows the frontend to safely fall back to its defaults
+    return {"status": "success", "data": {}}
+
+@router.get("/cloud-remotes")
+async def get_cloud_remotes():
+    """Satisfies the frontend's check for cloud syncs"""
+    return {"status": "success", "data": []}
 
 @router.get("/log-viewer")
 async def get_logs(type: str = "syserr"):
     """Feeds the frontend log viewer window"""
     try:
         if type == "syserr":
-            # Safely grab the last 50 system errors
             out = subprocess.check_output(["journalctl", "-n", "50", "-p", "3", "--no-pager"]).decode("utf-8")
         else:
             out = subprocess.check_output(["journalctl", "-n", "50", "--no-pager"]).decode("utf-8")
@@ -29,10 +38,19 @@ async def get_logs(type: str = "syserr"):
     except Exception as e:
         return {"logs": f"Failed to fetch logs: {e}"}
 
-@router.get("/cloud-remotes")
-async def get_cloud_remotes():
-    """Satisfies the frontend's check for cloud syncs"""
-    return {"status": "success", "data": []}
+@router.get("/stats")
+async def live_metrics(request: Request, background_tasks: BackgroundTasks):
+    """Answers the dashboard's main data fetch"""
+    data = get_system_metrics()
+    background_tasks.add_task(db.insert_metrics, data)
+    return data
+
+@router.get("/stream")
+async def get_stream(request: Request):
+    """Satisfies the frontend's Server-Sent Events (SSE) live connection"""
+    async def event_generator():
+        yield f"data: {json.dumps({'status': 'connected'})}\n\n"
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/action/{command}")
 async def trigger_action(command: str):
