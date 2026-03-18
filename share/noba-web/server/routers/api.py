@@ -7,7 +7,6 @@ from ..metrics import get_system_metrics
 from ..database import db
 from ..config import settings
 
-# Temporarily disabled token dependency so frontend can boot
 router = APIRouter()
 
 @router.get("/me")
@@ -18,7 +17,6 @@ async def get_me():
 @router.get("/settings")
 async def get_frontend_settings():
     """Feeds the dashboard configuration variables"""
-    # Returning an empty dict allows the frontend to safely fall back to its defaults
     return {"status": "success", "data": {}}
 
 @router.get("/cloud-remotes")
@@ -56,15 +54,10 @@ async def get_stream(request: Request):
 async def trigger_action(command: str):
     """Safely triggers an automation script. Completely immune to command injection."""
     if command not in settings.automation.allowed_commands:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Command '{command}' is not in the allowed_commands config."
-        )
-
+        raise HTTPException(status_code=403, detail=f"Command '{command}' is not allowed.")
     script_path = os.path.expanduser(f"~/.local/libexec/noba/{command}.sh")
     if not os.path.exists(script_path):
-        raise HTTPException(status_code=404, detail="Automation script not found on disk.")
-
+        raise HTTPException(status_code=404, detail="Script not found.")
     try:
         subprocess.Popen([script_path])
         return {"status": "success", "detail": f"Automation triggered: {command}"}
