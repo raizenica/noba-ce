@@ -101,7 +101,7 @@ body::after {
 /* Header */
 .header {
     position: sticky; top: 0; z-index: 40;
-    background: rgba(6, 10, 16, 0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
     margin: 0 -2rem 1.25rem -2rem; padding: 1.25rem 2rem 1rem 2rem;
     border-bottom: 1px solid var(--border);
     display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;
@@ -145,7 +145,8 @@ body::after {
     background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
     cursor: pointer; color: var(--text-muted); transition: all .15s; font-size: .85rem;
 }
-.icon-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+.icon-btn:hover, .icon-btn:focus-visible { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .live-pill {
     display: flex; align-items: center; gap: .45rem;
@@ -300,7 +301,8 @@ body::after {
 .svc-footer { display: flex; justify-content: space-between; align-items: center; }
 .svc-btns { display: flex; gap: .3rem; }
 .svc-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); border-radius: 3px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: .7rem; transition: all .15s; }
-.svc-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.svc-btn:hover:not(:disabled), .svc-btn:focus-visible:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.svc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .svc-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* Bookmarks */
@@ -326,7 +328,8 @@ body::after {
 }
 .btn-primary { border-color: var(--accent); color: var(--accent); background: rgba(0, 200, 255, 0.08); }
 .btn-danger { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
-.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+.btn:hover:not(:disabled), .btn:focus-visible:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn-danger:hover:not(:disabled) { background: rgba(255, 23, 68, 0.2); box-shadow: 0 0 12px rgba(255, 23, 68, 0.2); border-color: var(--danger); color: var(--danger); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-sm { width: auto; padding: 0.55rem 1.4rem; }
@@ -338,6 +341,7 @@ body::after {
     position: relative; cursor: pointer; border: 1px solid var(--border); transition: background 0.3s, border-color 0.3s;
     flex-shrink: 0; outline: none; margin: 0;
 }
+.toggle-item input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .toggle-item input[type=checkbox]::after {
     content: ''; position: absolute; top: 1px; left: 2px; width: 14px; height: 14px;
     background: var(--text-muted); border-radius: 50%; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
@@ -378,7 +382,7 @@ body::after {
     border: 1px solid var(--border); box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5); scroll-behavior: smooth;
 }
 .console-out {
-    background: #05080c; color: var(--success); padding: 1rem; border-radius: 4px; font-family: var(--font-data);
+    background: var(--bg); color: var(--success); padding: 1rem; border-radius: 4px; font-family: var(--font-data);
     font-size: 0.76rem; max-height: 50vh; overflow-y: auto; white-space: pre-wrap;
     border: 1px solid var(--border); box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.8); scroll-behavior: smooth;
 }
@@ -399,3 +403,12 @@ body::after {
 ::-webkit-scrollbar-track { background: var(--surface); }
 ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ── 13. Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

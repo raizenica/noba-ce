@@ -34,7 +34,7 @@ HOST           = os.environ.get('HOST', '0.0.0.0')
 SCRIPT_DIR     = os.environ.get('NOBA_SCRIPT_DIR', os.path.expanduser('~/.local/bin'))
 LOG_DIR        = os.path.expanduser('~/.local/share')
 PID_FILE       = os.environ.get('PID_FILE', '/tmp/noba-web-server.pid')
-ACTION_LOG     = '/tmp/noba-action.log'
+ACTION_LOG     = os.path.join(os.path.expanduser('~/.local/share'), 'noba-action.log')
 AUTH_CONFIG    = os.path.expanduser('~/.config/noba-web/auth.conf')
 USER_DB        = os.path.expanduser('~/.config/noba-web/users.conf')
 NOBA_YAML      = os.environ.get('NOBA_CONFIG', os.path.expanduser('~/.config/noba/config.yaml'))
@@ -81,7 +81,15 @@ _tokens_lock = threading.Lock()
 _tokens: dict = {}
 users_db_lock = threading.Lock()
 users_db = {}
-_USERNAME_RE = re.compile(r'^[^\s:/\\]{1,64}$')
+_USERNAME_RE   = re.compile(r'^[^\s:/\\]{1,64}$')
+_PBKDF2_ITERS  = 200_000
+
+def _pbkdf2_hash(password: str, salt: str | None = None) -> str:
+    """Return a 'pbkdf2:<salt>:<hex-digest>' string ready to store."""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), _PBKDF2_ITERS)
+    return f'pbkdf2:{salt}:{dk.hex()}'
 
 def _valid_username(name: str) -> bool: return bool(_USERNAME_RE.match(name))
 
@@ -122,7 +130,7 @@ def verify_password(stored: str, password: str) -> bool:
         parts = stored.split(':', 2)
         if len(parts) != 3: return False
         _, salt, expected = parts
-        dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
+        dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), _PBKDF2_ITERS)
         return secrets.compare_digest(expected, dk.hex())
     if ':' not in stored: return False
     salt, expected = stored.split(':', 1)
@@ -137,20 +145,25 @@ _USER_CACHE_TTL  = 30.0
 def load_old_user() -> tuple | None:
     global _user_cache, _user_cache_t
     with _user_cache_lock:
-        if time.time() - _user_cache_t < _USER_CACHE_TTL: return _user_cache
-    if not os.path.exists(AUTH_CONFIG): return None
+        if time.time() - _user_cache_t < _USER_CACHE_TTL:
+            return _user_cache
+    # Read file outside lock (I/O should not hold the lock)
+    if not os.path.exists(AUTH_CONFIG):
+        return None
+    result = None
     try:
-        with open(AUTH_CONFIG, encoding='utf-8') as f: line = f.readline().strip()
-        result = None
+        with open(AUTH_CONFIG, encoding='utf-8') as f:
+            line = f.readline().strip()
         if ':' in line:
             username, rest = line.split(':', 1)
             h = rest.rsplit(':', 1)[0] if rest.count(':') >= 2 else rest
             result = (username, h)
-        with _user_cache_lock:
-            _user_cache  = result
-            _user_cache_t = time.time()
-        return result
-    except Exception: return None
+    except Exception:
+        return None
+    with _user_cache_lock:
+        _user_cache  = result
+        _user_cache_t = time.time()
+    return result
 
 def generate_token(username: str, role: str) -> str:
     token = secrets.token_urlsafe(32)
@@ -222,18 +235,26 @@ _rate_limiter = LoginRateLimiter()
 
 # ── Subprocess helper ─────────────────────────────────────────────────────────
 class TTLCache:
-    def __init__(self) -> None:
+    """Simple TTL-based key-value cache with bounded size (evicts oldest on overflow)."""
+    def __init__(self, max_size: int = 256) -> None:
         self._store: dict = {}
-        self._lock = threading.Lock()
+        self._lock  = threading.Lock()
+        self._max   = max_size
 
     def get(self, key: str, ttl: float = 30) -> object:
         with self._lock:
             entry = self._store.get(key)
-            if entry and (time.time() - entry['t']) < ttl: return entry['v']
+            if entry and (time.time() - entry['t']) < ttl:
+                return entry['v']
         return None
 
     def set(self, key: str, val: object) -> None:
-        with self._lock: self._store[key] = {'v': val, 't': time.time()}
+        with self._lock:
+            if len(self._store) >= self._max:
+                # Evict the single oldest entry to keep size bounded
+                oldest = min(self._store, key=lambda k: self._store[k]['t'])
+                del self._store[oldest]
+            self._store[key] = {'v': val, 't': time.time()}
 
 _cache = TTLCache()
 
@@ -286,13 +307,20 @@ def read_yaml_settings() -> dict:
 
 def write_yaml_settings(settings: dict) -> bool:
     tmp_path: str | None = None
+    # Keys that belong in the web: section of the YAML
+    WEB_KEYS = frozenset([
+        'piholeUrl', 'piholeToken', 'monitoredServices', 'radarIps', 'bookmarksStr',
+        'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap', 'truenasUrl', 'truenasKey',
+        'radarrUrl', 'radarrKey', 'sonarrUrl', 'sonarrKey', 'qbitUrl', 'qbitUser', 'qbitPass'
+    ])
     try:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
             tmp.write('web:\n')
             for k, v in settings.items():
-                if k in ['piholeUrl', 'piholeToken', 'monitoredServices', 'radarIps', 'bookmarksStr', 'plexUrl', 'plexToken', 'kumaUrl', 'bmcMap', 'truenasUrl', 'truenasKey', 'radarrUrl', 'radarrKey', 'sonarrUrl', 'sonarrKey', 'qbitUrl', 'qbitUser', 'qbitPass']:
-                    if isinstance(v, str): v = json.dumps(v)
-                    tmp.write(f'  {k}: {v}\n')
+                if k not in WEB_KEYS:
+                    continue
+                # Always JSON-encode the value so special YAML chars are safe
+                tmp.write(f'  {k}: {json.dumps(v if isinstance(v, str) else str(v))}\n')
             tmp_path = tmp.name
         if os.path.exists(NOBA_YAML):
             backup = f'{NOBA_YAML}.bak.{int(time.time())}'
@@ -642,24 +670,29 @@ def collect_stats(qs: dict) -> dict:
     with _state_lock: stats['cpuHistory'] = list(_cpu_history)
     stats.update(_collect_network())
 
+    # Non-secret runtime params arrive as query params (services to watch, IPs to ping).
+    # Secret credentials (API keys, passwords) are read from the server-side YAML so they
+    # never have to appear in URLs or server access logs.
+    cfg = read_yaml_settings()
+
     svc_list = [s.strip() for s in qs.get('services', [''])[0].split(',') if s.strip()]
     ip_list  = [ip.strip() for ip in qs.get('radar', [''])[0].split(',') if ip.strip()]
-    ph_url   = qs.get('pihole', [''])[0]
-    ph_tok   = qs.get('piholetok', [''])[0]
-    plex_url = qs.get('plexUrl', [''])[0]
-    plex_tok = qs.get('plexToken', [''])[0]
-    kuma_url = qs.get('kumaUrl', [''])[0]
+    ph_url   = cfg.get('piholeUrl',  '') or qs.get('pihole',    [''])[0]
+    ph_tok   = cfg.get('piholeToken','') or qs.get('piholetok', [''])[0]
+    plex_url = cfg.get('plexUrl',    '') or qs.get('plexUrl',   [''])[0]
+    plex_tok = cfg.get('plexToken',  '') or qs.get('plexToken', [''])[0]
+    kuma_url = cfg.get('kumaUrl',    '') or qs.get('kumaUrl',   [''])[0]
     bmc_map  = [x.strip() for x in qs.get('bmcMap', [''])[0].split(',') if x.strip()]
 
-    tn_url   = qs.get('truenasUrl', [''])[0]
-    tn_key   = qs.get('truenasKey', [''])[0]
-    rad_url  = qs.get('radarrUrl', [''])[0]
-    rad_key  = qs.get('radarrKey', [''])[0]
-    son_url  = qs.get('sonarrUrl', [''])[0]
-    son_key  = qs.get('sonarrKey', [''])[0]
-    qbit_url = qs.get('qbitUrl', [''])[0]
-    qbit_user= qs.get('qbitUser', [''])[0]
-    qbit_pass= qs.get('qbitPass', [''])[0]
+    tn_url   = cfg.get('truenasUrl', '')
+    tn_key   = cfg.get('truenasKey', '')
+    rad_url  = cfg.get('radarrUrl',  '')
+    rad_key  = cfg.get('radarrKey',  '')
+    son_url  = cfg.get('sonarrUrl',  '')
+    son_key  = cfg.get('sonarrKey',  '')
+    qbit_url = cfg.get('qbitUrl',    '')
+    qbit_user= cfg.get('qbitUser',   '')
+    qbit_pass= cfg.get('qbitPass',   '')
 
     bmc_list = []
     for entry in bmc_map:
@@ -1081,9 +1114,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if new_username in users_db:
                         self._json({'error': 'User already exists'}, 409)
                         return
-                    salt = secrets.token_hex(16)
-                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
-                    users_db[new_username] = (f'pbkdf2:{salt}:{dk.hex()}', new_role)
+                    users_db[new_username] = (_pbkdf2_hash(password), new_role)
                 save_users()
                 self._json({'status': 'ok'})
                 return
@@ -1105,9 +1136,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if target not in users_db:
                         self._json({'error': 'User not found'}, 404)
                         return
-                    salt = secrets.token_hex(16)
-                    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200_000)
-                    users_db[target] = (f'pbkdf2:{salt}:{dk.hex()}', users_db[target][1])
+                    users_db[target] = (_pbkdf2_hash(password), users_db[target][1])
                 save_users()
                 self._json({'status': 'ok'})
                 return

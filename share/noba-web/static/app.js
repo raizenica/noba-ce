@@ -163,7 +163,7 @@ function dashboard() {
                 group: 'noba-v9',
                 store: {
                     get: s => (localStorage.getItem(s.options.group.name)||'').split('|'),
-                    set: s => localStorage.setItem(s.options.group.name, s.toArray().join('|'))
+                            set: s => localStorage.setItem(s.options.group.name, s.toArray().join('|'))
                 }
             });
         },
@@ -238,15 +238,15 @@ function dashboard() {
         },
 
         _buildQueryParams() {
+            // Only non-secret runtime params are sent in the URL.
+            // API keys / passwords are read from server-side YAML config — never in query strings.
             const params = new URLSearchParams({
-                services: this.monitoredServices, radar: this.radarIps,
-                pihole: this.piholeUrl, piholetok: this.piholeToken,
-                plexUrl: this.plexUrl, plexToken: this.plexToken,
-                kumaUrl: this.kumaUrl, bmcMap: this.bmcMap,
-                truenasUrl: this.truenasUrl, truenasKey: this.truenasKey,
-                radarrUrl: this.radarrUrl, radarrKey: this.radarrKey,
-                sonarrUrl: this.sonarrUrl, sonarrKey: this.sonarrKey,
-                qbitUrl: this.qbitUrl, qbitUser: this.qbitUser, qbitPass: this.qbitPass
+                services: this.monitoredServices,
+                radar:    this.radarIps,
+                pihole:   this.piholeUrl,   // URL only — token stays server-side
+                plexUrl:  this.plexUrl,
+                kumaUrl:  this.kumaUrl,
+                bmcMap:   this.bmcMap,
             });
             const token = localStorage.getItem('noba-token');
             if (token) params.append('token', token);
@@ -390,16 +390,16 @@ function dashboard() {
                     await fetch('/api/settings', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                        body: JSON.stringify({
-                            piholeUrl: this.piholeUrl, piholeToken: this.piholeToken,
-                            monitoredServices: this.monitoredServices, radarIps: this.radarIps,
-                            bookmarksStr: this.bookmarksStr, plexUrl: this.plexUrl,
-                            plexToken: this.plexToken, kumaUrl: this.kumaUrl, bmcMap: this.bmcMap,
-                            truenasUrl: this.truenasUrl, truenasKey: this.truenasKey,
-                            radarrUrl: this.radarrUrl, radarrKey: this.radarrKey,
-                            sonarrUrl: this.sonarrUrl, sonarrKey: this.sonarrKey,
-                            qbitUrl: this.qbitUrl, qbitUser: this.qbitUser, qbitPass: this.qbitPass
-                        })
+                                body: JSON.stringify({
+                                    piholeUrl: this.piholeUrl, piholeToken: this.piholeToken,
+                                    monitoredServices: this.monitoredServices, radarIps: this.radarIps,
+                                    bookmarksStr: this.bookmarksStr, plexUrl: this.plexUrl,
+                                    plexToken: this.plexToken, kumaUrl: this.kumaUrl, bmcMap: this.bmcMap,
+                                    truenasUrl: this.truenasUrl, truenasKey: this.truenasKey,
+                                    radarrUrl: this.radarrUrl, radarrKey: this.radarrKey,
+                                    sonarrUrl: this.sonarrUrl, sonarrKey: this.sonarrKey,
+                                    qbitUrl: this.qbitUrl, qbitUser: this.qbitUser, qbitPass: this.qbitPass
+                                })
                     });
                 } catch (e) {}
             }
@@ -431,7 +431,7 @@ function dashboard() {
                 const res = await fetch('/api/service-control', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                    body: JSON.stringify({ service: svc.name, action, is_user: svc.is_user })
+                                        body: JSON.stringify({ service: svc.name, action, is_user: svc.is_user })
                 });
                 const d = await res.json();
                 this.addToast(d.success ? `${action}: ${svc.name.replace('.service','')}` : `Failed: ${svc.name}`, d.success ? 'success' : 'error');
@@ -497,9 +497,14 @@ function dashboard() {
                 if (res.ok && data.token) {
                     localStorage.setItem('noba-token', data.token);
                     this.authenticated = true;
-                    await this.fetchUserInfo(); await this.fetchSettings(); await this.fetchCloudRemotes();
+                    await this.fetchUserInfo();
+                    await this.fetchSettings();
+                    await this.fetchCloudRemotes();
                     if (this.userRole === 'admin') await this.fetchUsers();
-                    this.init();
+                    // Connect live stream — do NOT call init() again as that would
+                    // duplicate all setInterval timers registered during component init.
+                    this.connectSSE();
+                    await this.fetchLog();
                 } else { this.loginError = data.error || 'Login failed'; }
             } catch { this.loginError = 'Network error'; } finally { this.loginLoading = false; }
         },
@@ -519,7 +524,7 @@ function dashboard() {
             try {
                 const res = await fetch('/api/admin/users', {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                    body: JSON.stringify({ action: 'list' })
+                                        body: JSON.stringify({ action: 'list' })
                 });
                 if (res.ok) this.userList = await res.json(); else this.addToast('Failed to fetch users', 'error');
             } catch (e) { this.addToast('Error fetching users', 'error'); } finally { this.usersLoading = false; }
@@ -530,7 +535,7 @@ function dashboard() {
             try {
                 const res = await fetch('/api/admin/users', {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                    body: JSON.stringify({ action: 'add', username: this.newUsername, password: this.newPassword, role: this.newRole })
+                                        body: JSON.stringify({ action: 'add', username: this.newUsername, password: this.newPassword, role: this.newRole })
                 });
                 if (res.ok) {
                     this.addToast(`User ${this.newUsername} added`, 'success');
@@ -551,7 +556,7 @@ function dashboard() {
             try {
                 const res = await fetch('/api/admin/users', {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                    body: JSON.stringify({ action: 'change_password', username, password: this.passModalValue })
+                                        body: JSON.stringify({ action: 'change_password', username, password: this.passModalValue })
                 });
                 if (res.ok) this.addToast(`Password changed for ${username}`, 'success');
                 else { const err = await res.json(); this.addToast(err.error || 'Failed to change password', 'error'); }
@@ -569,7 +574,7 @@ function dashboard() {
             try {
                 const res = await fetch('/api/admin/users', {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('noba-token') },
-                    body: JSON.stringify({ action: 'remove', username })
+                                        body: JSON.stringify({ action: 'remove', username })
                 });
                 if (res.ok) { this.addToast(`User ${username} removed`, 'success'); await this.fetchUsers(); }
                 else { const err = await res.json(); this.addToast(err.error || 'Failed to remove user', 'error'); }
