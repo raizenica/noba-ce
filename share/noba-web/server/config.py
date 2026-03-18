@@ -72,10 +72,10 @@ SECURITY_HEADERS = {
     "Referrer-Policy":         "same-origin",
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
         "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
-        "img-src 'self' data:; connect-src 'self'"
+        "img-src 'self' data:; connect-src 'self' wss: ws:"
     ),
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
 }
