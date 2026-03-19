@@ -1726,5 +1726,689 @@ function actionsMixin() {
             a.download = 'noba-chart.png';
             a.click();
         },
+
+
+        // ── Home Assistant Deep Integration ──────────────────────────────────
+        hassEntities: [],
+        hassEntitiesLoading: false,
+        hassEntityFilter: '',
+        hassDomainFilter: '',
+        showHassModal: false,
+
+        async fetchHassEntities(domain) {
+            this.hassEntitiesLoading = true;
+            const qs = domain ? `?domain=${domain}` : '';
+            try {
+                const res = await fetch(`/api/hass/entities${qs}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                this.hassEntities = d.entities || [];
+            } catch (e) {
+                this.addToast('Failed to load HA entities: ' + e.message, 'error');
+            }
+            this.hassEntitiesLoading = false;
+        },
+
+        get filteredHassEntities() {
+            let ents = this.hassEntities;
+            if (this.hassDomainFilter) ents = ents.filter(e => e.domain === this.hassDomainFilter);
+            if (this.hassEntityFilter) {
+                const q = this.hassEntityFilter.toLowerCase();
+                ents = ents.filter(e => e.name.toLowerCase().includes(q) || e.entity_id.toLowerCase().includes(q));
+            }
+            return ents.slice(0, 100);
+        },
+
+        get hassDomains() {
+            const domains = new Set(this.hassEntities.map(e => e.domain));
+            return [...domains].sort();
+        },
+
+        async hassToggleEntity(entityId) {
+            try {
+                const res = await fetch(`/api/hass/toggle/${entityId}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                this.addToast(`Toggled ${entityId}`, 'success');
+                setTimeout(() => this.fetchHassEntities(this.hassDomainFilter), 1000);
+            } catch (e) {
+                this.addToast('Toggle failed: ' + e.message, 'error');
+            }
+        },
+
+
+        // ── Docker Deep Management ───────────────────────────────────────────
+        containerLogs: '',
+        containerLogsName: '',
+        containerLogsLoading: false,
+        showContainerLogsModal: false,
+        containerInspect: null,
+        showContainerInspectModal: false,
+        containerStats: [],
+        containerStatsLoading: false,
+
+        async fetchContainerLogs(name, lines) {
+            this.containerLogsName = name;
+            this.containerLogsLoading = true;
+            this.showContainerLogsModal = true;
+            try {
+                const res = await fetch(`/api/containers/${encodeURIComponent(name)}/logs?lines=${lines || 200}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.containerLogs = res.ok ? await res.text() : 'Failed to fetch logs.';
+            } catch (e) {
+                this.containerLogs = 'Error: ' + e.message;
+            }
+            this.containerLogsLoading = false;
+        },
+
+        async fetchContainerInspect(name) {
+            this.showContainerInspectModal = true;
+            try {
+                const res = await fetch(`/api/containers/${encodeURIComponent(name)}/inspect`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.containerInspect = res.ok ? await res.json() : null;
+            } catch { this.containerInspect = null; }
+        },
+
+        async fetchContainerStats() {
+            this.containerStatsLoading = true;
+            try {
+                const res = await fetch('/api/containers/stats', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.containerStats = res.ok ? await res.json() : [];
+            } catch { this.containerStats = []; }
+            this.containerStatsLoading = false;
+        },
+
+        async pullContainerImage(name) {
+            if (!confirm(`Pull latest image for ${name}?`)) return;
+            try {
+                const res = await fetch(`/api/containers/${encodeURIComponent(name)}/pull`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                const d = await res.json();
+                this.addToast(d.success ? `Pulling image for ${name} (run ${d.run_id})` : 'Pull failed', d.success ? 'success' : 'error');
+            } catch (e) {
+                this.addToast('Pull failed: ' + e.message, 'error');
+            }
+        },
+
+
+        // ── Kubernetes Browser ───────────────────────────────────────────────
+        k8sNamespaces: [],
+        k8sPods: [],
+        k8sDeployments: [],
+        k8sSelectedNs: '',
+        k8sLoading: false,
+        showK8sModal: false,
+        k8sPodLogs: '',
+        k8sPodLogsName: '',
+        showK8sPodLogsModal: false,
+
+        async fetchK8sNamespaces() {
+            try {
+                const res = await fetch('/api/k8s/namespaces', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.k8sNamespaces = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchK8sPods(namespace) {
+            this.k8sLoading = true;
+            const qs = namespace ? `?namespace=${namespace}` : '';
+            try {
+                const res = await fetch(`/api/k8s/pods${qs}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.k8sPods = await res.json();
+            } catch { /* silent */ }
+            this.k8sLoading = false;
+        },
+
+        async fetchK8sDeployments(namespace) {
+            const qs = namespace ? `?namespace=${namespace}` : '';
+            try {
+                const res = await fetch(`/api/k8s/deployments${qs}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.k8sDeployments = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchK8sPodLogs(namespace, name, container) {
+            this.k8sPodLogsName = `${namespace}/${name}`;
+            this.showK8sPodLogsModal = true;
+            try {
+                const qs = container ? `?container=${encodeURIComponent(container)}&lines=200` : '?lines=200';
+                const res = await fetch(`/api/k8s/pods/${namespace}/${name}/logs${qs}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.k8sPodLogs = res.ok ? await res.text() : 'Failed to fetch logs.';
+            } catch (e) { this.k8sPodLogs = 'Error: ' + e.message; }
+        },
+
+        async k8sScale(namespace, name, replicas) {
+            const count = prompt(`Scale ${namespace}/${name} to how many replicas?`, replicas);
+            if (count === null) return;
+            try {
+                const res = await fetch(`/api/k8s/deployments/${namespace}/${name}/scale`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({ replicas: parseInt(count) }),
+                });
+                const d = await res.json();
+                this.addToast(d.success ? `Scaled to ${d.replicas} replicas` : 'Scale failed', d.success ? 'success' : 'error');
+                this.fetchK8sDeployments(namespace);
+            } catch (e) {
+                this.addToast('Scale failed: ' + e.message, 'error');
+            }
+        },
+
+        openK8sBrowser() {
+            this.showK8sModal = true;
+            this.fetchK8sNamespaces();
+            this.fetchK8sPods(this.k8sSelectedNs);
+            this.fetchK8sDeployments(this.k8sSelectedNs);
+        },
+
+
+        // ── Proxmox Deep ─────────────────────────────────────────────────────
+        pmxSnapshots: [],
+        pmxSnapshotsLoading: false,
+        showPmxSnapshotModal: false,
+        pmxSelectedNode: '',
+        pmxSelectedVmid: 0,
+        pmxSelectedType: 'qemu',
+
+        async fetchPmxSnapshots(node, vmid, vtype) {
+            this.pmxSelectedNode = node;
+            this.pmxSelectedVmid = vmid;
+            this.pmxSelectedType = vtype || 'qemu';
+            this.pmxSnapshotsLoading = true;
+            this.showPmxSnapshotModal = true;
+            try {
+                const res = await fetch(`/api/proxmox/nodes/${node}/vms/${vmid}/snapshots?type=${vtype || 'qemu'}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.pmxSnapshots = await res.json();
+            } catch { this.pmxSnapshots = []; }
+            this.pmxSnapshotsLoading = false;
+        },
+
+        async createPmxSnapshot(node, vmid, vtype) {
+            const name = prompt('Snapshot name:');
+            if (!name) return;
+            const desc = prompt('Description (optional):', '');
+            try {
+                const res = await fetch(`/api/proxmox/nodes/${node}/vms/${vmid}/snapshot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({ name, description: desc || '', type: vtype || 'qemu' }),
+                });
+                const d = await res.json();
+                this.addToast(d.success ? 'Snapshot created' : 'Snapshot failed', d.success ? 'success' : 'error');
+                this.fetchPmxSnapshots(node, vmid, vtype);
+            } catch (e) {
+                this.addToast('Snapshot failed: ' + e.message, 'error');
+            }
+        },
+
+        async openPmxConsole(node, vmid, vtype) {
+            try {
+                const res = await fetch(`/api/proxmox/nodes/${node}/vms/${vmid}/console?type=${vtype || 'qemu'}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                const d = await res.json();
+                if (d.url) window.open(d.url, '_blank');
+            } catch (e) {
+                this.addToast('Console failed: ' + e.message, 'error');
+            }
+        },
+
+
+        // ── Custom Monitoring Dashboard ──────────────────────────────────────
+        multiMetrics: ['cpu_percent'],
+        multiMetricData: {},
+        multiMetricLoading: false,
+        showMultiChartModal: false,
+        availableMetrics: [],
+
+        async fetchAvailableMetrics() {
+            try {
+                const res = await fetch('/api/metrics/available', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.availableMetrics = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchMultiMetricChart() {
+            if (!this.multiMetrics.length) return;
+            this.multiMetricLoading = true;
+            try {
+                const metrics = this.multiMetrics.join(',');
+                const res = await fetch(`/api/history/multi?metrics=${metrics}&range=${this.historyRange}&resolution=${this.historyResolution}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.multiMetricData = await res.json();
+            } catch { /* silent */ }
+            this.multiMetricLoading = false;
+            this.renderMultiChart();
+        },
+
+        addMultiMetric(metric) {
+            if (!this.multiMetrics.includes(metric) && this.multiMetrics.length < 10) {
+                this.multiMetrics.push(metric);
+                this.fetchMultiMetricChart();
+            }
+        },
+
+        removeMultiMetric(metric) {
+            this.multiMetrics = this.multiMetrics.filter(m => m !== metric);
+            this.fetchMultiMetricChart();
+        },
+
+        renderMultiChart() {
+            const canvas = document.getElementById('multi-chart-canvas');
+            if (!canvas) return;
+            if (this._multiChart) this._multiChart.destroy();
+            const colors = ['#7aa2f7','#f7768e','#9ece6a','#e0af68','#bb9af7','#7dcfff','#ff9e64','#c0caf5','#73daca','#b4f9f8'];
+            const datasets = [];
+            let i = 0;
+            for (const [metric, points] of Object.entries(this.multiMetricData)) {
+                datasets.push({
+                    label: metric,
+                    data: points.map(p => ({ x: p.time * 1000, y: p.value })),
+                    borderColor: colors[i % colors.length],
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    tension: 0.3,
+                });
+                i++;
+            }
+            this._multiChart = new Chart(canvas, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'HH:mm' },
+                             ticks: { color: 'rgba(255,255,255,.5)' }, grid: { color: 'rgba(255,255,255,.05)' } },
+                        y: { ticks: { color: 'rgba(255,255,255,.5)' }, grid: { color: 'rgba(255,255,255,.05)' } },
+                    },
+                    plugins: { legend: { labels: { color: 'rgba(255,255,255,.7)' } } },
+                },
+            });
+        },
+        _multiChart: null,
+
+
+        // ── Alert Rule Builder ───────────────────────────────────────────────
+        showAlertRuleModal: false,
+        alertRulesList: [],
+        editingRule: null,
+        newRule: { condition: '', severity: 'warning', message: '', channels: [], cooldown: 300, group: '' },
+        ruleTestResult: null,
+
+        async fetchAlertRules() {
+            try {
+                const res = await fetch('/api/alert-rules', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.alertRulesList = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async saveAlertRule() {
+            const rule = this.editingRule || this.newRule;
+            if (!rule.condition) { this.addToast('Condition is required', 'error'); return; }
+            const method = this.editingRule ? 'PUT' : 'POST';
+            const url = this.editingRule ? `/api/alert-rules/${this.editingRule.id}` : '/api/alert-rules';
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(rule),
+                });
+                if (!res.ok) { const d = await res.json(); this.addToast(d.detail || 'Failed', 'error'); return; }
+                this.addToast(this.editingRule ? 'Rule updated' : 'Rule created', 'success');
+                this.editingRule = null;
+                this.newRule = { condition: '', severity: 'warning', message: '', channels: [], cooldown: 300, group: '' };
+                this.fetchAlertRules();
+            } catch (e) {
+                this.addToast('Save failed: ' + e.message, 'error');
+            }
+        },
+
+        async deleteAlertRule(ruleId) {
+            if (!confirm('Delete this alert rule?')) return;
+            await fetch(`/api/alert-rules/${ruleId}`, {
+                method: 'DELETE', headers: { 'Authorization': 'Bearer ' + this._token() },
+            });
+            this.fetchAlertRules();
+        },
+
+        async testAlertRule(ruleId) {
+            try {
+                const res = await fetch(`/api/alert-rules/test/${ruleId}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.ruleTestResult = await res.json();
+                    this.addToast(`Rule test: ${this.ruleTestResult.result ? 'TRIGGERED' : 'not triggered'}`,
+                                 this.ruleTestResult.result ? 'warning' : 'success');
+                }
+            } catch { /* silent */ }
+        },
+
+        editAlertRule(rule) {
+            this.editingRule = { ...rule };
+        },
+
+
+        // ── Workflow Trace ───────────────────────────────────────────────────
+        workflowTrace: null,
+        workflowTraceLoading: false,
+        showWorkflowTraceModal: false,
+
+        async fetchWorkflowTrace(autoId) {
+            this.workflowTraceLoading = true;
+            this.showWorkflowTraceModal = true;
+            try {
+                const res = await fetch(`/api/automations/${autoId}/trace`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.workflowTrace = await res.json();
+            } catch { this.workflowTrace = null; }
+            this.workflowTraceLoading = false;
+        },
+
+        async validateWorkflow(steps) {
+            try {
+                const res = await fetch('/api/automations/validate-workflow', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({ steps }),
+                });
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d.valid) this.addToast('Workflow valid — all steps found', 'success');
+                    else this.addToast('Invalid — some steps not found', 'error');
+                    return d;
+                }
+            } catch { /* silent */ }
+            return null;
+        },
+
+
+        // ── User Profile ─────────────────────────────────────────────────────
+        userProfile: null,
+        showProfileModal: false,
+        changePasswordCurrent: '',
+        changePasswordNew: '',
+        changePasswordConfirm: '',
+
+        async fetchProfile() {
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.userProfile = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async changeOwnPassword() {
+            if (this.changePasswordNew !== this.changePasswordConfirm) {
+                this.addToast('Passwords do not match', 'error');
+                return;
+            }
+            try {
+                const res = await fetch('/api/profile/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({ current: this.changePasswordCurrent, new: this.changePasswordNew }),
+                });
+                if (!res.ok) {
+                    const d = await res.json();
+                    this.addToast(d.detail || 'Failed', 'error');
+                    return;
+                }
+                this.addToast('Password changed', 'success');
+                this.changePasswordCurrent = '';
+                this.changePasswordNew = '';
+                this.changePasswordConfirm = '';
+            } catch (e) {
+                this.addToast('Failed: ' + e.message, 'error');
+            }
+        },
+
+        // ── Backup Scheduling ────────────────────────────────────────────────
+        backupSchedules: [],
+        backupHealth: null,
+        backupProgress: null,
+        showBackupScheduleModal: false,
+        newBackupSchedule: { type: 'backup', schedule: '0 3 * * *', name: '' },
+
+        async fetchBackupSchedules() {
+            try {
+                const res = await fetch('/api/backup/schedules', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.backupSchedules = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async createBackupSchedule() {
+            const s = this.newBackupSchedule;
+            if (!s.name) s.name = `Scheduled ${s.type}`;
+            try {
+                const res = await fetch('/api/backup/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(s),
+                });
+                if (res.ok) {
+                    this.addToast('Backup schedule created', 'success');
+                    this.fetchBackupSchedules();
+                    this.fetchAutomations();
+                }
+            } catch (e) {
+                this.addToast('Failed: ' + e.message, 'error');
+            }
+        },
+
+        async fetchBackupHealth() {
+            try {
+                const res = await fetch('/api/backup/health', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.backupHealth = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchBackupProgress() {
+            try {
+                const res = await fetch('/api/backup/progress', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.backupProgress = await res.json();
+            } catch { /* silent */ }
+        },
+
+        // ── Container Stats ──────────────────────────────────────────────────
+        showContainerStatsModal: false,
+
+        openContainerStats() {
+            this.showContainerStatsModal = true;
+            this.fetchContainerStats();
+        },
+
+
+        // ── System Health Dashboard ──────────────────────────────────────────
+        systemHealth: null,
+        showHealthModal: false,
+
+        async fetchSystemHealth() {
+            try {
+                const res = await fetch('/api/system/health', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.systemHealth = await res.json();
+            } catch { /* silent */ }
+        },
+
+        get healthScoreClass() {
+            if (!this.systemHealth) return 'bn';
+            const s = this.systemHealth.score;
+            return s >= 90 ? 'bs' : s >= 60 ? 'bw' : 'bd';
+        },
+
+        // ── Network Analysis ─────────────────────────────────────────────────
+        networkConnections: [],
+        listeningPorts: [],
+        networkInterfaces: [],
+        showNetworkModal: false,
+
+        async fetchNetworkInfo() {
+            try {
+                const [conns, ports, ifaces] = await Promise.all([
+                    fetch('/api/network/connections', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                    fetch('/api/network/ports', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                    fetch('/api/network/interfaces', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                ]);
+                this.networkConnections = conns;
+                this.listeningPorts = ports;
+                this.networkInterfaces = ifaces;
+            } catch { /* silent */ }
+        },
+
+        // ── Process History ──────────────────────────────────────────────────
+        processHistory: [],
+        processList: [],
+        showProcessModal: false,
+
+        async fetchProcessHistory() {
+            try {
+                const res = await fetch('/api/processes/history', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.processHistory = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchProcessList() {
+            try {
+                const res = await fetch('/api/processes/current', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.processList = await res.json();
+            } catch { /* silent */ }
+        },
+
+        // ── Service Map ──────────────────────────────────────────────────────
+        serviceMap: null,
+        showServiceMapModal: false,
+
+        async fetchServiceMap() {
+            try {
+                const res = await fetch('/api/services/map', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.serviceMap = await res.json();
+            } catch { /* silent */ }
+        },
+
+
+        // ── Uptime Dashboard ─────────────────────────────────────────────────
+        uptimeItems: [],
+        showUptimeModal: false,
+
+        async fetchUptime() {
+            try {
+                const res = await fetch('/api/uptime', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.uptimeItems = await res.json();
+            } catch { /* silent */ }
+        },
+
+        get uptimePercent() {
+            if (!this.uptimeItems.length) return 100;
+            const up = this.uptimeItems.filter(i => i.status === 'up').length;
+            return Math.round(up / this.uptimeItems.length * 100);
+        },
+
+        // ── Journal Viewer ───────────────────────────────────────────────────
+        journalOutput: '',
+        journalUnit: '',
+        journalPriority: '',
+        journalLines: 100,
+        journalGrep: '',
+        journalUnits: [],
+        showJournalModal: false,
+
+        async fetchJournal() {
+            const params = new URLSearchParams({ lines: this.journalLines });
+            if (this.journalUnit) params.set('unit', this.journalUnit);
+            if (this.journalPriority) params.set('priority', this.journalPriority);
+            if (this.journalGrep) params.set('grep', this.journalGrep);
+            try {
+                const res = await fetch('/api/journal?' + params, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.journalOutput = res.ok ? await res.text() : 'Failed to fetch journal.';
+            } catch (e) { this.journalOutput = 'Error: ' + e.message; }
+        },
+
+        async fetchJournalUnits() {
+            try {
+                const res = await fetch('/api/journal/units', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.journalUnits = await res.json();
+            } catch { /* silent */ }
+        },
+
+        openJournal() {
+            this.showJournalModal = true;
+            this.fetchJournalUnits();
+            this.fetchJournal();
+        },
+
+        // ── Disk Prediction ──────────────────────────────────────────────────
+        diskPredictions: [],
+
+        async fetchDiskPredictions() {
+            try {
+                const res = await fetch('/api/disks/prediction', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.diskPredictions = await res.json();
+            } catch { /* silent */ }
+        },
+
+        // ── System Info ──────────────────────────────────────────────────────
+        systemInfo: null,
+        showSystemInfoModal: false,
+
+        async fetchSystemInfo() {
+            try {
+                const res = await fetch('/api/system/info', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.systemInfo = await res.json();
+            } catch { /* silent */ }
+        },
     };
 }

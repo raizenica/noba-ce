@@ -82,7 +82,7 @@
 
             <div class="user-chip" x-show="authenticated && username" x-cloak>
                 <i class="fas fa-user-circle" style="color:var(--accent);font-size:.8rem" aria-hidden="true"></i>
-                <span x-text="username" style="color:var(--text)"></span>
+                <span x-text="username" style="color:var(--text);cursor:pointer" @click="showProfileModal=true; fetchProfile()"></span>
                 <span class="badge" :class="userRole==='admin'?'ba':userRole==='operator'?'bs':'bn'" x-text="userRole"></span>
             </div>
 
@@ -105,6 +105,15 @@
 
             <button class="icon-btn" @click="refreshStats()" title="Refresh (r)" aria-label="Refresh stats">
                 <i class="fas fa-sync" :class="refreshing ? 'fa-spin' : ''" aria-hidden="true"></i>
+            </button>
+
+            <button class="icon-btn" @click="showMultiChartModal=true; fetchAvailableMetrics(); fetchMultiMetricChart()"
+                    title="Custom Dashboard" aria-label="Custom dashboard" x-show="authenticated" x-cloak>
+                <i class="fas fa-chart-line" aria-hidden="true"></i>
+            </button>
+
+            <button class="icon-btn" @click="showServiceMapModal=true; fetchServiceMap()" title="Service Map" x-show="authenticated" x-cloak>
+                <i class="fas fa-sitemap" aria-hidden="true"></i>
             </button>
 
             <button class="icon-btn" @click="toggleNotifCenter()" title="Notifications" style="position:relative" aria-label="Notifications">
@@ -174,7 +183,7 @@
         </div>
     </div>
 
-    <div class="alerts" role="alert" x-show="visibleAlerts && visibleAlerts.length > 0" x-cloak>
+    <div class="alerts" role="alert" x-show="visibleAlerts && visibleAlerts.length > 0" x-cloak style="display:flex;align-items:center;flex-wrap:wrap">
         <template x-for="a in visibleAlerts" :key="a.msg">
             <div class="alert" :class="a.level" :data-msg="a.msg" style="transition:transform .2s,opacity .2s">
                 <i class="fas" :class="a.level==='danger' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle'" aria-hidden="true"></i>
@@ -182,6 +191,10 @@
                 <button class="alert-dismiss" @click="dismissAlert(a.msg)" :aria-label="'Dismiss: ' + a.msg">×</button>
             </div>
         </template>
+        <button class="btn-sm" @click="showAlertRuleModal=true; fetchAlertRules(); fetchAvailableMetrics()"
+                x-show="userRole==='admin'" style="margin-left:auto">
+            <i class="fas fa-cog"></i> Rules
+        </button>
     </div>
 
     <main>
@@ -252,6 +265,53 @@
             </div>
         </div>
 
+        <div class="card" data-id="card-health" x-show="authenticated" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr"><i class="fas fa-heartbeat card-icon" style="color:#f7768e"></i><span class="card-title">System Health</span>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.health?'is-collapsed':''" @click="toggleCollapse('health')"></button>
+                <i class="fas fa-grip-lines drag-handle"></i></div>
+            <div class="card-body" x-show="!collapsed.health" x-init="fetchSystemHealth(); setInterval(() => fetchSystemHealth(), 30000)">
+                <template x-if="systemHealth">
+                    <div>
+                        <div style="text-align:center;margin:8px 0">
+                            <div style="font-size:2.5rem;font-weight:700" :style="'color:var(--' + (systemHealth.score >= 90 ? 'success' : systemHealth.score >= 60 ? 'warning' : 'danger') + ')'">
+                                <span x-text="systemHealth.score"></span><span style="font-size:1rem;color:var(--text-dim)">%</span>
+                            </div>
+                            <div style="font-size:.75rem;color:var(--text-muted)">Health Score — Grade <span x-text="systemHealth.grade" style="font-weight:700"></span></div>
+                        </div>
+                        <template x-for="c in systemHealth.checks" :key="c.name">
+                            <div class="row" style="font-size:.8rem">
+                                <span class="row-label"><i class="fas fa-circle" style="font-size:.4rem;vertical-align:middle;margin-right:4px"
+                                    :style="'color:var(--' + (c.status==='ok' ? 'success' : c.status==='warning' ? 'warning' : 'danger') + ')'"></i><span x-text="c.name"></span></span>
+                                <span class="row-val" x-text="c.value"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template x-if="!systemHealth"><div class="empty-msg">Loading...</div></template>
+            </div>
+        </div>
+
+        <div class="card" data-id="card-uptime" x-show="authenticated" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr"><i class="fas fa-check-circle card-icon" style="color:#9ece6a"></i><span class="card-title">Uptime Status</span>
+                <button class="svc-btn" title="Details" @click="showUptimeModal=true; fetchUptime()" style="margin-left:auto;margin-right:4px"><i class="fas fa-expand-alt"></i></button>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.uptime?'is-collapsed':''" @click="toggleCollapse('uptime')"></button>
+                <i class="fas fa-grip-lines drag-handle"></i></div>
+            <div class="card-body" x-show="!collapsed.uptime" x-init="fetchUptime(); setInterval(() => fetchUptime(), 30000)">
+                <div style="text-align:center;margin:4px 0">
+                    <span style="font-size:1.8rem;font-weight:700" :style="'color:var(--'+(uptimePercent>=95?'success':uptimePercent>=80?'warning':'danger')+')'">
+                        <span x-text="uptimePercent"></span>%
+                    </span>
+                    <div style="font-size:.7rem;color:var(--text-dim)" x-text="uptimeItems.filter(i=>i.status==='up').length + '/' + uptimeItems.length + ' services up'"></div>
+                </div>
+                <template x-for="item in uptimeItems.filter(i => i.status !== 'up').slice(0, 5)" :key="item.name">
+                    <div class="row" style="font-size:.8rem">
+                        <span class="row-label"><i class="fas fa-times-circle" style="color:var(--danger);margin-right:4px"></i><span x-text="item.name"></span></span>
+                        <span class="badge bd">down</span>
+                    </div>
+                </template>
+            </div>
+        </div>
+
         <div class="card" data-id="card-netio" x-show="vis.netio" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
             <div class="card-hdr">
                 <i class="fas fa-network-wired card-icon" aria-hidden="true"></i>
@@ -262,6 +322,7 @@
                         :aria-expanded="!collapsed.netio"
                         aria-controls="body-netio"
                         aria-label="Toggle Network I/O"></button>
+                <button class="svc-btn" title="Network details" @click="showNetworkModal=true; fetchNetworkInfo()" style="margin-left:auto"><i class="fas fa-project-diagram"></i></button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-netio" x-show="!collapsed.netio">
@@ -277,7 +338,7 @@
                 </div>
                 <div class="row">
                     <span class="row-label">Hostname</span>
-                    <span class="row-val copy-hover" @click="copyVal(hostname, $event)" x-text="hostname || '--'" title="Copy hostname" role="button" tabindex="0" @keyup.enter="copyVal(hostname, $event)"></span>
+                    <span class="row-val copy-hover" @click="showSystemInfoModal=true; fetchSystemInfo()" style="cursor:pointer" x-text="hostname || '--'" title="Click for system info" role="button" tabindex="0" @keyup.enter="showSystemInfoModal=true; fetchSystemInfo()"></span>
                 </div>
                 <div class="row">
                     <span class="row-label">Default IP</span>
@@ -598,6 +659,14 @@
                         </div>
                     </template>
                 </div>
+                <div style="margin-top:.5rem" x-init="fetchDiskPredictions()">
+                    <template x-for="dp in diskPredictions.filter(d => d.full_at)" :key="dp.mount">
+                        <div class="row" style="font-size:.7rem;color:var(--warning)">
+                            <span class="row-label"><i class="fas fa-exclamation-triangle" style="margin-right:4px"></i><span x-text="dp.mount"></span></span>
+                            <span class="row-val" x-text="'Full by ' + (dp.full_at ? new Date(dp.full_at).toLocaleDateString() : 'N/A')"></span>
+                        </div>
+                    </template>
+                </div>
             </div>
         </div>
 
@@ -688,6 +757,7 @@
                         :aria-expanded="!collapsed.procs"
                         aria-controls="body-procs"
                         aria-label="Toggle Resource Hogs"></button>
+                <button class="svc-btn" title="All processes" @click="showProcessModal=true; fetchProcessList()" style="margin-left:auto"><i class="fas fa-list"></i></button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-procs" x-show="!collapsed.procs">
@@ -793,6 +863,11 @@
                         <div class="row"><span class="row-label">Automations</span><span class="row-val" x-text="hass.automations||0"></span></div>
                         <div class="row"><span class="row-label">Lights On</span><span class="row-val" x-text="hass.lights_on||0"></span></div>
                         <div class="row"><span class="row-label">Switches On</span><span class="row-val" x-text="hass.switches_on||0"></span></div>
+                        <div style="margin-top:.75rem;border-top:1px solid var(--border);padding-top:.5rem;text-align:center">
+                            <button class="btn-sm" @click="showHassModal=true; fetchHassEntities()">
+                                <i class="fas fa-list"></i> Browse Entities
+                            </button>
+                        </div>
                     </div>
                 </template>
                 <div x-show="!hass" class="empty-msg">Home Assistant data unavailable.</div>
@@ -1122,6 +1197,9 @@
                     <div class="row"><span class="row-label">Pods</span><span class="row-val" x-text="k8s.pods||0"></span></div>
                     <div class="row"><span class="row-label">Running</span><span class="row-val" x-text="k8s.running||0"></span></div>
                     <div class="row"><span class="row-label">Namespaces</span><span class="row-val" x-text="k8s.namespaces||0"></span></div>
+                    <div style="margin-top:.75rem;border-top:1px solid var(--border);padding-top:.5rem;text-align:center">
+                        <button class="btn-sm" @click="openK8sBrowser()"><i class="fas fa-dharmachakra"></i> Browse Cluster</button>
+                    </div>
                 </div></template>
                 <template x-if="!k8s"><div class="empty-msg">Kubernetes unreachable — configure in Settings.</div></template>
             </div>
@@ -1345,6 +1423,7 @@
                 <i class="fas fa-boxes card-icon" aria-hidden="true"></i>
                 <span class="card-title">Containers</span>
                 <span class="card-count" x-show="containers && containers.length > 0" x-text="containers.length + ' total'"></span>
+                <button class="svc-btn" title="Container Stats" @click="openContainerStats()" style="margin-left:auto;margin-right:4px"><i class="fas fa-tachometer-alt"></i></button>
                 <button class="collapse-btn fas fa-chevron-down"
                         :class="collapsed.containers ? 'is-collapsed' : ''"
                         @click="toggleCollapse('containers')"
@@ -1365,6 +1444,11 @@
                                 <button class="svc-btn" title="Start"   :disabled="c.state==='running'" @click.stop="containerAction(c.name,'start')"   aria-label="Start container"><i class="fas fa-play"   aria-hidden="true"></i></button>
                                 <button class="svc-btn" title="Stop"    :disabled="c.state!=='running'" @click.stop="containerAction(c.name,'stop')"    aria-label="Stop container"><i class="fas fa-stop"   aria-hidden="true"></i></button>
                                 <button class="svc-btn" title="Restart" :disabled="c.state!=='running'" @click.stop="containerAction(c.name,'restart')" aria-label="Restart container"><i class="fas fa-sync" aria-hidden="true"></i></button>
+                            </div>
+                            <div style="display:flex;gap:4px;margin-left:auto" x-show="userRole!=='viewer'">
+                                <button class="svc-btn" title="Logs" @click="fetchContainerLogs(c.name)"><i class="fas fa-scroll"></i></button>
+                                <button class="svc-btn" title="Inspect" @click="fetchContainerInspect(c.name)"><i class="fas fa-info-circle"></i></button>
+                                <button class="svc-btn" title="Pull image" @click="pullContainerImage(c.name)"><i class="fas fa-download"></i></button>
                             </div>
                         </div>
                     </template>
@@ -1417,6 +1501,10 @@
                                           x-text="vm.status"></span>
                                     <span x-show="vm.status==='running'" class="badge bn"
                                           style="font-size:.62rem" x-text="vm.cpu + '% cpu'"></span>
+                                    <div style="display:flex;gap:4px" x-show="userRole!=='viewer'">
+                                        <button class="svc-btn" title="Snapshots" @click="fetchPmxSnapshots(vm.node, vm.vmid, vm.type)"><i class="fas fa-camera"></i></button>
+                                        <button class="svc-btn" title="Console" @click="openPmxConsole(vm.node, vm.vmid, vm.type)"><i class="fas fa-desktop"></i></button>
+                                    </div>
                                 </div>
                             </template>
                         </div>
@@ -1487,6 +1575,7 @@
                         :aria-expanded="!collapsed.logs"
                         aria-controls="body-logs"
                         aria-label="Toggle System Logs"></button>
+                <button class="svc-btn" title="System Journal" @click="openJournal()" style="margin-left:auto;margin-right:4px" x-show="userRole!=='viewer'"><i class="fas fa-file-alt"></i></button>
                 <button class="icon-btn" style="width:auto; padding:0 .3rem; margin-right:.3rem;" x-show="userRole === 'admin'" @click="openAuditModal()" title="View Audit Log" aria-label="View Audit Log">
                     <i class="fas fa-user-secret"></i>
                 </button>
@@ -1645,6 +1734,14 @@
                                   x-text="backupStatus && backupStatus.exit_code === 0 ? 'Success' : 'Failed'"></span>
                             <span x-show="backupStatus && backupStatus.failed_sources" style="color:var(--danger);font-size:.7rem" x-text="'Failed: ' + (backupStatus ? backupStatus.failed_sources : '')"></span>
                         </div>
+                        <template x-if="backupHealth">
+                            <div style="margin-top:.75rem;border-top:1px solid var(--border);padding-top:.5rem">
+                                <div class="row"><span class="row-label">Destination</span><span class="row-val" style="font-size:.75rem" x-text="backupHealth.path"></span></div>
+                                <div class="row"><span class="row-label">Free Space</span><span class="row-val" x-text="backupHealth.free_gb + ' GB'"></span></div>
+                                <div class="row"><span class="row-label">Snapshots</span><span class="row-val" x-text="backupHealth.snapshot_count"></span></div>
+                                <div class="prog" style="margin-top:4px"><div class="prog-fill" :class="backupHealth.percent_used > 90 ? 'danger' : backupHealth.percent_used > 75 ? 'warning' : 'success'" :style="'width:'+backupHealth.percent_used+'%'"></div></div>
+                            </div>
+                        </template>
                         <div style="margin-bottom:.75rem">
                             <label class="field-label" for="backup-target">Source Target</label>
                             <select id="backup-target" class="theme-select" style="width:100%;margin-bottom:.5rem" x-model="target">
@@ -2404,6 +2501,7 @@
                 <span class="s-label">Module Visibility</span>
                 <div class="toggle-grid">
                     <label class="toggle-item"><input type="checkbox" x-model="vis.core"> Core System</label>
+                    <label class="toggle-item"><input type="checkbox" x-model="vis.health"> System Health</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.netio"> Network I/O</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.hw"> Hardware</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.truenas"> TrueNAS Integration</label>
@@ -2945,7 +3043,7 @@
                         <input id="s-traefik-url" class="field-input" type="url" x-model="traefikUrl" placeholder="http://traefik:8080">
                     </div>
                     <div>
-                        <label class="field-label" for="s-traefik-key">API (no auth needed)</label>
+                        <span class="field-label">API (no auth needed)</span>
                         <span class="field-hint" style="font-size:.75rem;color:var(--text-dim)">Traefik API uses no key — just enable the API in traefik config</span>
                     </div>
                 </div>
@@ -4046,6 +4144,507 @@
         <div class="modal-footer">
             <button class="btn btn-sm" @click="showConfigHistory=false">Close</button>
         </div>
+    </div>
+</div>
+
+<!-- HA Entity Browser Modal -->
+<div class="modal-overlay" x-show="showHassModal" x-cloak @keydown.escape.window="showHassModal=false">
+    <div class="modal-box" style="max-width:900px;height:80vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-home"></i> Home Assistant Entities
+            <button class="modal-close" @click="showHassModal=false">&times;</button>
+        </div>
+        <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border)">
+            <select style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px"
+                    x-model="hassDomainFilter" @change="fetchHassEntities(hassDomainFilter)">
+                <option value="">All Domains</option>
+                <template x-for="d in hassDomains" :key="d"><option :value="d" x-text="d"></option></template>
+            </select>
+            <input type="text" x-model="hassEntityFilter" placeholder="Filter entities..." style="flex:1;padding:4px 8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:4px">
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:8px 16px">
+            <template x-for="e in filteredHassEntities" :key="e.entity_id">
+                <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+                    <span style="flex:1;min-width:0">
+                        <div style="font-weight:500;font-size:.85rem" x-text="e.name"></div>
+                        <div style="font-size:.7rem;color:var(--text-dim)" x-text="e.entity_id"></div>
+                    </span>
+                    <span class="badge" :class="e.state==='on'||e.state==='home'?'bs':e.state==='off'||e.state==='not_home'?'bn':'bw'"
+                          x-text="e.state + (e.unit ? ' ' + e.unit : '')" style="min-width:60px;text-align:center"></span>
+                    <button class="svc-btn" title="Toggle"
+                            x-show="['light','switch','input_boolean','fan','cover','scene'].includes(e.domain)"
+                            @click="hassToggleEntity(e.entity_id)"
+                            x-show="userRole!=='viewer'">
+                        <i class="fas fa-power-off"></i>
+                    </button>
+                </div>
+            </template>
+            <div class="empty-msg" x-show="filteredHassEntities.length===0 && !hassEntitiesLoading">No entities found</div>
+            <div class="empty-msg" x-show="hassEntitiesLoading">Loading...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Container Logs Modal -->
+<div class="modal-overlay" x-show="showContainerLogsModal" x-cloak @keydown.escape.window="showContainerLogsModal=false">
+    <div class="modal-box" style="max-width:900px;height:80vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-scroll"></i> <span x-text="'Logs: ' + containerLogsName"></span>
+            <button class="modal-close" @click="showContainerLogsModal=false">&times;</button>
+        </div>
+        <pre class="log-pre" style="flex:1;overflow:auto;margin:0;padding:12px;font-size:.8rem" x-text="containerLogs"></pre>
+        <div class="modal-footer">
+            <button class="btn-sm" @click="fetchContainerLogs(containerLogsName, 500)">Load 500 lines</button>
+            <button class="btn-sm" @click="fetchContainerLogs(containerLogsName, 2000)">Load 2000 lines</button>
+        </div>
+    </div>
+</div>
+
+<!-- Container Inspect Modal -->
+<div class="modal-overlay" x-show="showContainerInspectModal" x-cloak @keydown.escape.window="showContainerInspectModal=false">
+    <div class="modal-box" style="max-width:700px">
+        <div class="modal-title">
+            <i class="fas fa-info-circle"></i> Container Details
+            <button class="modal-close" @click="showContainerInspectModal=false">&times;</button>
+        </div>
+        <template x-if="containerInspect"><div style="padding:16px">
+            <div class="row"><span class="row-label">Image</span><span class="row-val" x-text="containerInspect.image"></span></div>
+            <div class="row"><span class="row-label">Status</span><span class="badge" :class="containerInspect.status==='running'?'bs':'bd'" x-text="containerInspect.status"></span></div>
+            <div class="row"><span class="row-label">Started</span><span class="row-val" x-text="containerInspect.started_at"></span></div>
+            <div class="row"><span class="row-label">Restarts</span><span class="row-val" x-text="containerInspect.restart_count"></span></div>
+            <div class="row"><span class="row-label">Health</span><span class="row-val" x-text="containerInspect.health || 'N/A'"></span></div>
+            <div class="row"><span class="row-label">Networks</span><span class="row-val" x-text="(containerInspect.networks||[]).join(', ')"></span></div>
+            <div class="row"><span class="row-label">Restart Policy</span><span class="row-val" x-text="containerInspect.restart_policy"></span></div>
+            <div style="margin-top:8px"><strong style="font-size:.8rem">Ports</strong></div>
+            <template x-for="p in containerInspect.ports||[]" :key="p.container">
+                <div class="row" style="font-size:.8rem"><span class="row-label" x-text="p.container"></span><span class="row-val" x-text="p.host ? ':'+p.host : 'none'"></span></div>
+            </template>
+            <div style="margin-top:8px"><strong style="font-size:.8rem">Mounts</strong></div>
+            <template x-for="m in containerInspect.mounts||[]" :key="m.dest">
+                <div class="row" style="font-size:.75rem"><span class="row-label" x-text="m.source"></span><span>→</span><span class="row-val" x-text="m.dest"></span></div>
+            </template>
+        </div></template>
+    </div>
+</div>
+
+<!-- Kubernetes Browser Modal -->
+<div class="modal-overlay" x-show="showK8sModal" x-cloak @keydown.escape.window="showK8sModal=false">
+    <div class="modal-box" style="max-width:1000px;height:85vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-dharmachakra"></i> Kubernetes Browser
+            <button class="modal-close" @click="showK8sModal=false">&times;</button>
+        </div>
+        <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border)">
+            <select style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px"
+                    x-model="k8sSelectedNs" @change="fetchK8sPods(k8sSelectedNs); fetchK8sDeployments(k8sSelectedNs)">
+                <option value="">All Namespaces</option>
+                <template x-for="ns in k8sNamespaces" :key="ns.name"><option :value="ns.name" x-text="ns.name"></option></template>
+            </select>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:12px 16px">
+            <h4 style="color:var(--text-muted);font-size:.8rem;margin:8px 0 4px">Deployments</h4>
+            <template x-for="d in k8sDeployments" :key="d.namespace+'/'+d.name">
+                <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+                    <span style="flex:1"><span style="color:var(--text-dim);font-size:.7rem" x-text="d.namespace+' / '"></span><span x-text="d.name"></span></span>
+                    <span class="badge" :class="d.ready===d.replicas?'bs':'bw'" x-text="d.ready+'/'+d.replicas+' ready'"></span>
+                    <button class="svc-btn" title="Scale" @click="k8sScale(d.namespace, d.name, d.replicas)" x-show="userRole==='admin'"><i class="fas fa-expand-arrows-alt"></i></button>
+                </div>
+            </template>
+            <h4 style="color:var(--text-muted);font-size:.8rem;margin:12px 0 4px">Pods</h4>
+            <template x-for="p in k8sPods" :key="p.namespace+'/'+p.name">
+                <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+                    <span style="flex:1;min-width:0">
+                        <div style="font-size:.85rem"><span style="color:var(--text-dim);font-size:.7rem" x-text="p.namespace+' / '"></span><span x-text="p.name"></span></div>
+                        <div style="font-size:.7rem;color:var(--text-dim)" x-text="'Node: '+p.node+' | IP: '+p.ip"></div>
+                    </span>
+                    <span class="badge" :class="p.phase==='Running'?'bs':p.phase==='Succeeded'?'bn':'bd'" x-text="p.phase"></span>
+                    <button class="svc-btn" title="Logs" @click="fetchK8sPodLogs(p.namespace, p.name)" x-show="userRole!=='viewer'"><i class="fas fa-scroll"></i></button>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<!-- K8s Pod Logs Modal -->
+<div class="modal-overlay" x-show="showK8sPodLogsModal" x-cloak @keydown.escape.window="showK8sPodLogsModal=false">
+    <div class="modal-box" style="max-width:900px;height:70vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-scroll"></i> <span x-text="'Pod Logs: ' + k8sPodLogsName"></span>
+            <button class="modal-close" @click="showK8sPodLogsModal=false">&times;</button>
+        </div>
+        <pre class="log-pre" style="flex:1;overflow:auto;margin:0;padding:12px;font-size:.8rem" x-text="k8sPodLogs"></pre>
+    </div>
+</div>
+
+<!-- Proxmox Snapshots Modal -->
+<div class="modal-overlay" x-show="showPmxSnapshotModal" x-cloak @keydown.escape.window="showPmxSnapshotModal=false">
+    <div class="modal-box" style="max-width:600px">
+        <div class="modal-title">
+            <i class="fas fa-camera"></i> VM Snapshots
+            <button class="modal-close" @click="showPmxSnapshotModal=false">&times;</button>
+        </div>
+        <div style="padding:16px">
+            <template x-for="s in pmxSnapshots" :key="s.name">
+                <div class="row">
+                    <span class="row-label" x-text="s.name"></span>
+                    <span class="row-val" style="font-size:.75rem;color:var(--text-muted)" x-text="s.description"></span>
+                </div>
+            </template>
+            <div class="empty-msg" x-show="pmxSnapshots.length===0 && !pmxSnapshotsLoading">No snapshots</div>
+            <div style="margin-top:12px;text-align:center" x-show="userRole==='admin'">
+                <button class="btn-sm" @click="createPmxSnapshot(pmxSelectedNode, pmxSelectedVmid, pmxSelectedType)">
+                    <i class="fas fa-plus"></i> Create Snapshot
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Multi-Metric Dashboard Modal -->
+<div class="modal-overlay" x-show="showMultiChartModal" x-cloak @keydown.escape.window="showMultiChartModal=false">
+    <div class="modal-box" style="max-width:1000px;height:85vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-chart-line"></i> Custom Dashboard
+            <button class="modal-close" @click="showMultiChartModal=false">&times;</button>
+        </div>
+        <div style="padding:8px 16px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+            <template x-for="m in multiMetrics" :key="m">
+                <span class="badge bs" style="cursor:pointer" @click="removeMultiMetric(m)">
+                    <span x-text="m"></span> <i class="fas fa-times" style="margin-left:4px;font-size:.6rem"></i>
+                </span>
+            </template>
+            <select style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.8rem"
+                    @change="addMultiMetric($event.target.value); $event.target.value=''">
+                <option value="">+ Add metric</option>
+                <template x-for="m in availableMetrics.filter(x => x.type==='history' || x.type==='number')" :key="m.name">
+                    <option :value="m.name" x-text="m.name"></option>
+                </template>
+            </select>
+        </div>
+        <div style="flex:1;padding:16px;position:relative">
+            <canvas id="multi-chart-canvas" style="width:100%;height:100%"></canvas>
+        </div>
+        <div class="modal-footer" style="display:flex;gap:8px">
+            <select x-model.number="historyRange" @change="fetchMultiMetricChart()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px">
+                <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option>
+                <option value="168">7d</option><option value="720">30d</option>
+            </select>
+            <button class="btn-sm" @click="fetchMultiMetricChart()"><i class="fas fa-sync"></i> Refresh</button>
+        </div>
+    </div>
+</div>
+
+<!-- Alert Rule Builder Modal -->
+<div class="modal-overlay" x-show="showAlertRuleModal" x-cloak @keydown.escape.window="showAlertRuleModal=false">
+    <div class="modal-box" style="max-width:800px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-bell"></i> Alert Rules
+            <button class="modal-close" @click="showAlertRuleModal=false">&times;</button>
+        </div>
+        <div style="padding:16px">
+            <!-- Rule editor -->
+            <div style="background:var(--surface-2);padding:12px;border-radius:6px;margin-bottom:16px">
+                <h4 style="margin:0 0 8px;font-size:.85rem;color:var(--text-muted)" x-text="editingRule ? 'Edit Rule' : 'New Rule'"></h4>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label">Condition</label>
+                        <input class="field-input" type="text" :x-model="editingRule ? 'editingRule.condition' : 'newRule.condition'"
+                               x-model="editingRule ? editingRule.condition : newRule.condition"
+                               placeholder="cpuPercent > 90 AND memPercent > 80">
+                    </div>
+                    <div>
+                        <label class="field-label">Severity</label>
+                        <select class="field-input" x-model="editingRule ? editingRule.severity : newRule.severity">
+                            <option value="warning">Warning</option>
+                            <option value="danger">Danger</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="field-label">Message</label>
+                    <input class="field-input" type="text" x-model="editingRule ? editingRule.message : newRule.message"
+                           placeholder="CPU is at {{ cpuPercent }}%">
+                </div>
+                <div class="field-2" style="margin-top:8px">
+                    <div>
+                        <label class="field-label">Group</label>
+                        <input class="field-input" type="text" x-model="editingRule ? editingRule.group : newRule.group"
+                               placeholder="cpu_alerts">
+                    </div>
+                    <div>
+                        <label class="field-label">Cooldown (sec)</label>
+                        <input class="field-input" type="number" x-model.number="editingRule ? editingRule.cooldown : newRule.cooldown">
+                    </div>
+                </div>
+                <div style="margin-top:8px;display:flex;gap:8px">
+                    <button class="btn-sm" @click="saveAlertRule()" style="background:var(--accent);color:#fff">
+                        <i class="fas fa-save"></i> <span x-text="editingRule ? 'Update' : 'Create'"></span>
+                    </button>
+                    <button class="btn-sm" x-show="editingRule" @click="editingRule=null">Cancel</button>
+                </div>
+            </div>
+            <!-- Existing rules list -->
+            <template x-for="rule in alertRulesList" :key="rule.id">
+                <div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:8px">
+                    <span style="flex:1;min-width:0">
+                        <div style="font-size:.85rem;font-weight:500"><code x-text="rule.condition" style="font-size:.75rem"></code></div>
+                        <div style="font-size:.7rem;color:var(--text-dim)" x-text="rule.message || rule.id"></div>
+                    </span>
+                    <span class="badge" :class="rule.severity==='danger'?'bd':rule.severity==='critical'?'bd':'bw'" x-text="rule.severity"></span>
+                    <button class="svc-btn" title="Test" @click="testAlertRule(rule.id)"><i class="fas fa-flask"></i></button>
+                    <button class="svc-btn" title="Edit" @click="editAlertRule(rule)"><i class="fas fa-edit"></i></button>
+                    <button class="svc-btn" title="Delete" @click="deleteAlertRule(rule.id)"><i class="fas fa-trash"></i></button>
+                </div>
+            </template>
+            <div class="empty-msg" x-show="alertRulesList.length===0">No alert rules configured</div>
+        </div>
+    </div>
+</div>
+
+<!-- Workflow Trace Modal -->
+<div class="modal-overlay" x-show="showWorkflowTraceModal" x-cloak @keydown.escape.window="showWorkflowTraceModal=false">
+    <div class="modal-box" style="max-width:800px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-project-diagram"></i> <span x-text="'Workflow: ' + (workflowTrace?.workflow || '')"></span>
+            <button class="modal-close" @click="showWorkflowTraceModal=false">&times;</button>
+        </div>
+        <div style="padding:16px">
+            <template x-if="workflowTrace && workflowTrace.executions">
+                <template x-for="exec in workflowTrace.executions" :key="exec.started_at">
+                    <div style="margin-bottom:16px;background:var(--surface-2);padding:12px;border-radius:6px">
+                        <div style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">
+                            <span x-text="exec.triggered_by"></span> —
+                            <span x-text="exec.started_at ? new Date(exec.started_at*1000).toLocaleString() : ''"></span>
+                        </div>
+                        <template x-for="step in exec.steps" :key="step.id">
+                            <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+                                <span style="font-size:.7rem;color:var(--text-dim);min-width:50px" x-text="'Step ' + step.step.index"></span>
+                                <span style="flex:1;font-size:.85rem" x-text="step.automation_id"></span>
+                                <span class="badge" :class="step.status==='done'?'bs':step.status==='running'?'bw':'bd'" x-text="step.status" style="font-size:.65rem"></span>
+                                <span style="font-size:.7rem;color:var(--text-dim)" x-text="step.exit_code !== null ? 'exit:'+step.exit_code : ''"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </template>
+            <div class="empty-msg" x-show="!workflowTrace || !workflowTrace.executions?.length">No execution history</div>
+        </div>
+    </div>
+</div>
+
+<!-- User Profile Modal -->
+<div class="modal-overlay" x-show="showProfileModal" x-cloak @keydown.escape.window="showProfileModal=false">
+    <div class="modal-box" style="max-width:600px;max-height:80vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-user-circle"></i> Profile
+            <button class="modal-close" @click="showProfileModal=false">&times;</button>
+        </div>
+        <template x-if="userProfile"><div style="padding:16px">
+            <div class="row"><span class="row-label">Username</span><span class="row-val" x-text="userProfile.username"></span></div>
+            <div class="row"><span class="row-label">Role</span><span class="badge" :class="userProfile.role==='admin'?'ba':'bs'" x-text="userProfile.role"></span></div>
+            <div class="row"><span class="row-label">2FA</span><span class="badge" :class="userProfile.has_2fa?'bs':'bw'" x-text="userProfile.has_2fa?'Enabled':'Disabled'"></span></div>
+            <div style="margin-top:12px"><strong style="font-size:.85rem">Recent Logins</strong></div>
+            <template x-for="l in userProfile.recent_logins||[]" :key="l.time">
+                <div class="row" style="font-size:.8rem">
+                    <span class="row-label" x-text="new Date(l.time*1000).toLocaleString()"></span>
+                    <span class="row-val" x-text="l.ip"></span>
+                </div>
+            </template>
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <strong style="font-size:.85rem">Change Password</strong>
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                    <input class="field-input" type="password" x-model="changePasswordCurrent" placeholder="Current password" autocomplete="current-password">
+                    <input class="field-input" type="password" x-model="changePasswordNew" placeholder="New password" autocomplete="new-password">
+                    <input class="field-input" type="password" x-model="changePasswordConfirm" placeholder="Confirm new password" autocomplete="new-password">
+                    <button class="btn-sm" @click="changeOwnPassword()" style="align-self:flex-start"><i class="fas fa-key"></i> Change Password</button>
+                </div>
+            </div>
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <strong style="font-size:.85rem">Two-Factor Authentication</strong>
+                <div style="margin-top:8px">
+                    <button class="btn-sm" x-show="!userProfile.has_2fa" @click="setupTotp()"><i class="fas fa-shield-alt"></i> Enable 2FA</button>
+                    <span x-show="userProfile.has_2fa" style="color:var(--success);font-size:.85rem"><i class="fas fa-check-circle"></i> 2FA is active</span>
+                </div>
+            </div>
+        </div></template>
+    </div>
+</div>
+
+<!-- Container Stats Modal -->
+<div class="modal-overlay" x-show="showContainerStatsModal" x-cloak @keydown.escape.window="showContainerStatsModal=false">
+    <div class="modal-box" style="max-width:900px;max-height:80vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-tachometer-alt"></i> Container Resource Usage
+            <button class="modal-close" @click="showContainerStatsModal=false">&times;</button>
+        </div>
+        <div style="padding:12px">
+            <table class="audit-table" style="width:100%">
+                <thead><tr><th>Container</th><th>CPU</th><th>Memory</th><th>Mem %</th><th>Net I/O</th><th>Block I/O</th><th>PIDs</th></tr></thead>
+                <tbody>
+                    <template x-for="s in containerStats" :key="s.name">
+                        <tr>
+                            <td x-text="s.name" style="font-weight:500"></td>
+                            <td x-text="s.cpu"></td>
+                            <td x-text="s.mem_usage" style="font-size:.8rem"></td>
+                            <td x-text="s.mem_percent"></td>
+                            <td x-text="s.net_io" style="font-size:.8rem"></td>
+                            <td x-text="s.block_io" style="font-size:.8rem"></td>
+                            <td x-text="s.pids"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <div class="empty-msg" x-show="containerStats.length===0">No containers running</div>
+            <div class="modal-footer"><button class="btn-sm" @click="fetchContainerStats()"><i class="fas fa-sync"></i> Refresh</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- Network Analysis Modal -->
+<div class="modal-overlay" x-show="showNetworkModal" x-cloak @keydown.escape.window="showNetworkModal=false">
+    <div class="modal-box" style="max-width:900px;height:85vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-network-wired"></i> Network Analysis
+            <button class="modal-close" @click="showNetworkModal=false">&times;</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:16px">
+            <h4 style="font-size:.85rem;color:var(--text-muted)">Interfaces</h4>
+            <template x-for="iface in networkInterfaces" :key="iface.name">
+                <div class="row">
+                    <span class="row-label"><i class="fas fa-ethernet" style="margin-right:4px;color:var(--text-dim)"></i><span x-text="iface.name"></span></span>
+                    <span class="badge" :class="iface.up?'bs':'bd'" x-text="iface.up?'UP':'DOWN'"></span>
+                    <span class="row-val" style="margin-left:8px" x-text="iface.ip || 'No IP'"></span>
+                    <span style="font-size:.7rem;color:var(--text-dim);margin-left:8px" x-text="iface.speed ? iface.speed+'Mbps' : ''"></span>
+                </div>
+            </template>
+            <h4 style="font-size:.85rem;color:var(--text-muted);margin-top:12px">Listening Ports</h4>
+            <table class="audit-table" style="width:100%;font-size:.8rem">
+                <thead><tr><th>Port</th><th>Address</th><th>Process</th><th>PID</th></tr></thead>
+                <tbody>
+                    <template x-for="p in listeningPorts" :key="p.port">
+                        <tr><td x-text="p.port" style="font-weight:600"></td><td x-text="p.address"></td><td x-text="p.process"></td><td x-text="p.pid"></td></tr>
+                    </template>
+                </tbody>
+            </table>
+            <h4 style="font-size:.85rem;color:var(--text-muted);margin-top:12px">Active Connections (<span x-text="networkConnections.length"></span>)</h4>
+            <table class="audit-table" style="width:100%;font-size:.75rem">
+                <thead><tr><th>Process</th><th>Local</th><th>Remote</th></tr></thead>
+                <tbody>
+                    <template x-for="c in networkConnections.slice(0, 50)" :key="c.local+c.remote">
+                        <tr><td x-text="c.process"></td><td x-text="c.local" style="font-family:monospace"></td><td x-text="c.remote" style="font-family:monospace"></td></tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Process List Modal -->
+<div class="modal-overlay" x-show="showProcessModal" x-cloak @keydown.escape.window="showProcessModal=false">
+    <div class="modal-box" style="max-width:800px;height:80vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-microchip"></i> Processes
+            <button class="modal-close" @click="showProcessModal=false">&times;</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:12px">
+            <table class="audit-table" style="width:100%;font-size:.8rem">
+                <thead><tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th><th>User</th><th>Status</th></tr></thead>
+                <tbody>
+                    <template x-for="p in processList" :key="p.pid">
+                        <tr>
+                            <td x-text="p.pid" style="color:var(--text-dim)"></td>
+                            <td x-text="p.name" style="font-weight:500"></td>
+                            <td x-text="p.cpu" :style="p.cpu > 50 ? 'color:var(--danger)' : p.cpu > 20 ? 'color:var(--warning)' : ''"></td>
+                            <td x-text="p.mem" :style="p.mem > 50 ? 'color:var(--danger)' : p.mem > 20 ? 'color:var(--warning)' : ''"></td>
+                            <td x-text="p.user" style="font-size:.75rem;color:var(--text-dim)"></td>
+                            <td x-text="p.status"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-footer"><button class="btn-sm" @click="fetchProcessList()"><i class="fas fa-sync"></i> Refresh</button></div>
+    </div>
+</div>
+
+<!-- Service Map Modal -->
+<div class="modal-overlay" x-show="showServiceMapModal" x-cloak @keydown.escape.window="showServiceMapModal=false">
+    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-sitemap"></i> Service Map
+            <button class="modal-close" @click="showServiceMapModal=false">&times;</button>
+        </div>
+        <div style="padding:16px">
+            <template x-if="serviceMap">
+                <div>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center">
+                        <template x-for="node in serviceMap.nodes" :key="node.id">
+                            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:100px"
+                                 :style="node.id==='noba' ? 'border-color:var(--accent);box-shadow:0 0 12px var(--accent-dim)' : ''">
+                                <div style="font-weight:600;font-size:.85rem" x-text="node.label"></div>
+                                <span class="badge" :class="node.status==='online'?'bs':node.status==='configured'?'bn':'bd'" x-text="node.status" style="font-size:.6rem;margin-top:4px"></span>
+                                <div style="font-size:.6rem;color:var(--text-dim);margin-top:2px" x-text="node.type"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<!-- Journal Viewer Modal -->
+<div class="modal-overlay" x-show="showJournalModal" x-cloak @keydown.escape.window="showJournalModal=false">
+    <div class="modal-box" style="max-width:1000px;height:85vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-file-alt"></i> System Journal
+            <button class="modal-close" @click="showJournalModal=false">&times;</button>
+        </div>
+        <div style="padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border);font-size:.8rem">
+            <select x-model="journalUnit" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                <option value="">All units</option>
+                <template x-for="u in journalUnits" :key="u.name"><option :value="u.name" x-text="u.name"></option></template>
+            </select>
+            <select x-model="journalPriority" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                <option value="">All priorities</option>
+                <option value="0">Emergency</option><option value="1">Alert</option><option value="2">Critical</option>
+                <option value="3">Error</option><option value="4">Warning</option><option value="5">Notice</option>
+                <option value="6">Info</option><option value="7">Debug</option>
+            </select>
+            <input type="text" x-model="journalGrep" placeholder="grep..." style="width:120px;padding:3px 6px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:4px">
+            <select x-model.number="journalLines" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                <option value="50">50 lines</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
+            </select>
+            <button class="btn-sm" @click="fetchJournal()"><i class="fas fa-search"></i> Query</button>
+        </div>
+        <pre class="log-pre" style="flex:1;overflow:auto;margin:0;padding:12px;font-size:.75rem" x-text="journalOutput"></pre>
+    </div>
+</div>
+
+<!-- System Info Modal -->
+<div class="modal-overlay" x-show="showSystemInfoModal" x-cloak @keydown.escape.window="showSystemInfoModal=false">
+    <div class="modal-box" style="max-width:600px">
+        <div class="modal-title">
+            <i class="fas fa-server"></i> System Information
+            <button class="modal-close" @click="showSystemInfoModal=false">&times;</button>
+        </div>
+        <template x-if="systemInfo"><div style="padding:16px">
+            <div class="row"><span class="row-label">Hostname</span><span class="row-val" x-text="systemInfo.hostname"></span></div>
+            <div class="row"><span class="row-label">OS</span><span class="row-val" x-text="systemInfo.os"></span></div>
+            <div class="row"><span class="row-label">Kernel</span><span class="row-val" x-text="systemInfo.kernel"></span></div>
+            <div class="row"><span class="row-label">Architecture</span><span class="row-val" x-text="systemInfo.arch"></span></div>
+            <div class="row"><span class="row-label">CPU</span><span class="row-val" x-text="systemInfo.cpu_model"></span></div>
+            <div class="row"><span class="row-label">Cores</span><span class="row-val" x-text="systemInfo.cpu_cores"></span></div>
+            <div class="row"><span class="row-label">GPU</span><span class="row-val" x-text="systemInfo.gpu"></span></div>
+            <div class="row"><span class="row-label">RAM</span><span class="row-val" x-text="(systemInfo.ram_total_gb||0) + ' GB total, ' + (systemInfo.ram_available_gb||0) + ' GB free'"></span></div>
+            <div class="row"><span class="row-label">Swap</span><span class="row-val" x-text="(systemInfo.swap_total_gb||0) + ' GB total, ' + (systemInfo.swap_used_gb||0) + ' GB used'"></span></div>
+            <div class="row"><span class="row-label">Governor</span><span class="row-val" x-text="systemInfo.governor"></span></div>
+            <div class="row"><span class="row-label">Uptime</span><span class="row-val" x-text="systemInfo.uptime"></span></div>
+            <div class="row"><span class="row-label">IP</span><span class="row-val" x-text="systemInfo.ip"></span></div>
+            <div class="row"><span class="row-label">Python</span><span class="row-val" x-text="systemInfo.python"></span></div>
+            <div class="row"><span class="row-label">NOBA</span><span class="row-val" x-text="'v' + systemInfo.noba_version"></span></div>
+        </div></template>
     </div>
 </div>
 

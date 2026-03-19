@@ -23,13 +23,13 @@ jobs:
 
       - name: Make scripts executable
         run: |
-          chmod +x *.sh
-          # Use || true so it doesn't fail if the tests dir is temporarily empty
+          chmod +x *.sh 2>/dev/null || true
+          chmod +x libexec/*.sh 2>/dev/null || true
+          chmod +x libexec/lib/*.sh 2>/dev/null || true
           chmod +x tests/*.bats 2>/dev/null || true
 
       - name: Run BATS test suite
         run: bats tests/
 
       - name: Run Edge-Case Test Harness
-        # This runs the test-all.sh we fixed earlier to ensure no regressions!
         run: ./test-all.sh

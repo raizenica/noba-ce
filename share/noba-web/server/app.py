@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import authenticate, load_legacy_user, pbkdf2_hash, rate_limiter, token_store, \
@@ -31,6 +31,7 @@ from .config import (
 from .db import db
 from .metrics import (
     _read_file, bust_container_cache, collect_smart,
+    get_listening_ports, get_network_connections,
     get_rclone_remotes, strip_ansi, validate_service_name,
 )
 from .alerts import dispatch_notifications
@@ -43,6 +44,16 @@ _server_start_time = time.time()
 
 # ── Static files directory ────────────────────────────────────────────────────
 _WEB_DIR = Path(__file__).parent.parent   # share/noba-web/
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _safe_int(value: object, default: int) -> int:
+    """Convert *value* to int, returning *default* on bad input."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return default
+
 
 # ── Cleanup loop ──────────────────────────────────────────────────────────────
 _prune_counter = 0
@@ -387,6 +398,23 @@ def _int_param(request: Request, name: str, default: int, lo: int, hi: int) -> i
     return max(lo, min(hi, v))
 
 
+@app.get("/api/history/multi")
+def api_history_multi(request: Request, auth=Depends(_get_auth)):
+    """Get multiple metrics for overlay charting."""
+    metrics_param = request.query_params.get("metrics", "")
+    if not metrics_param:
+        raise HTTPException(400, "Provide comma-separated metrics")
+    metric_list = [m.strip() for m in metrics_param.split(",") if m.strip()]
+    range_h = _int_param(request, "range", 24, 1, 8760)
+    resolution = _int_param(request, "resolution", 60, 1, 3600)
+    result = {}
+    for metric in metric_list[:10]:  # Max 10 metrics
+        if metric not in HISTORY_METRICS:
+            continue
+        result[metric] = db.get_history(metric, range_h, resolution)
+    return result
+
+
 @app.get("/api/history/{metric}")
 def api_history(metric: str, request: Request, auth=Depends(_get_auth)):
     if metric not in HISTORY_METRICS:
@@ -426,6 +454,123 @@ def api_history_trend(metric: str, request: Request, auth=Depends(_get_auth)):
     range_h = _int_param(request, "range", 168, 1, 8760)
     project_h = _int_param(request, "project", 168, 1, 8760)
     return db.get_trend(metric, range_hours=range_h, projection_hours=project_h)
+
+
+# ── /api/metrics/available ───────────────────────────────────────────────────
+@app.get("/api/metrics/available")
+def api_metrics_available(auth=Depends(_get_auth)):
+    """List all available metric names with current values for the UI metric picker."""
+    stats = bg_collector.get() or {}
+    metrics = []
+    for k, v in sorted(stats.items()):
+        if isinstance(v, (int, float)):
+            metrics.append({"name": k, "value": round(v, 2), "type": "number"})
+        elif isinstance(v, str) and v not in ("N/A", "--", ""):
+            try:
+                float(v.replace("\u00b0C", "").replace("%", ""))
+                metrics.append({"name": k, "value": v, "type": "string_numeric"})
+            except ValueError:
+                pass
+    # Add history metric names
+    for m in HISTORY_METRICS:
+        if not any(x["name"] == m for x in metrics):
+            metrics.append({"name": m, "value": None, "type": "history"})
+    return metrics
+
+
+# ── /api/alert-rules ─────────────────────────────────────────────────────────
+@app.get("/api/alert-rules")
+def api_alert_rules(auth=Depends(_get_auth)):
+    """List all configured alert rules."""
+    cfg = read_yaml_settings()
+    return cfg.get("alertRules", [])
+
+
+@app.post("/api/alert-rules")
+async def api_alert_rules_create(request: Request, auth=Depends(_require_admin)):
+    """Add a new alert rule."""
+    import uuid
+
+    username, _ = auth
+    body = await _read_body(request)
+    rule_id = body.get("id") or uuid.uuid4().hex[:8]
+    condition = body.get("condition", "")
+    if not condition:
+        raise HTTPException(400, "Condition is required")
+    rule = {
+        "id": rule_id,
+        "condition": condition,
+        "severity": body.get("severity", "warning"),
+        "message": body.get("message", condition),
+        "channels": body.get("channels", []),
+        "cooldown": _safe_int(body.get("cooldown", 300), 300),
+        "action": body.get("action"),
+        "max_retries": _safe_int(body.get("max_retries", 3), 3),
+        "group": body.get("group", ""),
+        "escalation": body.get("escalation", []),
+    }
+    cfg = read_yaml_settings()
+    rules = cfg.get("alertRules", [])
+    rules.append(rule)
+    cfg["alertRules"] = rules
+    write_yaml_settings(cfg)
+    db.audit_log("alert_rule_create", username, f"Created rule '{rule_id}'", _client_ip(request))
+    return {"status": "ok", "id": rule_id}
+
+
+@app.put("/api/alert-rules/{rule_id}")
+async def api_alert_rules_update(rule_id: str, request: Request, auth=Depends(_require_admin)):
+    """Update an existing alert rule."""
+    username, _ = auth
+    body = await _read_body(request)
+    cfg = read_yaml_settings()
+    rules = cfg.get("alertRules", [])
+    idx = next((i for i, r in enumerate(rules) if r.get("id") == rule_id), None)
+    if idx is None:
+        raise HTTPException(404, "Rule not found")
+    for key in ("condition", "severity", "message", "channels", "cooldown", "action",
+                "max_retries", "group", "escalation"):
+        if key in body:
+            rules[idx][key] = body[key]
+    cfg["alertRules"] = rules
+    write_yaml_settings(cfg)
+    db.audit_log("alert_rule_update", username, f"Updated rule '{rule_id}'", _client_ip(request))
+    return {"status": "ok"}
+
+
+@app.delete("/api/alert-rules/{rule_id}")
+def api_alert_rules_delete(rule_id: str, request: Request, auth=Depends(_require_admin)):
+    """Delete an alert rule."""
+    username, _ = auth
+    cfg = read_yaml_settings()
+    rules = cfg.get("alertRules", [])
+    new_rules = [r for r in rules if r.get("id") != rule_id]
+    if len(new_rules) == len(rules):
+        raise HTTPException(404, "Rule not found")
+    cfg["alertRules"] = new_rules
+    write_yaml_settings(cfg)
+    db.audit_log("alert_rule_delete", username, f"Deleted rule '{rule_id}'", _client_ip(request))
+    return {"status": "ok"}
+
+
+@app.get("/api/alert-rules/test/{rule_id}")
+def api_alert_rule_test(rule_id: str, auth=Depends(_require_admin)):
+    """Test an alert rule against current stats."""
+    cfg = read_yaml_settings()
+    rules = cfg.get("alertRules", [])
+    rule = next((r for r in rules if r.get("id") == rule_id), None)
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+    from .alerts import _safe_eval  # noqa: PLC0415
+
+    stats = bg_collector.get() or {}
+    flat = {}
+    for k, v in stats.items():
+        if isinstance(v, (int, float, str)):
+            flat[k] = v
+    result = _safe_eval(rule.get("condition", ""), flat)
+    return {"rule_id": rule_id, "condition": rule.get("condition"), "result": result,
+            "available_metrics": sorted(flat.keys())[:50]}
 
 
 # ── /api/audit ────────────────────────────────────────────────────────────────
@@ -903,6 +1048,81 @@ def api_restic_status(auth=Depends(_get_auth)):
         return {"configured": True, "error": str(e)}
 
 
+# ── /api/backup/schedules ────────────────────────────────────────────────
+@app.get("/api/backup/schedules")
+def api_backup_schedules(auth=Depends(_get_auth)):
+    """List backup-related automations (scheduled backup jobs)."""
+    autos = db.list_automations()
+    return [a for a in autos if a.get("type") == "script" and
+            a.get("config", {}).get("script") in ("backup", "cloud", "verify")]
+
+
+@app.post("/api/backup/schedule")
+async def api_backup_schedule_create(request: Request, auth=Depends(_require_admin)):
+    """Create a backup schedule with friendly parameters."""
+    import uuid
+    username, _ = auth
+    body = await _read_body(request)
+    backup_type = body.get("type", "backup")  # backup, cloud, verify
+    schedule = body.get("schedule", "0 3 * * *")
+    name = body.get("name", f"Scheduled {backup_type}")
+    if backup_type not in ("backup", "cloud", "verify"):
+        raise HTTPException(400, "Type must be backup, cloud, or verify")
+    auto_id = uuid.uuid4().hex[:12]
+    config = {"script": backup_type, "args": "--verbose"}
+    if not db.insert_automation(auto_id, name, "script", config, schedule, True):
+        raise HTTPException(500, "Failed to create backup schedule")
+    db.audit_log("backup_schedule", username, f"Created {backup_type} schedule: {schedule}", _client_ip(request))
+    return {"id": auto_id, "status": "ok"}
+
+
+# ── /api/backup/progress ────────────────────────────────────────────────
+@app.get("/api/backup/progress")
+def api_backup_progress(auth=Depends(_get_auth)):
+    """Get progress of currently running backup jobs."""
+    active_ids = job_runner.get_active_ids()
+    if not active_ids:
+        return {"running": False}
+    progress = []
+    for rid in active_ids:
+        run = db.get_job_run(rid)
+        if run and run.get("trigger", "").startswith("script:backup"):
+            progress.append({
+                "run_id": rid,
+                "trigger": run.get("trigger", ""),
+                "started_at": run.get("started_at"),
+                "status": run.get("status"),
+            })
+    return {"running": len(progress) > 0, "jobs": progress}
+
+
+# ── /api/backup/health ──────────────────────────────────────────────────
+@app.get("/api/backup/health")
+def api_backup_health(auth=Depends(_get_auth)):
+    """Check backup destination accessibility and space."""
+    cfg = read_yaml_settings()
+    dest = cfg.get("backupDest", "")
+    if not dest or not os.path.isdir(dest):
+        return {"accessible": False, "error": "Destination not configured or not accessible"}
+    try:
+        import shutil
+        total, used, free = shutil.disk_usage(dest)
+        # Count snapshots
+        snapshot_count = sum(1 for e in os.scandir(dest)
+                           if e.is_dir() and re.match(r'^\d{8}-\d{6}$', e.name))
+        return {
+            "accessible": True,
+            "path": dest,
+            "total_gb": round(total / (1024**3), 1),
+            "used_gb": round(used / (1024**3), 1),
+            "free_gb": round(free / (1024**3), 1),
+            "percent_used": round(used / total * 100, 1) if total else 0,
+            "snapshot_count": snapshot_count,
+        }
+    except Exception as e:
+        return {"accessible": False, "error": str(e)}
+
+
 # ── /api/log-viewer ───────────────────────────────────────────────────────────
 @app.get("/api/log-viewer")
 def api_log_viewer(request: Request, auth=Depends(_get_auth)):
@@ -1065,7 +1285,7 @@ def _build_auto_service_process(config: dict) -> subprocess.Popen | None:
 
 
 def _build_auto_delay_process(config: dict) -> subprocess.Popen | None:
-    seconds = int(config.get("seconds", config.get("duration", 10)))
+    seconds = _safe_int(config.get("seconds", config.get("duration", 10)), 10)
     return subprocess.Popen(["sleep", str(seconds)], stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, start_new_session=True)
 
@@ -1303,7 +1523,7 @@ async def api_automations_run(auto_id: str, request: Request, auth=Depends(_requ
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
-        wf_retries = int(config.get("retries", 0))
+        wf_retries = _safe_int(config.get("retries", 0), 0)
         mode = config.get("mode", "sequential")
         if mode == "parallel":
             _run_parallel_workflow(auto_id, steps, username)
@@ -1520,7 +1740,7 @@ async def api_automations_trigger(auto_id: str, request: Request):
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
-        wf_retries = int(config.get("retries", 0))
+        wf_retries = _safe_int(config.get("retries", 0), 0)
         mode = config.get("mode", "sequential")
         if mode == "parallel":
             _run_parallel_workflow(auto_id, steps, triggered_by)
@@ -1572,6 +1792,49 @@ def _run_parallel_workflow(auto_id: str, steps: list[str], triggered_by: str) ->
             )
         except RuntimeError as exc:
             logger.warning("Parallel workflow %s: step %d submit failed: %s", auto_id, idx, exc)
+
+
+# ── /api/automations/{auto_id}/trace — workflow execution trace ───────────────
+@app.get("/api/automations/{auto_id}/trace")
+def api_automation_trace(auto_id: str, auth=Depends(_get_auth)):
+    """Get execution trace for a workflow automation."""
+    auto = db.get_automation(auto_id)
+    if not auto:
+        raise HTTPException(404, "Automation not found")
+    if auto["type"] != "workflow":
+        raise HTTPException(400, "Not a workflow automation")
+    limit = 50
+    traces = db.get_workflow_trace(auto_id, limit)
+    # Group by triggered_by + approximate start time
+    groups: dict = {}
+    for t in traces:
+        key = t.get("triggered_by", "")
+        # Group runs within 60 seconds of each other
+        group_key = f"{key}:{(t.get('started_at', 0) or 0) // 60}"
+        if group_key not in groups:
+            groups[group_key] = {"triggered_by": key, "started_at": t.get("started_at"), "steps": []}
+        groups[group_key]["steps"].append(t)
+    # Sort groups by start time descending
+    sorted_groups = sorted(groups.values(), key=lambda g: g.get("started_at") or 0, reverse=True)
+    return {"workflow": auto["name"], "executions": sorted_groups[:20]}
+
+
+# ── /api/automations/validate-workflow — validate workflow step IDs ───────────
+@app.post("/api/automations/validate-workflow")
+async def api_validate_workflow(request: Request, auth=Depends(_require_operator)):
+    """Validate a workflow definition — check all step IDs exist."""
+    body = await _read_body(request)
+    steps = body.get("steps", [])
+    if not isinstance(steps, list):
+        raise HTTPException(400, "Steps must be a list")
+    results = []
+    for step_id in steps:
+        auto = db.get_automation(step_id)
+        if auto:
+            results.append({"id": step_id, "name": auto["name"], "type": auto["type"], "valid": True})
+        else:
+            results.append({"id": step_id, "name": "", "type": "", "valid": False})
+    return {"steps": results, "valid": all(r["valid"] for r in results)}
 
 
 # ── /api/admin/users ──────────────────────────────────────────────────────────
@@ -1777,6 +2040,12 @@ async def api_login(request: Request):
             totp_secret = users.get_totp_secret(username)
             if not verify_totp(totp_secret, totp_code):
                 raise HTTPException(401, "Invalid 2FA code")
+        # Check if 2FA is required but not set up
+        cfg_settings = read_yaml_settings()
+        if cfg_settings.get("require2fa") and not users.has_totp(username):
+            rate_limiter.reset(ip)
+            token = token_store.generate(username, user_data[1])
+            return {"token": token, "requires_2fa_setup": True}
         token = token_store.generate(username, user_data[1])
         db.audit_log("login", username, "success", ip)
         return {"token": token}
@@ -1870,7 +2139,6 @@ async def api_oidc_login(request: Request):
         "scope": "openid email profile",
         "redirect_uri": redirect_uri,
     })
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(f"{provider.rstrip('/')}/authorize?{params}")
 
 
@@ -1913,13 +2181,63 @@ async def api_oidc_callback(request: Request):
         noba_token = token_store.generate(email, "viewer")
         db.audit_log("oidc_login", email, "OIDC login", _client_ip(request))
         # Redirect to frontend with token
-        from fastapi.responses import RedirectResponse
         return RedirectResponse(f"/?token={noba_token}")
     except HTTPException:
         raise
     except Exception as e:
         logger.error("OIDC callback error: %s", e)
         raise HTTPException(502, "OIDC authentication failed")
+
+
+# ── /api/profile ──────────────────────────────────────────────────────────────
+@app.get("/api/profile")
+def api_profile(auth=Depends(_get_auth)):
+    """Get current user's profile with activity summary."""
+    username, role = auth
+    from .auth import get_permissions, users as _users  # noqa: PLC0415
+    has_2fa = _users.has_totp(username)
+    # Get recent login activity from audit log
+    logins = db.get_audit(limit=10, username_filter=username, action_filter="login")
+    failed = db.get_audit(limit=5, username_filter=username, action_filter="login_failed")
+    # Get recent actions
+    actions = db.get_audit(limit=20, username_filter=username)
+    return {
+        "username": username,
+        "role": role,
+        "permissions": get_permissions(role),
+        "has_2fa": has_2fa,
+        "recent_logins": logins,
+        "failed_logins": failed,
+        "recent_actions": actions[:20],
+    }
+
+
+@app.post("/api/profile/password")
+async def api_profile_password(request: Request, auth=Depends(_get_auth)):
+    """Change own password (any authenticated user)."""
+    username, _ = auth
+    body = await _read_body(request)
+    current = body.get("current", "")
+    new_pw = body.get("new", "")
+    # Verify current password
+    user_data = users.get(username)
+    if not user_data or not verify_password(user_data[0], current):
+        raise HTTPException(401, "Current password is incorrect")
+    pw_err = check_password_strength(new_pw)
+    if pw_err:
+        raise HTTPException(400, pw_err)
+    if not users.update_password(username, pbkdf2_hash(new_pw)):
+        raise HTTPException(500, "Failed to update password")
+    db.audit_log("password_change_self", username, "Changed own password", _client_ip(request))
+    return {"status": "ok"}
+
+
+@app.get("/api/profile/sessions")
+def api_profile_sessions(auth=Depends(_get_auth)):
+    """Get active sessions for the current user."""
+    username, _ = auth
+    all_sessions = token_store.list_sessions()
+    return [s for s in all_sessions if s.get("username") == username]
 
 
 # ── /api/container-control ────────────────────────────────────────────────────
@@ -1948,6 +2266,132 @@ async def api_container_control(request: Request, auth=Depends(_require_operator
             db.audit_log("container_control", username, f"{ct_action} {ct_name} error: {e}", ip)
             raise HTTPException(500, "Container control error")
     raise HTTPException(404, "No container runtime found")
+
+
+# ── Docker deep management ───────────────────────────────────────────────
+@app.get("/api/containers/{name}/logs")
+def api_container_logs(name: str, request: Request, auth=Depends(_require_operator)):
+    """Stream container logs (last N lines)."""
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
+        raise HTTPException(400, "Invalid container name")
+    lines = _int_param(request, "lines", 100, 1, 5000)
+    for runtime in ("docker", "podman"):
+        try:
+            r = subprocess.run([runtime, "logs", "--tail", str(lines), name],
+                             capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                output = strip_ansi(r.stdout + r.stderr)
+                return PlainTextResponse(output[-65536:] or "No logs.")
+        except FileNotFoundError:
+            continue
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "Log fetch timed out")
+    raise HTTPException(404, "No container runtime found")
+
+
+@app.get("/api/containers/{name}/inspect")
+def api_container_inspect(name: str, auth=Depends(_require_operator)):
+    """Get detailed container info."""
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
+        raise HTTPException(400, "Invalid container name")
+    for runtime in ("docker", "podman"):
+        try:
+            r = subprocess.run([runtime, "inspect", name],
+                             capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                data = json.loads(r.stdout)
+                if isinstance(data, list) and data:
+                    c = data[0]
+                    config = c.get("Config", {})
+                    host_config = c.get("HostConfig", {})
+                    net = c.get("NetworkSettings", {})
+                    state = c.get("State", {})
+                    return {
+                        "name": c.get("Name", "").lstrip("/"),
+                        "image": config.get("Image", ""),
+                        "created": c.get("Created", ""),
+                        "status": state.get("Status", ""),
+                        "started_at": state.get("StartedAt", ""),
+                        "restart_count": c.get("RestartCount", 0),
+                        "env": [e.split("=", 1)[0] + "=***" for e in config.get("Env", [])],
+                        "ports": [
+                            {"container": k, "host": (v or [{}])[0].get("HostPort", "")}
+                            for k, v in (net.get("Ports") or {}).items()
+                        ],
+                        "mounts": [
+                            {"source": m.get("Source", ""), "dest": m.get("Destination", ""), "mode": m.get("Mode", "")}
+                            for m in c.get("Mounts", [])
+                        ],
+                        "networks": list((net.get("Networks") or {}).keys()),
+                        "health": state.get("Health", {}).get("Status", ""),
+                        "memory_limit": host_config.get("Memory", 0),
+                        "cpu_shares": host_config.get("CpuShares", 0),
+                        "restart_policy": host_config.get("RestartPolicy", {}).get("Name", ""),
+                        "runtime": runtime,
+                    }
+        except FileNotFoundError:
+            continue
+    raise HTTPException(404, "Container not found")
+
+
+@app.get("/api/containers/stats")
+def api_container_stats(auth=Depends(_require_operator)):
+    """Get per-container resource usage."""
+    for runtime in ("docker", "podman"):
+        try:
+            r = subprocess.run(
+                [runtime, "stats", "--no-stream", "--format",
+                 "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"],
+                capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                stats = []
+                for line in r.stdout.strip().splitlines():
+                    parts = line.split("|")
+                    if len(parts) >= 7:
+                        stats.append({
+                            "name": parts[0],
+                            "cpu": parts[1].strip(),
+                            "mem_usage": parts[2].strip(),
+                            "mem_percent": parts[3].strip(),
+                            "net_io": parts[4].strip(),
+                            "block_io": parts[5].strip(),
+                            "pids": parts[6].strip(),
+                        })
+                return stats
+        except FileNotFoundError:
+            continue
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "Stats fetch timed out")
+    return []
+
+
+@app.post("/api/containers/{name}/pull")
+async def api_container_pull(name: str, request: Request, auth=Depends(_require_admin)):
+    """Pull the latest image for a container."""
+    username, _ = auth
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
+        raise HTTPException(400, "Invalid container name")
+    # Get the image name from inspect
+    for runtime in ("docker", "podman"):
+        try:
+            r = subprocess.run([runtime, "inspect", "--format", "{{.Config.Image}}", name],
+                             capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                image = r.stdout.strip()
+                # Submit pull as background job
+                def make_process(_run_id: int) -> subprocess.Popen | None:
+                    return subprocess.Popen(
+                        [runtime, "pull", image],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                run_id = job_runner.submit(make_process, trigger=f"image-pull:{image}",
+                                          triggered_by=username)
+                db.audit_log("container_pull", username, f"Pulling {image} for {name}", _client_ip(request))
+                return {"success": True, "run_id": run_id, "image": image}
+        except FileNotFoundError:
+            continue
+    raise HTTPException(404, "Container not found")
 
 
 # ── /api/truenas/vm ───────────────────────────────────────────────────────────
@@ -2144,6 +2588,95 @@ async def api_service_control(request: Request, auth=Depends(_require_operator))
         raise HTTPException(500, "Service control error")
 
 
+# ── Network analysis ─────────────────────────────────────────────────────────
+@app.get("/api/network/connections")
+def api_network_connections(auth=Depends(_require_operator)):
+    """List active network connections."""
+    return get_network_connections()
+
+
+@app.get("/api/network/ports")
+def api_network_ports(auth=Depends(_get_auth)):
+    """List listening ports with process info."""
+    return get_listening_ports()
+
+
+@app.get("/api/network/interfaces")
+def api_network_interfaces(auth=Depends(_get_auth)):
+    """Get network interface details."""
+    import psutil as _psutil
+    interfaces = []
+    addrs = _psutil.net_if_addrs()
+    stats = _psutil.net_if_stats()
+    for name, addr_list in addrs.items():
+        if name == "lo":
+            continue
+        stat = stats.get(name)
+        ips = [a.address for a in addr_list if a.family.name == "AF_INET"]
+        interfaces.append({
+            "name": name,
+            "ip": ips[0] if ips else "",
+            "up": stat.isup if stat else False,
+            "speed": stat.speed if stat else 0,
+            "mtu": stat.mtu if stat else 0,
+        })
+    return interfaces
+
+
+# ── Service dependency map ───────────────────────────────────────────────────
+@app.get("/api/services/map")
+def api_service_map(auth=Depends(_get_auth)):
+    """Build a service dependency map from network connections and configured integrations."""
+    stats = bg_collector.get() or {}
+    cfg = read_yaml_settings()
+
+    nodes = []
+    edges = []
+
+    # Add NOBA as the central node
+    nodes.append({"id": "noba", "label": "NOBA", "type": "core", "status": "online"})
+
+    # Add configured integrations as nodes
+    integration_map = {
+        "piholeUrl": ("pihole", "Pi-hole", "dns"),
+        "plexUrl": ("plex", "Plex", "media"),
+        "jellyfinUrl": ("jellyfin", "Jellyfin", "media"),
+        "truenasUrl": ("truenas", "TrueNAS", "storage"),
+        "proxmoxUrl": ("proxmox", "Proxmox", "infra"),
+        "hassUrl": ("hass", "Home Assistant", "automation"),
+        "unifiUrl": ("unifi", "UniFi", "network"),
+        "kumaUrl": ("kuma", "Uptime Kuma", "monitoring"),
+        "radarrUrl": ("radarr", "Radarr", "media"),
+        "sonarrUrl": ("sonarr", "Sonarr", "media"),
+        "qbitUrl": ("qbit", "qBittorrent", "media"),
+        "tautulliUrl": ("tautulli", "Tautulli", "media"),
+        "overseerrUrl": ("overseerr", "Overseerr", "media"),
+        "nextcloudUrl": ("nextcloud", "Nextcloud", "storage"),
+        "traefikUrl": ("traefik", "Traefik", "network"),
+        "k8sUrl": ("k8s", "Kubernetes", "infra"),
+        "giteaUrl": ("gitea", "Gitea", "dev"),
+        "gitlabUrl": ("gitlab", "GitLab", "dev"),
+        "paperlessUrl": ("paperless", "Paperless", "docs"),
+        "adguardUrl": ("adguard", "AdGuard", "dns"),
+    }
+
+    for cfg_key, (node_id, label, category) in integration_map.items():
+        url = cfg.get(cfg_key, "")
+        if url:
+            data = stats.get(node_id)
+            status = "online" if data and (isinstance(data, dict) and data.get("status") == "online") else "configured"
+            nodes.append({"id": node_id, "label": label, "type": category, "status": status})
+            edges.append({"from": "noba", "to": node_id})
+
+    # Add monitored services
+    for svc in stats.get("services", []):
+        sid = f"svc_{svc['name']}"
+        nodes.append({"id": sid, "label": svc["name"], "type": "service", "status": svc.get("status", "unknown")})
+        edges.append({"from": "noba", "to": sid})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 # ── Round 2: Monitoring & Alerting ────────────────────────────────────────────
 @app.get("/api/alert-history")
 def api_alert_history(request: Request, auth=Depends(_get_auth)):
@@ -2180,6 +2713,82 @@ async def api_hass_proxy(domain: str, service: str, request: Request, auth=Depen
         return {"status": "ok", "http_status": r.status_code}
     except Exception as e:
         raise HTTPException(502, f"HA service call failed: {e}")
+
+
+# ── Home Assistant deep integration ──────────────────────────────────────
+@app.get("/api/hass/entities")
+def api_hass_entities(request: Request, auth=Depends(_get_auth)):
+    """List HA entities with full state details."""
+    from .integrations import get_hass_entities
+    cfg = read_yaml_settings()
+    hass_url = cfg.get("hassUrl", "")
+    hass_token = cfg.get("hassToken", "")
+    if not hass_url or not hass_token:
+        raise HTTPException(400, "Home Assistant not configured")
+    domain = request.query_params.get("domain", "")
+    result = get_hass_entities(hass_url, hass_token, domain)
+    if result is None:
+        raise HTTPException(502, "Failed to fetch HA entities")
+    return result
+
+
+@app.get("/api/hass/services")
+def api_hass_services(auth=Depends(_get_auth)):
+    """List available HA services."""
+    from .integrations import get_hass_services
+    cfg = read_yaml_settings()
+    hass_url = cfg.get("hassUrl", "")
+    hass_token = cfg.get("hassToken", "")
+    if not hass_url or not hass_token:
+        raise HTTPException(400, "Home Assistant not configured")
+    result = get_hass_services(hass_url, hass_token)
+    if result is None:
+        raise HTTPException(502, "Failed to fetch HA services")
+    return result
+
+
+@app.post("/api/hass/toggle/{entity_id:path}")
+async def api_hass_toggle(entity_id: str, request: Request, auth=Depends(_require_operator)):
+    """Toggle a Home Assistant entity."""
+    username, _ = auth
+    cfg = read_yaml_settings()
+    hass_url = cfg.get("hassUrl", "")
+    hass_token = cfg.get("hassToken", "")
+    if not hass_url or not hass_token:
+        raise HTTPException(400, "Home Assistant not configured")
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    if domain not in ("light", "switch", "input_boolean", "fan", "cover", "scene", "automation", "script"):
+        raise HTTPException(400, f"Cannot toggle domain: {domain}")
+    service = "toggle" if domain != "scene" else "turn_on"
+    import httpx as _httpx
+    try:
+        r = _httpx.post(f"{hass_url.rstrip('/')}/api/services/{domain}/{service}",
+                       json={"entity_id": entity_id},
+                       headers={"Authorization": f"Bearer {hass_token}"}, timeout=10)
+        db.audit_log("hass_toggle", username, f"Toggled {entity_id}", _client_ip(request))
+        return {"success": r.status_code == 200, "entity_id": entity_id}
+    except Exception as e:
+        raise HTTPException(502, f"HA toggle failed: {e}")
+
+
+@app.post("/api/hass/scene/{entity_id:path}")
+async def api_hass_scene(entity_id: str, request: Request, auth=Depends(_require_operator)):
+    """Activate a Home Assistant scene."""
+    username, _ = auth
+    cfg = read_yaml_settings()
+    hass_url = cfg.get("hassUrl", "")
+    hass_token = cfg.get("hassToken", "")
+    if not hass_url or not hass_token:
+        raise HTTPException(400, "Home Assistant not configured")
+    import httpx as _httpx
+    try:
+        r = _httpx.post(f"{hass_url.rstrip('/')}/api/services/scene/turn_on",
+                       json={"entity_id": entity_id},
+                       headers={"Authorization": f"Bearer {hass_token}"}, timeout=10)
+        db.audit_log("hass_scene", username, f"Activated {entity_id}", _client_ip(request))
+        return {"success": r.status_code == 200}
+    except Exception as e:
+        raise HTTPException(502, f"Scene activation failed: {e}")
 
 
 # ── Round 7: Notifications & Dashboards ──────────────────────────────────────
@@ -2300,7 +2909,7 @@ async def api_custom_report(request: Request, auth=Depends(_get_auth)):
     """Generate a custom report from a template definition."""
     body = await _read_body(request)
     metrics = body.get("metrics", ["cpu_percent", "mem_percent"])
-    range_h = int(body.get("range_hours", 24))
+    range_h = _safe_int(body.get("range_hours", 24), 24)
     title = body.get("title", "Custom Report")
 
     report_data = {}
@@ -2417,6 +3026,126 @@ async def api_cpu_governor(request: Request, auth=Depends(_require_admin)):
     return {"success": ok}
 
 
+@app.get("/api/system/health")
+def api_system_health(auth=Depends(_get_auth)):
+    """Comprehensive system health overview with score."""
+    stats = bg_collector.get() or {}
+
+    checks = []
+    score = 100
+
+    # CPU check
+    cpu = stats.get("cpuPercent", 0)
+    if cpu > 90:
+        checks.append({"name": "CPU", "status": "critical", "value": f"{cpu}%", "deduction": 30})
+        score -= 30
+    elif cpu > 75:
+        checks.append({"name": "CPU", "status": "warning", "value": f"{cpu}%", "deduction": 10})
+        score -= 10
+    else:
+        checks.append({"name": "CPU", "status": "ok", "value": f"{cpu}%", "deduction": 0})
+
+    # Memory check
+    mem = stats.get("memPercent", 0)
+    if mem > 90:
+        checks.append({"name": "Memory", "status": "critical", "value": f"{mem}%", "deduction": 25})
+        score -= 25
+    elif mem > 80:
+        checks.append({"name": "Memory", "status": "warning", "value": f"{mem}%", "deduction": 10})
+        score -= 10
+    else:
+        checks.append({"name": "Memory", "status": "ok", "value": f"{mem}%", "deduction": 0})
+
+    # Disk checks
+    for disk in stats.get("disks", []):
+        p = disk.get("percent", 0)
+        mount = disk.get("mount", "?")
+        if p >= 95:
+            checks.append({"name": f"Disk {mount}", "status": "critical", "value": f"{p}%", "deduction": 20})
+            score -= 20
+        elif p >= 85:
+            checks.append({"name": f"Disk {mount}", "status": "warning", "value": f"{p}%", "deduction": 5})
+            score -= 5
+        else:
+            checks.append({"name": f"Disk {mount}", "status": "ok", "value": f"{p}%", "deduction": 0})
+
+    # Temperature check
+    temp_str = stats.get("cpuTemp", "N/A")
+    if temp_str != "N/A":
+        try:
+            temp = int(temp_str.replace("°C", ""))
+            if temp > 85:
+                checks.append({"name": "CPU Temp", "status": "critical", "value": f"{temp}°C", "deduction": 15})
+                score -= 15
+            elif temp > 70:
+                checks.append({"name": "CPU Temp", "status": "warning", "value": f"{temp}°C", "deduction": 5})
+                score -= 5
+            else:
+                checks.append({"name": "CPU Temp", "status": "ok", "value": f"{temp}°C", "deduction": 0})
+        except ValueError:
+            pass
+
+    # Service check
+    failed_svcs = [s for s in stats.get("services", []) if s.get("status") == "failed"]
+    if failed_svcs:
+        for s in failed_svcs:
+            checks.append({"name": f"Service: {s['name']}", "status": "critical", "value": "failed", "deduction": 10})
+            score -= 10
+
+    # Network check
+    net = stats.get("netHealth", {})
+    if net.get("configured") and net.get("wan") == "Down":
+        checks.append({"name": "WAN", "status": "critical", "value": "Down", "deduction": 20})
+        score -= 20
+
+    # Active alerts
+    alert_count = len(stats.get("alerts", []))
+    if alert_count > 0:
+        checks.append({"name": "Active Alerts", "status": "warning", "value": str(alert_count), "deduction": min(alert_count * 3, 15)})
+        score -= min(alert_count * 3, 15)
+
+    score = max(0, score)
+    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
+
+    return {
+        "score": score,
+        "grade": grade,
+        "checks": checks,
+        "uptime": stats.get("uptime", "--"),
+        "hostname": stats.get("hostname", "--"),
+    }
+
+
+@app.get("/api/processes/history")
+def api_process_history(auth=Depends(_get_auth)):
+    """Get rolling history of top CPU and memory consumers."""
+    from .metrics import get_process_history
+    return get_process_history()
+
+
+@app.get("/api/processes/current")
+def api_processes_current(auth=Depends(_get_auth)):
+    """Get current process list with details."""
+    import psutil as _psutil
+    procs = []
+    for p in _psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "status", "username", "create_time"]):
+        try:
+            info = p.info
+            if (info.get("cpu_percent", 0) or 0) > 0.1 or (info.get("memory_percent", 0) or 0) > 0.1:
+                procs.append({
+                    "pid": info.get("pid"),
+                    "name": (info.get("name") or "")[:30],
+                    "cpu": round(info.get("cpu_percent", 0) or 0, 1),
+                    "mem": round(info.get("memory_percent", 0) or 0, 1),
+                    "status": info.get("status", ""),
+                    "user": (info.get("username") or "")[:20],
+                })
+        except Exception:
+            continue
+    procs.sort(key=lambda x: x["cpu"], reverse=True)
+    return procs[:100]
+
+
 @app.post("/api/pihole/toggle")
 async def api_pihole_toggle(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
@@ -2507,6 +3236,398 @@ def api_cameras(auth=Depends(_get_auth)):
              "url": f.get("url", ""),
              "type": f.get("type", "snapshot")}
             for i, f in enumerate(feeds) if f.get("url")]
+
+
+# ── Kubernetes deep management ───────────────────────────────────────────
+@app.get("/api/k8s/namespaces")
+def api_k8s_namespaces(auth=Depends(_get_auth)):
+    """List Kubernetes namespaces."""
+    cfg = read_yaml_settings()
+    url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
+    if not url or not token:
+        raise HTTPException(400, "Kubernetes not configured")
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"{url.rstrip('/')}/api/v1/namespaces",
+                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        return [{"name": ns.get("metadata", {}).get("name", ""),
+                 "status": ns.get("status", {}).get("phase", ""),
+                 "created": ns.get("metadata", {}).get("creationTimestamp", "")}
+                for ns in items]
+    except Exception as e:
+        raise HTTPException(502, f"K8s API error: {e}")
+
+
+@app.get("/api/k8s/pods")
+def api_k8s_pods(request: Request, auth=Depends(_get_auth)):
+    """List pods with details, optionally filtered by namespace."""
+    cfg = read_yaml_settings()
+    url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
+    if not url or not token:
+        raise HTTPException(400, "Kubernetes not configured")
+    namespace = request.query_params.get("namespace", "")
+    path = f"/api/v1/namespaces/{namespace}/pods" if namespace else "/api/v1/pods"
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"{url.rstrip('/')}{path}",
+                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        pods = []
+        for pod in items[:200]:
+            meta = pod.get("metadata", {})
+            spec = pod.get("spec", {})
+            status = pod.get("status", {})
+            containers = []
+            for cs in status.get("containerStatuses", []):
+                containers.append({
+                    "name": cs.get("name", ""),
+                    "ready": cs.get("ready", False),
+                    "restarts": cs.get("restartCount", 0),
+                    "state": list(cs.get("state", {}).keys())[0] if cs.get("state") else "unknown",
+                    "image": cs.get("image", ""),
+                })
+            pods.append({
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "node": spec.get("nodeName", ""),
+                "phase": status.get("phase", ""),
+                "ip": status.get("podIP", ""),
+                "created": meta.get("creationTimestamp", ""),
+                "containers": containers,
+            })
+        return pods
+    except Exception as e:
+        raise HTTPException(502, f"K8s API error: {e}")
+
+
+@app.get("/api/k8s/pods/{namespace}/{name}/logs")
+def api_k8s_pod_logs(namespace: str, name: str, request: Request, auth=Depends(_require_operator)):
+    """Get pod logs."""
+    cfg = read_yaml_settings()
+    url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
+    if not url or not token:
+        raise HTTPException(400, "Kubernetes not configured")
+    container = request.query_params.get("container", "")
+    lines = _int_param(request, "lines", 100, 1, 5000)
+    path = f"/api/v1/namespaces/{namespace}/pods/{name}/log?tailLines={lines}"
+    if container:
+        path += f"&container={container}"
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"{url.rstrip('/')}{path}",
+                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=15)
+        r.raise_for_status()
+        return PlainTextResponse(r.text[-65536:] or "No logs.")
+    except Exception as e:
+        raise HTTPException(502, f"K8s log fetch failed: {e}")
+
+
+@app.get("/api/k8s/deployments")
+def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
+    """List deployments with replica info."""
+    cfg = read_yaml_settings()
+    url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
+    if not url or not token:
+        raise HTTPException(400, "Kubernetes not configured")
+    namespace = request.query_params.get("namespace", "")
+    path = f"/apis/apps/v1/namespaces/{namespace}/deployments" if namespace else "/apis/apps/v1/deployments"
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"{url.rstrip('/')}{path}",
+                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        return [{
+            "name": d.get("metadata", {}).get("name", ""),
+            "namespace": d.get("metadata", {}).get("namespace", ""),
+            "replicas": d.get("spec", {}).get("replicas", 0),
+            "ready": d.get("status", {}).get("readyReplicas", 0),
+            "available": d.get("status", {}).get("availableReplicas", 0),
+            "updated": d.get("status", {}).get("updatedReplicas", 0),
+        } for d in items[:100]]
+    except Exception as e:
+        raise HTTPException(502, f"K8s API error: {e}")
+
+
+@app.post("/api/k8s/deployments/{namespace}/{name}/scale")
+async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depends(_require_admin)):
+    """Scale a deployment."""
+    username, _ = auth
+    body = await _read_body(request)
+    replicas = int(body.get("replicas", 1))
+    if replicas < 0 or replicas > 100:
+        raise HTTPException(400, "Replicas must be 0-100")
+    cfg = read_yaml_settings()
+    url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
+    if not url or not token:
+        raise HTTPException(400, "Kubernetes not configured")
+    import httpx as _httpx
+    try:
+        r = _httpx.patch(
+            f"{url.rstrip('/')}/apis/apps/v1/namespaces/{namespace}/deployments/{name}/scale",
+            json={"spec": {"replicas": replicas}},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/merge-patch+json"},
+            verify=False, timeout=10,
+        )
+        r.raise_for_status()
+        db.audit_log("k8s_scale", username, f"Scaled {namespace}/{name} to {replicas}", _client_ip(request))
+        return {"success": True, "replicas": replicas}
+    except Exception as e:
+        raise HTTPException(502, f"K8s scale failed: {e}")
+
+
+# ── Proxmox deep management ─────────────────────────────────────────────
+def _pmx_headers(cfg: dict) -> dict:
+    user = cfg.get("proxmoxUser", "")
+    user_full = user if "@" in user else f"{user}@pam"
+    tname = cfg.get("proxmoxTokenName", "")
+    tval = cfg.get("proxmoxTokenValue", "")
+    return {"Authorization": f"PVEAPIToken={user_full}!{tname}={tval}", "Accept": "application/json"}
+
+
+@app.get("/api/proxmox/nodes/{node}/vms")
+def api_pmx_node_vms(node: str, auth=Depends(_get_auth)):
+    """List VMs and containers on a Proxmox node."""
+    cfg = read_yaml_settings()
+    url = cfg.get("proxmoxUrl", "")
+    if not url:
+        raise HTTPException(400, "Proxmox not configured")
+    hdrs = _pmx_headers(cfg)
+    import httpx as _httpx
+    results = []
+    for ep, vtype in (("qemu", "qemu"), ("lxc", "lxc")):
+        try:
+            r = _httpx.get(f"{url.rstrip('/')}/api2/json/nodes/{node}/{ep}",
+                          headers=hdrs, verify=False, timeout=8)
+            r.raise_for_status()
+            for vm in r.json().get("data", [])[:50]:
+                mmem = vm.get("maxmem", 1) or 1
+                results.append({
+                    "vmid": vm.get("vmid"), "name": vm.get("name", ""),
+                    "type": vtype, "status": vm.get("status", ""),
+                    "cpu": round(vm.get("cpu", 0) * 100, 1),
+                    "mem_percent": round(vm.get("mem", 0) / mmem * 100, 1),
+                    "uptime": vm.get("uptime", 0),
+                    "disk": vm.get("disk", 0), "maxdisk": vm.get("maxdisk", 0),
+                })
+        except Exception:
+            pass
+    return results
+
+
+@app.get("/api/proxmox/nodes/{node}/vms/{vmid}/snapshots")
+def api_pmx_snapshots(node: str, vmid: int, request: Request, auth=Depends(_get_auth)):
+    """List VM snapshots."""
+    cfg = read_yaml_settings()
+    url = cfg.get("proxmoxUrl", "")
+    if not url:
+        raise HTTPException(400, "Proxmox not configured")
+    vtype = request.query_params.get("type", "qemu")
+    hdrs = _pmx_headers(cfg)
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"{url.rstrip('/')}/api2/json/nodes/{node}/{vtype}/{vmid}/snapshot",
+                      headers=hdrs, verify=False, timeout=8)
+        r.raise_for_status()
+        return [{"name": s.get("name", ""), "description": s.get("description", ""),
+                 "snaptime": s.get("snaptime", 0), "parent": s.get("parent", "")}
+                for s in r.json().get("data", [])]
+    except Exception as e:
+        raise HTTPException(502, f"Proxmox API error: {e}")
+
+
+@app.post("/api/proxmox/nodes/{node}/vms/{vmid}/snapshot")
+async def api_pmx_create_snapshot(node: str, vmid: int, request: Request, auth=Depends(_require_admin)):
+    """Create a VM snapshot."""
+    username, _ = auth
+    body = await _read_body(request)
+    snapname = body.get("name", "").strip()
+    description = body.get("description", "")
+    vtype = body.get("type", "qemu")
+    if not snapname or not re.match(r'^[a-zA-Z0-9_-]+$', snapname):
+        raise HTTPException(400, "Invalid snapshot name")
+    cfg = read_yaml_settings()
+    url = cfg.get("proxmoxUrl", "")
+    if not url:
+        raise HTTPException(400, "Proxmox not configured")
+    hdrs = _pmx_headers(cfg)
+    import httpx as _httpx
+    try:
+        r = _httpx.post(f"{url.rstrip('/')}/api2/json/nodes/{node}/{vtype}/{vmid}/snapshot",
+                       json={"snapname": snapname, "description": description},
+                       headers=hdrs, verify=False, timeout=30)
+        r.raise_for_status()
+        db.audit_log("pmx_snapshot", username, f"Created snapshot {snapname} for {vtype}/{vmid}", _client_ip(request))
+        return {"success": True, "task": r.json().get("data", "")}
+    except Exception as e:
+        raise HTTPException(502, f"Snapshot creation failed: {e}")
+
+
+@app.get("/api/proxmox/nodes/{node}/vms/{vmid}/console")
+def api_pmx_console_url(node: str, vmid: int, request: Request, auth=Depends(_require_operator)):
+    """Get a noVNC console URL for a VM."""
+    cfg = read_yaml_settings()
+    url = cfg.get("proxmoxUrl", "")
+    if not url:
+        raise HTTPException(400, "Proxmox not configured")
+    vtype = request.query_params.get("type", "qemu")
+    # Return a link to Proxmox's built-in noVNC
+    console_url = f"{url.rstrip('/')}/?console={vtype}&vmid={vmid}&node={node}&resize=scale"
+    return {"url": console_url}
+
+
+# ── Disk usage prediction ────────────────────────────────────────────────────
+@app.get("/api/disks/prediction")
+def api_disk_prediction(request: Request, auth=Depends(_get_auth)):
+    """Predict when each disk will be full based on usage trends."""
+    results = []
+    stats = bg_collector.get() or {}
+    for disk in stats.get("disks", []):
+        mount = disk.get("mount", "")
+        trend = db.get_trend("disk_percent", range_hours=168, projection_hours=720)
+        results.append({
+            "mount": mount,
+            "current_percent": disk.get("percent", 0),
+            "full_at": trend.get("full_at"),
+            "slope_per_day": round((trend.get("slope", 0) or 0) * 86400, 3),
+            "r_squared": trend.get("r_squared", 0),
+        })
+    return results
+
+
+# ── Uptime SLA dashboard ────────────────────────────────────────────────────
+@app.get("/api/uptime")
+def api_uptime_dashboard(auth=Depends(_get_auth)):
+    """Get uptime statistics for all monitored services and integrations."""
+    stats = bg_collector.get() or {}
+
+    items = []
+    # Services
+    for svc in stats.get("services", []):
+        items.append({
+            "name": svc["name"],
+            "type": "service",
+            "status": "up" if svc.get("status") == "active" else "down",
+        })
+    # Integrations
+    integration_checks = [
+        ("pihole", "Pi-hole"), ("plex", "Plex"), ("jellyfin", "Jellyfin"),
+        ("truenas", "TrueNAS"), ("proxmox", "Proxmox"), ("adguard", "AdGuard"),
+        ("hass", "Home Assistant"), ("unifi", "UniFi"), ("nextcloud", "Nextcloud"),
+        ("tautulli", "Tautulli"), ("overseerr", "Overseerr"), ("gitea", "Gitea"),
+        ("gitlab", "GitLab"), ("traefik", "Traefik"), ("k8s", "Kubernetes"),
+    ]
+    for key, label in integration_checks:
+        data = stats.get(key)
+        if data is None:
+            continue
+        if isinstance(data, dict):
+            status = "up" if data.get("status") == "online" else "down"
+        else:
+            status = "up" if data else "down"
+        items.append({"name": label, "type": "integration", "status": status})
+    # Radar hosts
+    for r in stats.get("radar", []):
+        items.append({
+            "name": r.get("ip", ""),
+            "type": "host",
+            "status": "up" if r.get("status") == "Up" else "down",
+            "ms": r.get("ms", 0),
+        })
+    return items
+
+
+# ── Systemd journal viewer ───────────────────────────────────────────────────
+@app.get("/api/journal")
+def api_journal(request: Request, auth=Depends(_require_operator)):
+    """Query systemd journal with filters."""
+    unit = request.query_params.get("unit", "")
+    priority = request.query_params.get("priority", "")
+    lines = _int_param(request, "lines", 50, 1, 500)
+    since = request.query_params.get("since", "")
+    grep_pattern = request.query_params.get("grep", "")
+
+    cmd = ["journalctl", "--no-pager", "-n", str(lines), "--output", "short-iso"]
+    if unit:
+        if not re.match(r'^[a-zA-Z0-9_.@-]+$', unit):
+            raise HTTPException(400, "Invalid unit name")
+        cmd += ["-u", unit]
+    if priority:
+        if priority in ("0", "1", "2", "3", "4", "5", "6", "7",
+                        "emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"):
+            cmd += ["-p", priority]
+    if since:
+        if re.match(r'^\d+\s*(min|hour|day|sec)\s*ago$', since):
+            cmd += ["--since", since]
+    if grep_pattern:
+        cmd += ["-g", grep_pattern[:100]]
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return PlainTextResponse(r.stdout[-65536:] or "No entries.")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Journal query timed out")
+    except FileNotFoundError:
+        return PlainTextResponse("journalctl not available")
+
+
+@app.get("/api/journal/units")
+def api_journal_units(auth=Depends(_require_operator)):
+    """List systemd units for the journal filter."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "list-units", "--type=service", "--no-pager", "--plain", "--no-legend"],
+            capture_output=True, text=True, timeout=5,
+        )
+        units = []
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if parts:
+                units.append({"name": parts[0], "status": parts[3] if len(parts) > 3 else ""})
+        return units[:200]
+    except Exception:
+        return []
+
+
+# ── Extended system info ─────────────────────────────────────────────────────
+@app.get("/api/system/info")
+def api_system_info(auth=Depends(_get_auth)):
+    """Extended system information."""
+    import platform
+
+    from .metrics import get_cpu_governor
+    stats = bg_collector.get() or {}
+
+    info = {
+        "hostname": stats.get("hostname", ""),
+        "os": stats.get("osName", ""),
+        "kernel": stats.get("kernel", ""),
+        "arch": platform.machine(),
+        "python": platform.python_version(),
+        "cpu_model": stats.get("hwCpu", ""),
+        "cpu_cores": os.cpu_count(),
+        "gpu": stats.get("hwGpu", ""),
+        "uptime": stats.get("uptime", ""),
+        "load": stats.get("loadavg", ""),
+        "ip": stats.get("defaultIp", ""),
+        "governor": get_cpu_governor(),
+        "noba_version": VERSION,
+    }
+    # Memory details
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        sw = psutil.swap_memory()
+        info["ram_total_gb"] = round(vm.total / (1024**3), 1)
+        info["ram_available_gb"] = round(vm.available / (1024**3), 1)
+        info["swap_total_gb"] = round(sw.total / (1024**3), 1)
+        info["swap_used_gb"] = round(sw.used / (1024**3), 1)
+    except Exception:
+        pass
+    return info
 
 
 @app.websocket("/api/terminal")
