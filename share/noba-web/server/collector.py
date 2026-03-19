@@ -22,6 +22,7 @@ from .integrations import (
     get_homebridge, get_z2m, get_esphome, get_unifi_protect, get_pikvm, get_k8s,
     get_gitea, get_gitlab, get_github, get_paperless, get_vaultwarden, get_weather,
 )
+from .cache import cache as _cache
 from .alerts import build_threshold_alerts, check_anomalies, evaluate_alert_rules
 from .plugins import plugin_manager
 from .yaml_config import read_yaml_settings
@@ -241,19 +242,30 @@ def collect_stats(qs: dict) -> dict:
         except Exception:
             return default
 
+    def _cached_get(fut, cache_key, timeout=4, default=None, ttl=30):
+        """Get a future result with optional cache layer."""
+        if _cache.is_redis and cache_key:
+            cached = _cache.get(cache_key)
+            if cached is not None:
+                return cached
+        result = _get(fut, timeout, default)
+        if _cache.is_redis and cache_key and result is not None:
+            _cache.set(cache_key, result, ttl=ttl)
+        return result
+
     stats["kuma"]       = _get(kuma_fut, default=[])
     stats["pihole"]     = _get(ph_fut)
     stats["plex"]       = _get(plex_fut)
     stats["containers"] = _get(ct_fut, timeout=5, default=[])
-    stats["truenas"]    = _get(tn_fut, timeout=5)
+    stats["truenas"]    = _cached_get(tn_fut, "noba:int:truenas", timeout=5, ttl=15)
     stats["radarr"]     = _get(rad_fut)
     stats["sonarr"]     = _get(son_fut)
     stats["qbit"]       = _get(qbit_fut)
-    stats["proxmox"]    = _get(pmx_fut, timeout=6)
+    stats["proxmox"]    = _cached_get(pmx_fut, "noba:int:proxmox", timeout=6, ttl=15)
     stats["adguard"]    = _get(ag_fut)
     stats["jellyfin"]   = _get(jf_fut)
     stats["hass"]       = _get(hass_fut)
-    stats["unifi"]      = _get(unifi_fut)
+    stats["unifi"]      = _cached_get(unifi_fut, "noba:int:unifi", ttl=15)
     stats["speedtest"]  = _get(spd_fut)
 
     # New integration results
@@ -264,19 +276,19 @@ def collect_stats(qs: dict) -> dict:
     stats["sonarrExtended"] = _get(son_ext_fut)
     stats["radarrCalendar"] = _get(rad_cal_fut, default=[])
     stats["sonarrCalendar"] = _get(son_cal_fut, default=[])
-    stats["nextcloud"]      = _get(nc_fut)
+    stats["nextcloud"]      = _cached_get(nc_fut, "noba:int:nextcloud", ttl=30)
     stats["traefik"]        = _get(traefik_fut)
     stats["npm"]            = _get(npm_fut)
     stats["authentik"]      = _get(ak_fut)
-    stats["cloudflare"]     = _get(cf_fut)
+    stats["cloudflare"]     = _cached_get(cf_fut, "noba:int:cloudflare", ttl=60)
     stats["omv"]            = _get(omv_fut)
-    stats["xcpng"]          = _get(xcp_fut, timeout=6)
+    stats["xcpng"]          = _cached_get(xcp_fut, "noba:int:xcpng", timeout=6, ttl=15)
     stats["homebridge"]     = _get(hb_fut)
     stats["z2m"]            = _get(z2m_fut)
     stats["esphome"]        = _get(esp_fut)
     stats["unifiProtect"]   = _get(protect_fut)
     stats["pikvm"]          = _get(pikvm_fut)
-    stats["k8s"]            = _get(k8s_fut, timeout=6)
+    stats["k8s"]            = _cached_get(k8s_fut, "noba:int:k8s", ttl=15)
     stats["gitea"]          = _get(gitea_fut)
     stats["gitlab"]         = _get(gitlab_fut)
     stats["github"]         = _get(github_fut)

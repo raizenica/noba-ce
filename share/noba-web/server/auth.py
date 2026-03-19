@@ -260,19 +260,36 @@ class TokenStore:
         expires = datetime.now() + timedelta(hours=TOKEN_TTL_H)
         with self._lock:
             self._tokens[token] = (username, role, expires)
+        # Mirror to cache for cross-instance sharing
+        from .cache import cache as _cache  # noqa: PLC0415
+
+        if _cache.is_redis:
+            _cache.set(f"noba:token:{token}", {"u": username, "r": role}, ttl=TOKEN_TTL_H * 3600)
         return token
 
     def validate(self, token: str) -> tuple[str | None, str | None]:
+        # Check in-memory first
         with self._lock:
             data = self._tokens.get(token)
             if data and data[2] > datetime.now():
                 return data[0], data[1]
             self._tokens.pop(token, None)
+        # Fall back to cache (Redis)
+        from .cache import cache as _cache  # noqa: PLC0415
+
+        if _cache.is_redis:
+            cached = _cache.get(f"noba:token:{token}")
+            if cached:
+                return cached.get("u"), cached.get("r")
         return None, None
 
     def revoke(self, token: str) -> None:
         with self._lock:
             self._tokens.pop(token, None)
+        from .cache import cache as _cache  # noqa: PLC0415
+
+        if _cache.is_redis:
+            _cache.delete(f"noba:token:{token}")
 
     def list_sessions(self) -> list[dict]:
         """List all active sessions (token prefix only for security)."""
@@ -291,10 +308,14 @@ class TokenStore:
 
     def revoke_by_prefix(self, prefix: str) -> bool:
         """Revoke a token by its first 8 characters."""
+        from .cache import cache as _cache  # noqa: PLC0415
+
         with self._lock:
             for tok in list(self._tokens):
                 if tok[:8] == prefix[:8]:
                     del self._tokens[tok]
+                    if _cache.is_redis:
+                        _cache.delete(f"noba:token:{tok}")
                     return True
             return False
 

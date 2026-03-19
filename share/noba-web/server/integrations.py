@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import date, timedelta
 
@@ -9,10 +10,21 @@ import httpx
 
 from .config import VERSION
 
+_POOL_CONNECTIONS = int(os.environ.get("NOBA_POOL_CONNECTIONS", 20))
+_POOL_KEEPALIVE = int(os.environ.get("NOBA_POOL_KEEPALIVE", 10))
+
 logger = logging.getLogger("noba")
 
 # Shared client with connection pooling and sensible defaults.
-_client = httpx.Client(timeout=4, follow_redirects=True)
+_client = httpx.Client(
+    timeout=4,
+    follow_redirects=True,
+    limits=httpx.Limits(
+        max_connections=_POOL_CONNECTIONS,
+        max_keepalive_connections=_POOL_KEEPALIVE,
+        keepalive_expiry=30,
+    ),
+)
 
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = 4) -> dict | list:
