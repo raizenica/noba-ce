@@ -13,7 +13,7 @@ from .metrics import (
     get_cpu_percent, get_cpu_history, get_service_status, ping_host, get_containers,
     collect_disk_io, collect_per_interface_net,
     check_cert_expiry, check_device_presence, check_domain_expiry, get_vpn_status,
-    check_docker_updates,
+    check_docker_updates, snapshot_top_processes,
 )
 from .integrations import (
     get_pihole, get_plex, get_kuma, get_truenas, get_servarr, get_qbit, get_proxmox,
@@ -382,6 +382,12 @@ def collect_stats(qs: dict) -> dict:
         db.insert_metrics(batch)
     except Exception as e:
         logger.error("History insert failed: %s", e)
+
+    # Snapshot top processes for history
+    try:
+        snapshot_top_processes()
+    except Exception:
+        pass
 
     return stats
 

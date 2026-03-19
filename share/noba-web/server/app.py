@@ -31,6 +31,7 @@ from .config import (
 from .db import db
 from .metrics import (
     _read_file, bust_container_cache, collect_smart,
+    get_listening_ports, get_network_connections,
     get_rclone_remotes, strip_ansi, validate_service_name,
 )
 from .alerts import dispatch_notifications
@@ -2579,6 +2580,95 @@ async def api_service_control(request: Request, auth=Depends(_require_operator))
         raise HTTPException(500, "Service control error")
 
 
+# ── Network analysis ─────────────────────────────────────────────────────────
+@app.get("/api/network/connections")
+def api_network_connections(auth=Depends(_require_operator)):
+    """List active network connections."""
+    return get_network_connections()
+
+
+@app.get("/api/network/ports")
+def api_network_ports(auth=Depends(_get_auth)):
+    """List listening ports with process info."""
+    return get_listening_ports()
+
+
+@app.get("/api/network/interfaces")
+def api_network_interfaces(auth=Depends(_get_auth)):
+    """Get network interface details."""
+    import psutil as _psutil
+    interfaces = []
+    addrs = _psutil.net_if_addrs()
+    stats = _psutil.net_if_stats()
+    for name, addr_list in addrs.items():
+        if name == "lo":
+            continue
+        stat = stats.get(name)
+        ips = [a.address for a in addr_list if a.family.name == "AF_INET"]
+        interfaces.append({
+            "name": name,
+            "ip": ips[0] if ips else "",
+            "up": stat.isup if stat else False,
+            "speed": stat.speed if stat else 0,
+            "mtu": stat.mtu if stat else 0,
+        })
+    return interfaces
+
+
+# ── Service dependency map ───────────────────────────────────────────────────
+@app.get("/api/services/map")
+def api_service_map(auth=Depends(_get_auth)):
+    """Build a service dependency map from network connections and configured integrations."""
+    stats = bg_collector.get() or {}
+    cfg = read_yaml_settings()
+
+    nodes = []
+    edges = []
+
+    # Add NOBA as the central node
+    nodes.append({"id": "noba", "label": "NOBA", "type": "core", "status": "online"})
+
+    # Add configured integrations as nodes
+    integration_map = {
+        "piholeUrl": ("pihole", "Pi-hole", "dns"),
+        "plexUrl": ("plex", "Plex", "media"),
+        "jellyfinUrl": ("jellyfin", "Jellyfin", "media"),
+        "truenasUrl": ("truenas", "TrueNAS", "storage"),
+        "proxmoxUrl": ("proxmox", "Proxmox", "infra"),
+        "hassUrl": ("hass", "Home Assistant", "automation"),
+        "unifiUrl": ("unifi", "UniFi", "network"),
+        "kumaUrl": ("kuma", "Uptime Kuma", "monitoring"),
+        "radarrUrl": ("radarr", "Radarr", "media"),
+        "sonarrUrl": ("sonarr", "Sonarr", "media"),
+        "qbitUrl": ("qbit", "qBittorrent", "media"),
+        "tautulliUrl": ("tautulli", "Tautulli", "media"),
+        "overseerrUrl": ("overseerr", "Overseerr", "media"),
+        "nextcloudUrl": ("nextcloud", "Nextcloud", "storage"),
+        "traefikUrl": ("traefik", "Traefik", "network"),
+        "k8sUrl": ("k8s", "Kubernetes", "infra"),
+        "giteaUrl": ("gitea", "Gitea", "dev"),
+        "gitlabUrl": ("gitlab", "GitLab", "dev"),
+        "paperlessUrl": ("paperless", "Paperless", "docs"),
+        "adguardUrl": ("adguard", "AdGuard", "dns"),
+    }
+
+    for cfg_key, (node_id, label, category) in integration_map.items():
+        url = cfg.get(cfg_key, "")
+        if url:
+            data = stats.get(node_id)
+            status = "online" if data and (isinstance(data, dict) and data.get("status") == "online") else "configured"
+            nodes.append({"id": node_id, "label": label, "type": category, "status": status})
+            edges.append({"from": "noba", "to": node_id})
+
+    # Add monitored services
+    for svc in stats.get("services", []):
+        sid = f"svc_{svc['name']}"
+        nodes.append({"id": sid, "label": svc["name"], "type": "service", "status": svc.get("status", "unknown")})
+        edges.append({"from": "noba", "to": sid})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 # ── Round 2: Monitoring & Alerting ────────────────────────────────────────────
 @app.get("/api/alert-history")
 def api_alert_history(request: Request, auth=Depends(_get_auth)):
@@ -2926,6 +3016,126 @@ async def api_cpu_governor(request: Request, auth=Depends(_require_admin)):
         ok = False
     db.audit_log("cpu_governor", username, f"Set {governor} -> {ok}", _client_ip(request))
     return {"success": ok}
+
+
+@app.get("/api/system/health")
+def api_system_health(auth=Depends(_get_auth)):
+    """Comprehensive system health overview with score."""
+    stats = bg_collector.get() or {}
+
+    checks = []
+    score = 100
+
+    # CPU check
+    cpu = stats.get("cpuPercent", 0)
+    if cpu > 90:
+        checks.append({"name": "CPU", "status": "critical", "value": f"{cpu}%", "deduction": 30})
+        score -= 30
+    elif cpu > 75:
+        checks.append({"name": "CPU", "status": "warning", "value": f"{cpu}%", "deduction": 10})
+        score -= 10
+    else:
+        checks.append({"name": "CPU", "status": "ok", "value": f"{cpu}%", "deduction": 0})
+
+    # Memory check
+    mem = stats.get("memPercent", 0)
+    if mem > 90:
+        checks.append({"name": "Memory", "status": "critical", "value": f"{mem}%", "deduction": 25})
+        score -= 25
+    elif mem > 80:
+        checks.append({"name": "Memory", "status": "warning", "value": f"{mem}%", "deduction": 10})
+        score -= 10
+    else:
+        checks.append({"name": "Memory", "status": "ok", "value": f"{mem}%", "deduction": 0})
+
+    # Disk checks
+    for disk in stats.get("disks", []):
+        p = disk.get("percent", 0)
+        mount = disk.get("mount", "?")
+        if p >= 95:
+            checks.append({"name": f"Disk {mount}", "status": "critical", "value": f"{p}%", "deduction": 20})
+            score -= 20
+        elif p >= 85:
+            checks.append({"name": f"Disk {mount}", "status": "warning", "value": f"{p}%", "deduction": 5})
+            score -= 5
+        else:
+            checks.append({"name": f"Disk {mount}", "status": "ok", "value": f"{p}%", "deduction": 0})
+
+    # Temperature check
+    temp_str = stats.get("cpuTemp", "N/A")
+    if temp_str != "N/A":
+        try:
+            temp = int(temp_str.replace("°C", ""))
+            if temp > 85:
+                checks.append({"name": "CPU Temp", "status": "critical", "value": f"{temp}°C", "deduction": 15})
+                score -= 15
+            elif temp > 70:
+                checks.append({"name": "CPU Temp", "status": "warning", "value": f"{temp}°C", "deduction": 5})
+                score -= 5
+            else:
+                checks.append({"name": "CPU Temp", "status": "ok", "value": f"{temp}°C", "deduction": 0})
+        except ValueError:
+            pass
+
+    # Service check
+    failed_svcs = [s for s in stats.get("services", []) if s.get("status") == "failed"]
+    if failed_svcs:
+        for s in failed_svcs:
+            checks.append({"name": f"Service: {s['name']}", "status": "critical", "value": "failed", "deduction": 10})
+            score -= 10
+
+    # Network check
+    net = stats.get("netHealth", {})
+    if net.get("configured") and net.get("wan") == "Down":
+        checks.append({"name": "WAN", "status": "critical", "value": "Down", "deduction": 20})
+        score -= 20
+
+    # Active alerts
+    alert_count = len(stats.get("alerts", []))
+    if alert_count > 0:
+        checks.append({"name": "Active Alerts", "status": "warning", "value": str(alert_count), "deduction": min(alert_count * 3, 15)})
+        score -= min(alert_count * 3, 15)
+
+    score = max(0, score)
+    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
+
+    return {
+        "score": score,
+        "grade": grade,
+        "checks": checks,
+        "uptime": stats.get("uptime", "--"),
+        "hostname": stats.get("hostname", "--"),
+    }
+
+
+@app.get("/api/processes/history")
+def api_process_history(auth=Depends(_get_auth)):
+    """Get rolling history of top CPU and memory consumers."""
+    from .metrics import get_process_history
+    return get_process_history()
+
+
+@app.get("/api/processes/current")
+def api_processes_current(auth=Depends(_get_auth)):
+    """Get current process list with details."""
+    import psutil as _psutil
+    procs = []
+    for p in _psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "status", "username", "create_time"]):
+        try:
+            info = p.info
+            if (info.get("cpu_percent", 0) or 0) > 0.1 or (info.get("memory_percent", 0) or 0) > 0.1:
+                procs.append({
+                    "pid": info.get("pid"),
+                    "name": (info.get("name") or "")[:30],
+                    "cpu": round(info.get("cpu_percent", 0) or 0, 1),
+                    "mem": round(info.get("memory_percent", 0) or 0, 1),
+                    "status": info.get("status", ""),
+                    "user": (info.get("username") or "")[:20],
+                })
+        except Exception:
+            continue
+    procs.sort(key=lambda x: x["cpu"], reverse=True)
+    return procs[:100]
 
 
 @app.post("/api/pihole/toggle")

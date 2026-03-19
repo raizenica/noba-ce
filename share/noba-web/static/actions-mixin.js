@@ -2253,5 +2253,80 @@ function actionsMixin() {
             this.showContainerStatsModal = true;
             this.fetchContainerStats();
         },
+
+
+        // ── System Health Dashboard ──────────────────────────────────────────
+        systemHealth: null,
+        showHealthModal: false,
+
+        async fetchSystemHealth() {
+            try {
+                const res = await fetch('/api/system/health', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.systemHealth = await res.json();
+            } catch { /* silent */ }
+        },
+
+        get healthScoreClass() {
+            if (!this.systemHealth) return 'bn';
+            const s = this.systemHealth.score;
+            return s >= 90 ? 'bs' : s >= 60 ? 'bw' : 'bd';
+        },
+
+        // ── Network Analysis ─────────────────────────────────────────────────
+        networkConnections: [],
+        listeningPorts: [],
+        networkInterfaces: [],
+        showNetworkModal: false,
+
+        async fetchNetworkInfo() {
+            try {
+                const [conns, ports, ifaces] = await Promise.all([
+                    fetch('/api/network/connections', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                    fetch('/api/network/ports', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                    fetch('/api/network/interfaces', { headers: { 'Authorization': 'Bearer ' + this._token() } }).then(r => r.ok ? r.json() : []),
+                ]);
+                this.networkConnections = conns;
+                this.listeningPorts = ports;
+                this.networkInterfaces = ifaces;
+            } catch { /* silent */ }
+        },
+
+        // ── Process History ──────────────────────────────────────────────────
+        processHistory: [],
+        processList: [],
+        showProcessModal: false,
+
+        async fetchProcessHistory() {
+            try {
+                const res = await fetch('/api/processes/history', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.processHistory = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async fetchProcessList() {
+            try {
+                const res = await fetch('/api/processes/current', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.processList = await res.json();
+            } catch { /* silent */ }
+        },
+
+        // ── Service Map ──────────────────────────────────────────────────────
+        serviceMap: null,
+        showServiceMapModal: false,
+
+        async fetchServiceMap() {
+            try {
+                const res = await fetch('/api/services/map', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.serviceMap = await res.json();
+            } catch { /* silent */ }
+        },
     };
 }

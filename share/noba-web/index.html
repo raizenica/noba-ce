@@ -112,6 +112,10 @@
                 <i class="fas fa-chart-line" aria-hidden="true"></i>
             </button>
 
+            <button class="icon-btn" @click="showServiceMapModal=true; fetchServiceMap()" title="Service Map" x-show="authenticated" x-cloak>
+                <i class="fas fa-sitemap" aria-hidden="true"></i>
+            </button>
+
             <button class="icon-btn" @click="toggleNotifCenter()" title="Notifications" style="position:relative" aria-label="Notifications">
                 <i class="fas fa-bell" aria-hidden="true"></i>
                 <span x-show="unreadCount>0" class="notif-badge" x-text="unreadCount" x-cloak></span>
@@ -261,6 +265,32 @@
             </div>
         </div>
 
+        <div class="card" data-id="card-health" x-show="authenticated" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr"><i class="fas fa-heartbeat card-icon" style="color:#f7768e"></i><span class="card-title">System Health</span>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.health?'is-collapsed':''" @click="toggleCollapse('health')"></button>
+                <i class="fas fa-grip-lines drag-handle"></i></div>
+            <div class="card-body" x-show="!collapsed.health" x-init="fetchSystemHealth(); setInterval(() => fetchSystemHealth(), 30000)">
+                <template x-if="systemHealth">
+                    <div>
+                        <div style="text-align:center;margin:8px 0">
+                            <div style="font-size:2.5rem;font-weight:700" :style="'color:var(--' + (systemHealth.score >= 90 ? 'success' : systemHealth.score >= 60 ? 'warning' : 'danger') + ')'">
+                                <span x-text="systemHealth.score"></span><span style="font-size:1rem;color:var(--text-dim)">%</span>
+                            </div>
+                            <div style="font-size:.75rem;color:var(--text-muted)">Health Score — Grade <span x-text="systemHealth.grade" style="font-weight:700"></span></div>
+                        </div>
+                        <template x-for="c in systemHealth.checks" :key="c.name">
+                            <div class="row" style="font-size:.8rem">
+                                <span class="row-label"><i class="fas fa-circle" style="font-size:.4rem;vertical-align:middle;margin-right:4px"
+                                    :style="'color:var(--' + (c.status==='ok' ? 'success' : c.status==='warning' ? 'warning' : 'danger') + ')'"></i><span x-text="c.name"></span></span>
+                                <span class="row-val" x-text="c.value"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template x-if="!systemHealth"><div class="empty-msg">Loading...</div></template>
+            </div>
+        </div>
+
         <div class="card" data-id="card-netio" x-show="vis.netio" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
             <div class="card-hdr">
                 <i class="fas fa-network-wired card-icon" aria-hidden="true"></i>
@@ -271,6 +301,7 @@
                         :aria-expanded="!collapsed.netio"
                         aria-controls="body-netio"
                         aria-label="Toggle Network I/O"></button>
+                <button class="svc-btn" title="Network details" @click="showNetworkModal=true; fetchNetworkInfo()" style="margin-left:auto"><i class="fas fa-project-diagram"></i></button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-netio" x-show="!collapsed.netio">
@@ -697,6 +728,7 @@
                         :aria-expanded="!collapsed.procs"
                         aria-controls="body-procs"
                         aria-label="Toggle Resource Hogs"></button>
+                <button class="svc-btn" title="All processes" @click="showProcessModal=true; fetchProcessList()" style="margin-left:auto"><i class="fas fa-list"></i></button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-procs" x-show="!collapsed.procs">
@@ -2439,6 +2471,7 @@
                 <span class="s-label">Module Visibility</span>
                 <div class="toggle-grid">
                     <label class="toggle-item"><input type="checkbox" x-model="vis.core"> Core System</label>
+                    <label class="toggle-item"><input type="checkbox" x-model="vis.health"> System Health</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.netio"> Network I/O</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.hw"> Hardware</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.truenas"> TrueNAS Integration</label>
@@ -4434,6 +4467,99 @@
             </table>
             <div class="empty-msg" x-show="containerStats.length===0">No containers running</div>
             <div class="modal-footer"><button class="btn-sm" @click="fetchContainerStats()"><i class="fas fa-sync"></i> Refresh</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- Network Analysis Modal -->
+<div class="modal-overlay" x-show="showNetworkModal" x-cloak @keydown.escape.window="showNetworkModal=false">
+    <div class="modal-box" style="max-width:900px;height:85vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-network-wired"></i> Network Analysis
+            <button class="modal-close" @click="showNetworkModal=false">&times;</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:16px">
+            <h4 style="font-size:.85rem;color:var(--text-muted)">Interfaces</h4>
+            <template x-for="iface in networkInterfaces" :key="iface.name">
+                <div class="row">
+                    <span class="row-label"><i class="fas fa-ethernet" style="margin-right:4px;color:var(--text-dim)"></i><span x-text="iface.name"></span></span>
+                    <span class="badge" :class="iface.up?'bs':'bd'" x-text="iface.up?'UP':'DOWN'"></span>
+                    <span class="row-val" style="margin-left:8px" x-text="iface.ip || 'No IP'"></span>
+                    <span style="font-size:.7rem;color:var(--text-dim);margin-left:8px" x-text="iface.speed ? iface.speed+'Mbps' : ''"></span>
+                </div>
+            </template>
+            <h4 style="font-size:.85rem;color:var(--text-muted);margin-top:12px">Listening Ports</h4>
+            <table class="audit-table" style="width:100%;font-size:.8rem">
+                <thead><tr><th>Port</th><th>Address</th><th>Process</th><th>PID</th></tr></thead>
+                <tbody>
+                    <template x-for="p in listeningPorts" :key="p.port">
+                        <tr><td x-text="p.port" style="font-weight:600"></td><td x-text="p.address"></td><td x-text="p.process"></td><td x-text="p.pid"></td></tr>
+                    </template>
+                </tbody>
+            </table>
+            <h4 style="font-size:.85rem;color:var(--text-muted);margin-top:12px">Active Connections (<span x-text="networkConnections.length"></span>)</h4>
+            <table class="audit-table" style="width:100%;font-size:.75rem">
+                <thead><tr><th>Process</th><th>Local</th><th>Remote</th></tr></thead>
+                <tbody>
+                    <template x-for="c in networkConnections.slice(0, 50)" :key="c.local+c.remote">
+                        <tr><td x-text="c.process"></td><td x-text="c.local" style="font-family:monospace"></td><td x-text="c.remote" style="font-family:monospace"></td></tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Process List Modal -->
+<div class="modal-overlay" x-show="showProcessModal" x-cloak @keydown.escape.window="showProcessModal=false">
+    <div class="modal-box" style="max-width:800px;height:80vh;display:flex;flex-direction:column">
+        <div class="modal-title">
+            <i class="fas fa-microchip"></i> Processes
+            <button class="modal-close" @click="showProcessModal=false">&times;</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:12px">
+            <table class="audit-table" style="width:100%;font-size:.8rem">
+                <thead><tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th><th>User</th><th>Status</th></tr></thead>
+                <tbody>
+                    <template x-for="p in processList" :key="p.pid">
+                        <tr>
+                            <td x-text="p.pid" style="color:var(--text-dim)"></td>
+                            <td x-text="p.name" style="font-weight:500"></td>
+                            <td x-text="p.cpu" :style="p.cpu > 50 ? 'color:var(--danger)' : p.cpu > 20 ? 'color:var(--warning)' : ''"></td>
+                            <td x-text="p.mem" :style="p.mem > 50 ? 'color:var(--danger)' : p.mem > 20 ? 'color:var(--warning)' : ''"></td>
+                            <td x-text="p.user" style="font-size:.75rem;color:var(--text-dim)"></td>
+                            <td x-text="p.status"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-footer"><button class="btn-sm" @click="fetchProcessList()"><i class="fas fa-sync"></i> Refresh</button></div>
+    </div>
+</div>
+
+<!-- Service Map Modal -->
+<div class="modal-overlay" x-show="showServiceMapModal" x-cloak @keydown.escape.window="showServiceMapModal=false">
+    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title">
+            <i class="fas fa-sitemap"></i> Service Map
+            <button class="modal-close" @click="showServiceMapModal=false">&times;</button>
+        </div>
+        <div style="padding:16px">
+            <template x-if="serviceMap">
+                <div>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center">
+                        <template x-for="node in serviceMap.nodes" :key="node.id">
+                            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:100px"
+                                 :style="node.id==='noba' ? 'border-color:var(--accent);box-shadow:0 0 12px var(--accent-dim)' : ''">
+                                <div style="font-weight:600;font-size:.85rem" x-text="node.label"></div>
+                                <span class="badge" :class="node.status==='online'?'bs':node.status==='configured'?'bn':'bd'" x-text="node.status" style="font-size:.6rem;margin-top:4px"></span>
+                                <div style="font-size:.6rem;color:var(--text-dim);margin-top:2px" x-text="node.type"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
         </div>
     </div>
 </div>

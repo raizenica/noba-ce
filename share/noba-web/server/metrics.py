@@ -806,6 +806,60 @@ def get_ipmi_sensors(host: str, user: str = "", password: str = "") -> list[dict
     return sensors
 
 
+def get_network_connections() -> list[dict]:
+    """Get active network connections with process info."""
+    connections = []
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status != "ESTABLISHED":
+                continue
+            try:
+                proc_name = psutil.Process(conn.pid).name() if conn.pid else ""
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                proc_name = ""
+            local = f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else ""
+            remote = f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else ""
+            connections.append({
+                "pid": conn.pid,
+                "process": proc_name[:20],
+                "local": local,
+                "remote": remote,
+                "status": conn.status,
+            })
+    except (psutil.AccessDenied, Exception):
+        pass
+    return connections[:200]
+
+
+def get_listening_ports() -> list[dict]:
+    """Get all listening ports with process info."""
+    ports = []
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status != "LISTEN":
+                continue
+            try:
+                proc_name = psutil.Process(conn.pid).name() if conn.pid else ""
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                proc_name = ""
+            ports.append({
+                "port": conn.laddr.port if conn.laddr else 0,
+                "address": conn.laddr.ip if conn.laddr else "",
+                "pid": conn.pid,
+                "process": proc_name[:20],
+            })
+    except (psutil.AccessDenied, Exception):
+        pass
+    # Deduplicate by port
+    seen = set()
+    unique = []
+    for p in sorted(ports, key=lambda x: x["port"]):
+        if p["port"] not in seen:
+            seen.add(p["port"])
+            unique.append(p)
+    return unique
+
+
 def probe_game_server(host: str, port: int) -> dict:
     try:
         t0 = time.time()
@@ -816,6 +870,40 @@ def probe_game_server(host: str, port: int) -> dict:
         return {"host": host, "port": port, "status": "online", "ms": ms}
     except Exception:
         return {"host": host, "port": port, "status": "offline", "ms": 0}
+
+
+_process_history: list[dict] = []
+_process_history_lock = threading.Lock()
+_PROCESS_HISTORY_MAX = 60  # Keep 60 snapshots (5 min at 5s intervals)
+
+
+def snapshot_top_processes() -> dict:
+    """Capture current top CPU and memory consumers and store in rolling history."""
+    try:
+        procs = [
+            (p.info["name"] or "", p.info["cpu_percent"] or 0.0, p.info["memory_percent"] or 0.0, p.info.get("pid", 0))
+            for p in psutil.process_iter(["name", "cpu_percent", "memory_percent", "pid"])
+        ]
+        top_cpu = sorted(procs, key=lambda x: x[1], reverse=True)[:5]
+        top_mem = sorted(procs, key=lambda x: x[2], reverse=True)[:5]
+        snapshot = {
+            "time": int(time.time()),
+            "cpu": [{"name": p[0][:20], "pid": p[3], "val": round(p[1], 1)} for p in top_cpu],
+            "mem": [{"name": p[0][:20], "pid": p[3], "val": round(p[2], 1)} for p in top_mem],
+        }
+        with _process_history_lock:
+            _process_history.append(snapshot)
+            if len(_process_history) > _PROCESS_HISTORY_MAX:
+                _process_history.pop(0)
+        return snapshot
+    except Exception:
+        return {}
+
+
+def get_process_history() -> list[dict]:
+    """Return the rolling process history."""
+    with _process_history_lock:
+        return list(_process_history)
 
 
 def query_source_server(host: str, port: int) -> dict:
