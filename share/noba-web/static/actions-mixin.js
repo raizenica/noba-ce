@@ -2511,5 +2511,110 @@ function actionsMixin() {
             } catch { /* silent */ }
             return null;
         },
+
+
+        // -- Incident Timeline (Round 11) ------------------------------------
+
+        async fetchIncidents(hours) {
+            this.incidentLoading = true;
+            try {
+                const res = await fetch('/api/incidents?hours=' + (hours || 24), {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.incidents = await res.json();
+            } catch { /* silent */ }
+            finally { this.incidentLoading = false; }
+        },
+
+        async resolveIncident(id) {
+            try {
+                await fetch('/api/incidents/' + id + '/resolve', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.fetchIncidents();
+            } catch { /* silent */ }
+        },
+
+
+        // -- Runbooks (Round 11) ---------------------------------------------
+
+        async fetchRunbooks() {
+            this.runbookLoading = true;
+            try {
+                const res = await fetch('/api/runbooks', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.runbooks = await res.json();
+            } catch { /* silent */ }
+            finally { this.runbookLoading = false; }
+        },
+
+
+        // -- Graylog (Round 11) ----------------------------------------------
+
+        async searchGraylog() {
+            this.graylogLoading = true;
+            try {
+                const res = await fetch('/api/graylog/search?q=' + encodeURIComponent(this.graylogQuery) + '&hours=1', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.graylogResults = await res.json();
+            } catch (e) { this.addToast('Graylog error: ' + e.message, 'error'); }
+            finally { this.graylogLoading = false; }
+        },
+
+
+        // -- Metrics Correlation (Round 11) ----------------------------------
+
+        async fetchCorrelation() {
+            if (!this.correlateMetrics.trim()) return;
+            this.correlateLoading = true;
+            try {
+                const res = await fetch('/api/metrics/correlate?metrics=' + encodeURIComponent(this.correlateMetrics) + '&hours=' + this.correlateHours, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.correlateData = await res.json();
+                    this.$nextTick(function() { this.renderCorrelationChart(); });
+                }
+            } catch (e) { this.addToast('Correlation error: ' + e.message, 'error'); }
+            finally { this.correlateLoading = false; }
+        },
+
+        renderCorrelationChart() {
+            var canvas = document.getElementById('correlate-chart');
+            if (!canvas || !this.correlateData) return;
+            if (this._correlateChart instanceof Chart) this._correlateChart.destroy();
+            var colors = ['#00c8ff', '#00e676', '#ffb300', '#ff1744', '#ab47bc', '#26c6da', '#ff7043', '#66bb6a'];
+            var datasets = [];
+            var i = 0;
+            for (var name in this.correlateData) {
+                if (!Object.prototype.hasOwnProperty.call(this.correlateData, name)) continue;
+                var points = this.correlateData[name];
+                datasets.push({
+                    label: name,
+                    data: points.map(function(p) { return { x: p.time * 1000, y: p.value }; }),
+                    borderColor: colors[i % colors.length],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                });
+                i++;
+            }
+            this._correlateChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { datasets: datasets },
+                options: {
+                    responsive: true,
+                    animation: { duration: 0 },
+                    scales: {
+                        x: { type: 'linear', ticks: { callback: function(v) { return new Date(v).toLocaleTimeString(); } } },
+                    },
+                    plugins: { legend: { labels: { color: '#c8dff0', font: { size: 10 } } } },
+                },
+            });
+        },
+        _correlateChart: null,
     };
 }

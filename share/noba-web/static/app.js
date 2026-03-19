@@ -82,6 +82,8 @@ function dashboard() {
         // Ops Center
         'piholePassword', 'siteMap', 'siteNames', 'frigateUrl',
         'serviceDependencies', 'influxdbUrl', 'influxdbToken', 'influxdbOrg',
+        // Round 11: Ops Center expansion
+        'agentKeys', 'statusPageServices', 'graylogUrl', 'graylogToken', 'runbooks',
     ];
 
     /** Keys that live in localStorage as a local mirror.
@@ -167,6 +169,7 @@ function dashboard() {
         'weather', 'certExpiry', 'domainExpiry', 'vpn',
         'dockerUpdates', 'devicePresence', 'energy', 'scrutiny',
         'tailscale', 'frigate',
+        'agents',
     ]);
 
     const DEF_VIS = {
@@ -186,6 +189,7 @@ function dashboard() {
         lidarr: true, readarr: true, bazarr: true,
         dockerUpdates: true, devicePresence: true, scrutiny: true,
         tailscale: true, frigate: true, recovery: true,
+        agents: true,
     };
 
     const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt';
@@ -368,6 +372,14 @@ function dashboard() {
         showChangelogModal: false, configChangelog: [], changelogLoading: false,
         recoveryLoading: false, recoveryResult: '',
 
+        // Round 11: Ops Center expansion
+        showAgentsModal: false,
+        showIncidentModal: false, incidents: [], incidentLoading: false,
+        showRunbookModal: false, runbooks: [], runbookLoading: false, activeRunbook: null,
+        showCorrelateModal: false, correlateMetrics: '', correlateHours: 6, correlateData: null, correlateLoading: false,
+        showGraylogModal: false, graylogQuery: '*', graylogResults: null, graylogLoading: false,
+        agentKeys: '', statusPageServices: '', graylogUrl: '', graylogToken: '',
+
         // ── Live data ──────────────────────────────────────────────────────────
         timestamp: '--:--', uptime: '--', loadavg: '--', memory: '--',
         hostname: '--', defaultIp: '--',
@@ -393,6 +405,7 @@ function dashboard() {
         paperless: null, vaultwarden: null,
         weather: null, certExpiry: [], domainExpiry: [], vpn: null,
         dockerUpdates: [], devicePresence: [], energy: [],
+        agents: [],
 
         // ── App state ──────────────────────────────────────────────────────────
         showSettings: false, showTerminal: false, refreshing: false,

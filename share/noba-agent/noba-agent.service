@@ -1,0 +1,16 @@
+[Unit]
+Description=NOBA Agent -- System Telemetry Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/noba-agent/agent.py --config /etc/noba-agent.yaml
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=noba-agent
+
+[Install]
+WantedBy=multi-user.target
