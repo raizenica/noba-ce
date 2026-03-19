@@ -332,11 +332,31 @@ def api_history_export(metric: str, request: Request, auth=Depends(_get_auth)):
     )
 
 
+# ── /api/history/{metric}/trend ──────────────────────────────────────────────
+@app.get("/api/history/{metric}/trend")
+def api_history_trend(metric: str, request: Request, auth=Depends(_get_auth)):
+    if metric not in HISTORY_METRICS:
+        raise HTTPException(400, "Unknown metric")
+    range_h = _int_param(request, "range", 168, 1, 8760)
+    project_h = _int_param(request, "project", 168, 1, 8760)
+    return db.get_trend(metric, range_hours=range_h, projection_hours=project_h)
+
+
 # ── /api/audit ────────────────────────────────────────────────────────────────
 @app.get("/api/audit")
 def api_audit(request: Request, auth=Depends(_require_admin)):
     limit = _int_param(request, "limit", 100, 1, 1000)
-    return db.get_audit(limit)
+    user_filter = request.query_params.get("user", "")
+    action_filter = request.query_params.get("action", "")
+    try:
+        from_ts = int(request.query_params.get("from", 0))
+    except (ValueError, TypeError):
+        from_ts = 0
+    try:
+        to_ts = int(request.query_params.get("to", 0))
+    except (ValueError, TypeError):
+        to_ts = 0
+    return db.get_audit(limit=limit, username_filter=user_filter, action_filter=action_filter, from_ts=from_ts, to_ts=to_ts)
 
 
 # ── /api/config/backup ────────────────────────────────────────────────────────
@@ -465,6 +485,25 @@ async def api_users_post(request: Request, auth=Depends(_require_admin)):
         return users.list_users()
 
     raise HTTPException(400, "Invalid action")
+
+
+# ── /api/admin/sessions ──────────────────────────────────────────────────────
+@app.get("/api/admin/sessions")
+def api_sessions_list(auth=Depends(_require_admin)):
+    return token_store.list_sessions()
+
+
+@app.post("/api/admin/sessions/revoke")
+async def api_sessions_revoke(request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    body = await _read_body(request)
+    prefix = body.get("prefix", "").replace("\u2026", "")
+    if not prefix or len(prefix) < 8:
+        raise HTTPException(400, "Invalid token prefix")
+    ok = token_store.revoke_by_prefix(prefix)
+    if ok:
+        db.audit_log("session_revoke", username, f"Revoked session {prefix}\u2026", _client_ip(request))
+    return {"success": ok}
 
 
 # ── /api/login ────────────────────────────────────────────────────────────────

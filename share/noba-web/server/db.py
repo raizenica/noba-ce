@@ -165,13 +165,30 @@ class Database:
         except Exception as e:
             logger.error("audit_log failed: %s", e)
 
-    def get_audit(self, limit: int = 100) -> list[dict]:
+    def get_audit(self, limit: int = 100, username_filter: str = "",
+                  action_filter: str = "", from_ts: int = 0, to_ts: int = 0) -> list[dict]:
         try:
+            clauses = []
+            params: list = []
+            if username_filter:
+                clauses.append("username = ?")
+                params.append(username_filter)
+            if action_filter:
+                clauses.append("action = ?")
+                params.append(action_filter)
+            if from_ts:
+                clauses.append("timestamp >= ?")
+                params.append(from_ts)
+            if to_ts:
+                clauses.append("timestamp <= ?")
+                params.append(to_ts)
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            params.append(limit)
             with self._lock:
                 conn = self._get_conn()
                 rows = conn.execute(
-                    "SELECT timestamp, username, action, details, ip FROM audit ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
+                    f"SELECT timestamp, username, action, details, ip FROM audit{where} ORDER BY timestamp DESC LIMIT ?",
+                    params,
                 ).fetchall()
             return [
                 {"time": r[0], "username": r[1], "action": r[2], "details": r[3], "ip": r[4]}
@@ -180,6 +197,51 @@ class Database:
         except Exception as e:
             logger.error("get_audit failed: %s", e)
             return []
+
+    def get_trend(self, metric: str, range_hours: int = 168, projection_hours: int = 168) -> dict:
+        """Linear regression trend with future projection."""
+        points = self.get_history(metric, range_hours=range_hours, resolution=300)
+        if len(points) < 10:
+            return {"error": "Insufficient data"}
+        xs = [p["time"] for p in points]
+        ys = [p["value"] for p in points]
+        n = len(xs)
+        sum_x = sum(xs)
+        sum_y = sum(ys)
+        sum_xy = sum(x * y for x, y in zip(xs, ys))
+        sum_x2 = sum(x * x for x in xs)
+        denom = n * sum_x2 - sum_x ** 2
+        if denom == 0:
+            return {"slope": 0, "trend": [], "projection": []}
+        slope = (n * sum_xy - sum_x * sum_y) / denom
+        intercept = (sum_y - slope * sum_x) / n
+        # R-squared
+        y_mean = sum_y / n
+        ss_tot = sum((y - y_mean) ** 2 for y in ys)
+        ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+        r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+        # Trend line over historical range
+        trend = [{"time": x, "value": round(slope * x + intercept, 2)} for x in xs]
+        # Future projection
+        last_t = xs[-1]
+        step = 300
+        proj_points = int(projection_hours * 3600 / step)
+        projection = []
+        for i in range(1, proj_points + 1):
+            t = last_t + i * step
+            v = slope * t + intercept
+            projection.append({"time": t, "value": round(v, 2)})
+        # Estimate when metric hits 100% (for disk/memory)
+        full_at = None
+        if slope > 0:
+            t_full = (100 - intercept) / slope
+            if t_full > last_t:
+                from datetime import timezone
+                full_at = datetime.fromtimestamp(t_full, tz=timezone.utc).isoformat()
+        return {
+            "slope": round(slope, 8), "r_squared": round(r_squared, 4),
+            "trend": trend, "projection": projection, "full_at": full_at,
+        }
 
 
 # Singleton shared instance

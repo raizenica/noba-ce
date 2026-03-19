@@ -12,9 +12,11 @@ from .db import db
 from .metrics import (
     collect_system, collect_hardware, collect_storage, collect_network,
     get_cpu_percent, get_cpu_history, get_service_status, ping_host, get_containers,
+    collect_disk_io, collect_per_interface_net,
 )
 from .integrations import (
     get_pihole, get_plex, get_kuma, get_truenas, get_servarr, get_qbit, get_proxmox,
+    get_adguard, get_jellyfin, get_hass, get_unifi, get_speedtest,
 )
 from .alerts import build_threshold_alerts, check_anomalies, evaluate_alert_rules
 from .plugins import plugin_manager
@@ -68,6 +70,18 @@ def collect_stats(qs: dict) -> dict:
     pmx_user  = cfg.get("proxmoxUser",        "")
     pmx_tname = cfg.get("proxmoxTokenName",   "")
     pmx_tval  = cfg.get("proxmoxTokenValue",  "")
+    ag_url    = cfg.get("adguardUrl", "")
+    ag_user   = cfg.get("adguardUser", "")
+    ag_pass   = cfg.get("adguardPass", "")
+    jf_url    = cfg.get("jellyfinUrl", "")
+    jf_key    = cfg.get("jellyfinKey", "")
+    hass_url  = cfg.get("hassUrl", "")
+    hass_tok  = cfg.get("hassToken", "")
+    unifi_url  = cfg.get("unifiUrl", "")
+    unifi_user = cfg.get("unifiUser", "")
+    unifi_pass = cfg.get("unifiPass", "")
+    unifi_site = cfg.get("unifiSite", "default")
+    spd_url   = cfg.get("speedtestUrl", "")
     wan_ip    = cfg.get("wanTestIp", "")
     lan_ip    = cfg.get("lanTestIp", "")
 
@@ -94,6 +108,11 @@ def collect_stats(qs: dict) -> dict:
     son_fut   = _pool.submit(get_servarr, son_url, son_key)  if son_url else None
     qbit_fut  = _pool.submit(get_qbit,   qbit_url, qbit_user, qbit_pass) if qbit_url else None
     pmx_fut   = _pool.submit(get_proxmox, pmx_url, pmx_user, pmx_tname, pmx_tval) if pmx_url else None
+    ag_fut    = _pool.submit(get_adguard, ag_url, ag_user, ag_pass) if ag_url else None
+    jf_fut    = _pool.submit(get_jellyfin, jf_url, jf_key) if jf_url else None
+    hass_fut  = _pool.submit(get_hass, hass_url, hass_tok) if hass_url else None
+    unifi_fut = _pool.submit(get_unifi, unifi_url, unifi_user, unifi_pass, unifi_site) if unifi_url else None
+    spd_fut   = _pool.submit(get_speedtest, spd_url) if spd_url else None
 
     # ── Collect service status results ────────────────────────────────────────
     services = []
@@ -146,6 +165,14 @@ def collect_stats(qs: dict) -> dict:
     stats["sonarr"]     = _get(son_fut)
     stats["qbit"]       = _get(qbit_fut)
     stats["proxmox"]    = _get(pmx_fut, timeout=6)
+    stats["adguard"]    = _get(ag_fut)
+    stats["jellyfin"]   = _get(jf_fut)
+    stats["hass"]       = _get(hass_fut)
+    stats["unifi"]      = _get(unifi_fut)
+    stats["speedtest"]  = _get(spd_fut)
+
+    stats.update(collect_disk_io())
+    stats.update(collect_per_interface_net())
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     stats["alerts"] = build_threshold_alerts(stats, read_yaml_settings)

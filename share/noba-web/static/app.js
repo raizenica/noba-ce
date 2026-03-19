@@ -27,6 +27,11 @@ function dashboard() {
         'backupSources', 'backupDest', 'cloudRemote', 'downloadsDir',
         'customActions', 'automations',
         'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName', 'proxmoxTokenValue',
+        'adguardUrl', 'adguardUser', 'adguardPass',
+        'jellyfinUrl', 'jellyfinKey',
+        'hassUrl', 'hassToken',
+        'unifiUrl', 'unifiUser', 'unifiPass', 'unifiSite',
+        'speedtestUrl',
         'pushoverEnabled', 'pushoverAppToken', 'pushoverUserKey',
         'gotifyEnabled', 'gotifyUrl', 'gotifyAppToken',
         'alertRules',
@@ -54,6 +59,14 @@ function dashboard() {
         proxmoxUrl:       'noba-pmx-url',
         proxmoxUser:      'noba-pmx-user',
         proxmoxTokenName: 'noba-pmx-tok-name',
+        adguardUrl:    'noba-adguard-url',
+        adguardUser:   'noba-adguard-user',
+        jellyfinUrl:   'noba-jellyfin-url',
+        hassUrl:       'noba-hass-url',
+        unifiUrl:      'noba-unifi-url',
+        unifiUser:     'noba-unifi-user',
+        unifiSite:     'noba-unifi-site',
+        speedtestUrl:  'noba-speedtest-url',
     };
 
     // One-time migration: remove any legacy credential keys left in localStorage.
@@ -74,6 +87,8 @@ function dashboard() {
         'battery', 'disks', 'services', 'zfs', 'radar', 'kuma', 'netHealth',
         'topCpu', 'topMem', 'pihole', 'plex', 'containers', 'alerts',
         'truenas', 'radarr', 'sonarr', 'qbit', 'proxmox', 'plugins',
+        'adguard', 'jellyfin', 'hass', 'unifi', 'speedtest',
+        'diskIo', 'netInterfaces', 'topIo',
     ]);
 
     const DEF_VIS = {
@@ -81,6 +96,7 @@ function dashboard() {
         storage: true, radar: true, kuma: true, procs: true, containers: true,
         services: true, logs: true, actions: true, bookmarks: true, plex: true,
         truenas: true, downloads: true, automations: true, proxmox: true,
+        adguard: true, jellyfin: true, hass: true, unifi: true, speedtest: true, diskIo: true,
     };
 
     const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt';
@@ -142,6 +158,20 @@ function dashboard() {
         proxmoxTokenName:  localStorage.getItem('noba-pmx-tok-name')  || '',
         proxmoxTokenValue: '',   // never persisted client-side
 
+        // ── New integrations ──────────────────────────────────────────────────
+        adguardUrl:   localStorage.getItem('noba-adguard-url')   || '',
+        adguardUser:  localStorage.getItem('noba-adguard-user')  || '',
+        adguardPass:  '',
+        jellyfinUrl:  localStorage.getItem('noba-jellyfin-url')  || '',
+        jellyfinKey:  '',
+        hassUrl:      localStorage.getItem('noba-hass-url')      || '',
+        hassToken:    '',
+        unifiUrl:     localStorage.getItem('noba-unifi-url')     || '',
+        unifiUser:    localStorage.getItem('noba-unifi-user')    || '',
+        unifiPass:    '',
+        unifiSite:    localStorage.getItem('noba-unifi-site')    || 'default',
+        speedtestUrl: localStorage.getItem('noba-speedtest-url') || '',
+
         // ── Notification channels ──────────────────────────────────────────────
         pushoverEnabled: false, pushoverAppToken: '', pushoverUserKey: '',
         gotifyEnabled:   false, gotifyUrl: '',        gotifyAppToken: '',
@@ -164,9 +194,14 @@ function dashboard() {
         topCpu: [], topMem: [], pihole: null, plex: null, containers: [],
         alerts: [], truenas: null, radarr: null, sonarr: null, qbit: null,
         proxmox: null, plugins: [],
+        adguard: null, jellyfin: null, hass: null, unifi: null, speedtest: null,
+        diskIo: [], netInterfaces: [], topIo: [],
 
         // ── App state ──────────────────────────────────────────────────────────
         showSettings: false, refreshing: false,
+        showShortcutsModal: false,
+        showSessionsModal: false,
+        sessionList: [],
         toasts: [],
         notifTesting: false,
         countdown: 5,
@@ -291,6 +326,13 @@ function dashboard() {
                     this.connectSSE();
                 }
             }, 5000);
+
+            // Auto theme switch
+            window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+                if (this.theme === 'auto') {
+                    document.documentElement.setAttribute('data-theme', e.matches ? 'nord' : 'default');
+                }
+            });
         },
 
 
@@ -337,6 +379,11 @@ function dashboard() {
             }
             this._keydownHandler = (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                if (e.key === '?' && !e.ctrlKey && !e.altKey) {
+                    e.preventDefault();
+                    this.showShortcutsModal = !this.showShortcutsModal;
+                    return;
+                }
                 if (e.key === 's' && !this.showSettings && !this.showModal) {
                     this.showSettings = true;
                 } else if (e.key === 'r' && !this.showSettings && !this.showModal && this.authenticated) {
@@ -348,6 +395,8 @@ function dashboard() {
                     this.showRemoveModal = false;
                     this.showHistoryModal = false;
                     this.showAuditModal = false;
+                    this.showShortcutsModal = false;
+                    this.showSessionsModal = false;
                 }
             };
             document.addEventListener('keydown', this._keydownHandler);
