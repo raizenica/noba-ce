@@ -33,6 +33,7 @@ from .metrics import (
     get_rclone_remotes, get_service_status, strip_ansi, validate_service_name,
 )
 from .alerts import dispatch_notifications
+from .plugins import plugin_manager
 from .yaml_config import read_yaml_settings, write_yaml_settings
 
 logger = logging.getLogger("noba")
@@ -72,8 +73,11 @@ async def lifespan(app: FastAPI):
     # warm up psutil CPU measurement
     import psutil
     psutil.cpu_percent(interval=None)
-    logger.info("Noba v%s started", VERSION)
+    plugin_manager.discover()
+    plugin_manager.start()
+    logger.info("Noba v%s started (%d plugins)", VERSION, plugin_manager.count)
     yield
+    plugin_manager.stop()
     get_shutdown_flag().set()
     db.audit_log("system_stop", "system", "Server stopping")
     try:
@@ -133,6 +137,13 @@ def _get_auth_sse(request: Request) -> tuple[str, str]:
     return username, role
 
 
+def _require_operator(request: Request) -> tuple[str, str]:
+    username, role = _get_auth(request)
+    if role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return username, role
+
+
 def _require_admin(request: Request) -> tuple[str, str]:
     username, role = _get_auth(request)
     if role != "admin":
@@ -187,6 +198,12 @@ def api_health():
 def api_me(auth=Depends(_get_auth)):
     username, role = auth
     return {"username": username, "role": role}
+
+
+# ── /api/plugins ─────────────────────────────────────────────────────────────
+@app.get("/api/plugins")
+def api_plugins(auth=Depends(_get_auth)):
+    return plugin_manager.get_all()
 
 
 # ── /api/stats ────────────────────────────────────────────────────────────────
@@ -491,7 +508,7 @@ async def api_logout(request: Request):
 
 # ── /api/container-control ────────────────────────────────────────────────────
 @app.post("/api/container-control")
-async def api_container_control(request: Request, auth=Depends(_require_admin)):
+async def api_container_control(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -519,7 +536,7 @@ async def api_container_control(request: Request, auth=Depends(_require_admin)):
 
 # ── /api/truenas/vm ───────────────────────────────────────────────────────────
 @app.post("/api/truenas/vm")
-async def api_truenas_vm(request: Request, auth=Depends(_get_auth)):
+async def api_truenas_vm(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -549,7 +566,7 @@ async def api_truenas_vm(request: Request, auth=Depends(_get_auth)):
 
 # ── /api/webhook ──────────────────────────────────────────────────────────────
 @app.post("/api/webhook")
-async def api_webhook(request: Request, auth=Depends(_get_auth)):
+async def api_webhook(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -583,7 +600,7 @@ async def api_webhook(request: Request, auth=Depends(_get_auth)):
 
 # ── /api/run ──────────────────────────────────────────────────────────────────
 @app.post("/api/run")
-async def api_run(request: Request, auth=Depends(_get_auth)):
+async def api_run(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -679,7 +696,7 @@ async def api_run(request: Request, auth=Depends(_get_auth)):
 
 # ── /api/cloud-test ───────────────────────────────────────────────────────────
 @app.post("/api/cloud-test")
-async def api_cloud_test(request: Request, auth=Depends(_get_auth)):
+async def api_cloud_test(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -710,7 +727,7 @@ async def api_cloud_test(request: Request, auth=Depends(_get_auth)):
 
 # ── /api/service-control ──────────────────────────────────────────────────────
 @app.post("/api/service-control")
-async def api_service_control(request: Request, auth=Depends(_get_auth)):
+async def api_service_control(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)

@@ -61,7 +61,7 @@ function dashboard() {
         'osName', 'kernel', 'hwCpu', 'hwGpu', 'netRx', 'netTx',
         'battery', 'disks', 'services', 'zfs', 'radar', 'kuma', 'netHealth',
         'topCpu', 'topMem', 'pihole', 'plex', 'containers', 'alerts',
-        'truenas', 'radarr', 'sonarr', 'qbit', 'proxmox',
+        'truenas', 'radarr', 'sonarr', 'qbit', 'proxmox', 'plugins',
     ]);
 
     const DEF_VIS = {
@@ -151,7 +151,7 @@ function dashboard() {
         netHealth: { wan: 'Down', lan: 'Down', configured: false },
         topCpu: [], topMem: [], pihole: null, plex: null, containers: [],
         alerts: [], truenas: null, radarr: null, sonarr: null, qbit: null,
-        proxmox: null,
+        proxmox: null, plugins: [],
 
         // ── App state ──────────────────────────────────────────────────────────
         showSettings: false, refreshing: false,
@@ -240,6 +240,7 @@ function dashboard() {
             try { this.initSortable();  } catch (e) { console.warn('Sortable init skipped', e); }
             try { this.initKeyboard();  } catch (e) { console.warn('Keyboard init skipped', e); }
             try { this.initMasonry();   } catch (e) { console.warn('Masonry init skipped', e); }
+            try { this.initTouch();     } catch (e) { console.warn('Touch init skipped', e); }
 
             if (!this.authenticated) return;
 
@@ -338,6 +339,58 @@ function dashboard() {
                 }
             };
             document.addEventListener('keydown', this._keydownHandler);
+        },
+
+        initTouch() {
+            let startY = 0, startX = 0, pulling = false;
+            const grid = document.getElementById('sortable-grid');
+            if (!grid) return;
+
+            // Pull-to-refresh
+            grid.addEventListener('touchstart', (e) => {
+                if (grid.scrollTop === 0 && e.touches.length === 1) {
+                    startY = e.touches[0].clientY;
+                    pulling = true;
+                }
+            }, { passive: true });
+            grid.addEventListener('touchmove', (e) => {
+                if (!pulling) return;
+                const dy = e.touches[0].clientY - startY;
+                if (dy > 80 && !this.refreshing) {
+                    pulling = false;
+                    this.refreshStats();
+                    this.addToast('Refreshing...', 'info');
+                }
+            }, { passive: true });
+            grid.addEventListener('touchend', () => { pulling = false; }, { passive: true });
+
+            // Swipe-to-dismiss alerts
+            document.addEventListener('touchstart', (e) => {
+                const alert = e.target.closest('.alert-banner');
+                if (!alert) return;
+                startX = e.touches[0].clientX;
+                alert._swiping = true;
+            }, { passive: true });
+            document.addEventListener('touchmove', (e) => {
+                const alert = e.target.closest('.alert-banner');
+                if (!alert || !alert._swiping) return;
+                const dx = e.touches[0].clientX - startX;
+                alert.style.transform = `translateX(${dx}px)`;
+                alert.style.opacity = Math.max(0, 1 - Math.abs(dx) / 200);
+            }, { passive: true });
+            document.addEventListener('touchend', (e) => {
+                const alert = e.target.closest('.alert-banner');
+                if (!alert || !alert._swiping) return;
+                alert._swiping = false;
+                const dx = parseInt(alert.style.transform?.match(/-?\d+/)?.[0] || '0');
+                if (Math.abs(dx) > 100) {
+                    const msg = alert.dataset.msg;
+                    if (msg) this.dismissAlert(msg);
+                } else {
+                    alert.style.transform = '';
+                    alert.style.opacity = '';
+                }
+            }, { passive: true });
         },
 
         toggleCollapse(card) {

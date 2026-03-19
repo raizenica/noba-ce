@@ -71,7 +71,7 @@
             <div class="user-chip" x-show="authenticated && username" x-cloak>
                 <i class="fas fa-user-circle" style="color:var(--accent);font-size:.8rem" aria-hidden="true"></i>
                 <span x-text="username" style="color:var(--text)"></span>
-                <span class="badge" :class="userRole==='admin'?'ba':'bn'" x-text="userRole"></span>
+                <span class="badge" :class="userRole==='admin'?'ba':userRole==='operator'?'bs':'bn'" x-text="userRole"></span>
             </div>
 
             <label for="theme-selector" class="sr-only">Theme</label>
@@ -110,7 +110,7 @@
 
     <div class="alerts" role="alert" x-show="visibleAlerts && visibleAlerts.length > 0" x-cloak>
         <template x-for="a in visibleAlerts" :key="a.msg">
-            <div class="alert" :class="a.level">
+            <div class="alert" :class="a.level" :data-msg="a.msg" style="transition:transform .2s,opacity .2s">
                 <i class="fas" :class="a.level==='danger' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle'" aria-hidden="true"></i>
                 <span x-text="a.msg" style="flex:1"></span>
                 <button class="alert-dismiss" @click="dismissAlert(a.msg)" :aria-label="'Dismiss: ' + a.msg">×</button>
@@ -283,7 +283,7 @@
                                     <div class="ct-row" style="padding:.4rem .6rem">
                                         <div class="status-dot" :class="vm.state==='RUNNING'?'dot-up':'dot-down'" :aria-label="vm.state"></div>
                                         <span class="ct-name" x-text="vm.name"></span>
-                                        <div class="svc-btns" role="group" :aria-label="vm.name + ' controls'">
+                                        <div class="svc-btns" role="group" :aria-label="vm.name + ' controls'" x-show="userRole==='admin'||userRole==='operator'">
                                             <button class="svc-btn" title="Start" aria-label="Start VM" :disabled="vm.state==='RUNNING'" @click="vmAction(vm.id, vm.name, 'start')">
                                                 <i class="fas fa-play" aria-hidden="true"></i>
                                             </button>
@@ -619,7 +619,7 @@
                             <span class="ct-name" x-text="c.name"></span>
                             <span class="ct-img" x-text="c.image"></span>
                             <span class="badge" :class="c.state==='running'?'bs':c.state==='exited'?'bw':'bn'" x-text="c.state"></span>
-                            <div class="svc-actions" x-show="userRole==='admin'">
+                            <div class="svc-actions" x-show="userRole==='admin'||userRole==='operator'">
                                 <button class="svc-btn" title="Start"   :disabled="c.state==='running'" @click.stop="containerAction(c.name,'start')"   aria-label="Start container"><i class="fas fa-play"   aria-hidden="true"></i></button>
                                 <button class="svc-btn" title="Stop"    :disabled="c.state!=='running'" @click.stop="containerAction(c.name,'stop')"    aria-label="Stop container"><i class="fas fa-stop"   aria-hidden="true"></i></button>
                                 <button class="svc-btn" title="Restart" :disabled="c.state!=='running'" @click.stop="containerAction(c.name,'restart')" aria-label="Restart container"><i class="fas fa-sync" aria-hidden="true"></i></button>
@@ -715,7 +715,7 @@
                                 <span class="badge"
                                       :class="{'bs':s.status==='active'||s.status==='timer-active','bw':s.status==='inactive','bd':s.status==='failed'||s.status==='not-found'}"
                                       x-text="s.status==='timer-active'?'active (timer)':s.status"></span>
-                                <div class="svc-btns" role="group" :aria-label="s.name.replace('.service','') + ' controls'">
+                                <div class="svc-btns" role="group" :aria-label="s.name.replace('.service','') + ' controls'" x-show="userRole==='admin'||userRole==='operator'">
                                     <button class="svc-btn" title="Start" aria-label="Start service" :disabled="s.status==='active'||s.status==='timer-active'" @click="svcAction(s,'start')">
                                         <i class="fas fa-play" aria-hidden="true"></i>
                                     </button>
@@ -802,7 +802,9 @@
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body action-list" id="body-actions" x-show="!collapsed.actions">
-
+                <div x-show="userRole==='viewer'" class="empty-msg">Operator or admin role required.</div>
+                <template x-if="userRole==='admin'||userRole==='operator'">
+                <div>
                 <template x-for="act in customActions" :key="act.id">
                     <button class="btn btn-primary" :disabled="runningScript" @click="runScript('custom', act.id)" style="margin-bottom:.4rem">
                         <i class="fas" :class="act.icon || 'fa-play'" aria-hidden="true"></i>
@@ -936,6 +938,8 @@
                 <button class="btn" :disabled="runningScript" @click="runScript('check_updates')">
                     <i class="fas fa-arrow-circle-up" aria-hidden="true"></i> Check Updates
                 </button>
+                </div>
+                </template>
             </div>
         </div>
 
@@ -962,6 +966,22 @@
                 </div>
             </div>
         </div>
+
+        <!-- ── Plugin Cards ──────────────────────────────────────────────── -->
+        <template x-for="plug in plugins" :key="plug.id">
+            <div class="card" :data-id="'card-plugin-' + plug.id">
+                <div class="card-hdr">
+                    <i class="fas card-icon" :class="plug.icon || 'fa-puzzle-piece'" aria-hidden="true"></i>
+                    <span class="card-title" x-text="plug.name"></span>
+                    <span x-show="plug.error" class="badge bd" style="font-size:.55rem">error</span>
+                    <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
+                </div>
+                <div class="card-body">
+                    <div x-show="plug.error" style="color:var(--danger);font-size:.78rem" x-text="plug.error"></div>
+                    <div x-show="plug.html && !plug.error" x-html="plug.html"></div>
+                </div>
+            </div>
+        </template>
 
     </div></main>
 </div><div x-show="showHistoryModal"
@@ -1198,6 +1218,9 @@
             </button>
             <button class="stab" role="tab" :aria-selected="settingsTab==='users'" :class="settingsTab==='users'?'active':''" @click="settingsTab='users'; fetchUsers()" x-show="userRole==='admin'">
                 <i class="fas fa-users" aria-hidden="true"></i> Users
+            </button>
+            <button class="stab" role="tab" :aria-selected="settingsTab==='alerts'" :class="settingsTab==='alerts'?'active':''" @click="settingsTab='alerts'" x-show="userRole==='admin'||userRole==='operator'">
+                <i class="fas fa-bell" aria-hidden="true"></i> Alerts
             </button>
             <button class="stab" role="tab" :aria-selected="settingsTab==='shortcuts'" :class="settingsTab==='shortcuts'?'active':''" @click="settingsTab='shortcuts'">
                 <i class="fas fa-keyboard" aria-hidden="true"></i> Shortcuts
@@ -1534,6 +1557,168 @@
             </div>
         </div>
 
+        <!-- ── Alert Rules ──────────────────────────────────────────────── -->
+        <div x-show="settingsTab==='alerts'" role="tabpanel" x-data="{ editIdx: -1, draft: {} }">
+            <div class="s-section">
+                <span class="s-label">Alert Rules</span>
+                <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1rem">
+                    Create rules that trigger notifications and optional self-healing actions when metric conditions are met.
+                </p>
+
+                <!-- Existing rules list -->
+                <template x-for="(rule, idx) in alertRules" :key="idx">
+                    <div class="alert-rule-card" style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.85rem 1rem;margin-bottom:.65rem">
+                        <template x-if="editIdx !== idx">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+                                    <div style="display:flex;align-items:center;gap:.5rem">
+                                        <span class="badge" :class="rule.severity==='danger'||rule.severity==='critical'?'bd':'bw'" x-text="rule.severity || 'warning'" style="font-size:.6rem"></span>
+                                        <strong style="font-size:.82rem" x-text="rule.id || 'Unnamed Rule'"></strong>
+                                    </div>
+                                    <div style="display:flex;gap:.35rem" x-show="userRole==='admin'">
+                                        <button class="btn btn-sm" style="padding:.3rem .6rem;width:auto" @click="editIdx = idx; draft = JSON.parse(JSON.stringify(rule))">
+                                            <i class="fas fa-pen" aria-hidden="true"></i>
+                                        </button>
+                                        <button class="btn btn-sm btn-danger" style="padding:.3rem .6rem;width:auto" @click="alertRules.splice(idx, 1)">
+                                            <i class="fas fa-trash" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div style="font-size:.75rem;color:var(--text-muted);font-family:var(--font-data)" x-text="rule.condition"></div>
+                                <div x-show="rule.message" style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem" x-text="rule.message"></div>
+                                <div x-show="rule.action && rule.action.type" style="font-size:.7rem;color:var(--accent);margin-top:.3rem">
+                                    <i class="fas fa-wrench" aria-hidden="true" style="margin-right:.3rem"></i>
+                                    <span x-text="(rule.action?.type || '') + ': ' + (rule.action?.target || '')"></span>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Inline edit form -->
+                        <template x-if="editIdx === idx">
+                            <div>
+                                <div class="field-2">
+                                    <div>
+                                        <label class="field-label">Rule ID</label>
+                                        <input class="field-input" x-model="draft.id" placeholder="e.g. cpu-high">
+                                    </div>
+                                    <div>
+                                        <label class="field-label">Severity</label>
+                                        <select class="field-input field-select" x-model="draft.severity">
+                                            <option value="warning">Warning</option>
+                                            <option value="danger">Danger</option>
+                                            <option value="critical">Critical</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="margin-bottom:.75rem">
+                                    <label class="field-label">Condition</label>
+                                    <input class="field-input" x-model="draft.condition" placeholder="e.g. cpuPercent > 90">
+                                </div>
+                                <div style="margin-bottom:.75rem">
+                                    <label class="field-label">Notification Message</label>
+                                    <input class="field-input" x-model="draft.message" placeholder="e.g. CPU usage is critically high!">
+                                </div>
+                                <div style="margin-bottom:.75rem">
+                                    <label class="field-label">Notification Channels</label>
+                                    <div class="toggle-grid">
+                                        <template x-for="ch in ['email','telegram','discord','slack','pushover','gotify']" :key="ch">
+                                            <label class="toggle-item">
+                                                <input type="checkbox" :checked="(draft.channels||[]).includes(ch)"
+                                                    @change="draft.channels = draft.channels || [];
+                                                        $event.target.checked
+                                                            ? (draft.channels.includes(ch) || draft.channels.push(ch))
+                                                            : (draft.channels = draft.channels.filter(c => c !== ch))">
+                                                <span x-text="ch" style="text-transform:capitalize"></span>
+                                            </label>
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="s-section" style="margin-top:.75rem">
+                                    <span class="s-label" style="font-size:.58rem">Self-Healing Action (optional)</span>
+                                    <div class="field-2">
+                                        <div>
+                                            <label class="field-label">Action Type</label>
+                                            <select class="field-input field-select" x-model="draft._actionType"
+                                                x-init="draft._actionType = draft.action?.type || ''"
+                                                @change="if (!$event.target.value) { delete draft.action; } else { draft.action = draft.action || {}; draft.action.type = $event.target.value; }">
+                                                <option value="">None</option>
+                                                <option value="restart_service">Restart Service</option>
+                                                <option value="restart_container">Restart Container</option>
+                                                <option value="run">Run Command</option>
+                                                <option value="webhook">Trigger Webhook</option>
+                                            </select>
+                                        </div>
+                                        <div x-show="draft._actionType">
+                                            <label class="field-label">Target</label>
+                                            <input class="field-input" x-model="draft._actionTarget"
+                                                x-init="draft._actionTarget = draft.action?.target || ''"
+                                                @input="if (draft.action) draft.action.target = $event.target.value"
+                                                :placeholder="draft._actionType==='restart_service' ? 'nginx.service' :
+                                                    draft._actionType==='restart_container' ? 'docker:myapp' :
+                                                    draft._actionType==='run' ? '/usr/local/bin/fix.sh' :
+                                                    draft._actionType==='webhook' ? 'webhook-id' : ''">
+                                        </div>
+                                    </div>
+                                    <div class="field-2" x-show="draft._actionType" style="margin-top:.5rem">
+                                        <div>
+                                            <label class="field-label">Max Retries</label>
+                                            <input class="field-input" type="number" min="1" max="10"
+                                                x-model.number="draft.max_retries" placeholder="3">
+                                        </div>
+                                        <div>
+                                            <label class="field-label">Circuit Break After</label>
+                                            <input class="field-input" type="number" min="2" max="20"
+                                                x-model.number="draft.circuit_break_after" placeholder="5">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:.4rem;justify-content:flex-end;margin-top:.75rem">
+                                    <button class="btn btn-sm" style="width:auto" @click="editIdx = -1">Cancel</button>
+                                    <button class="btn btn-sm btn-primary" style="width:auto" @click="
+                                        delete draft._actionType; delete draft._actionTarget;
+                                        if (draft.action && !draft.action.type) delete draft.action;
+                                        alertRules[idx] = draft; editIdx = -1;
+                                    "><i class="fas fa-check" aria-hidden="true"></i> Apply</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <div x-show="alertRules.length === 0" style="text-align:center;color:var(--text-muted);font-size:.8rem;padding:1.5rem 0">
+                    No alert rules configured. Click "Add Rule" to get started.
+                </div>
+
+                <button class="btn btn-sm btn-primary" style="margin-top:.5rem;width:auto" x-show="userRole==='admin'" @click="
+                    alertRules.push({
+                        id: 'rule-' + (alertRules.length + 1),
+                        condition: '',
+                        severity: 'warning',
+                        message: '',
+                        channels: [],
+                        max_retries: 3,
+                        circuit_break_after: 5
+                    });
+                    editIdx = alertRules.length - 1;
+                    draft = JSON.parse(JSON.stringify(alertRules[alertRules.length - 1]));
+                "><i class="fas fa-plus" aria-hidden="true"></i> Add Rule</button>
+            </div>
+
+            <div class="s-section">
+                <span class="s-label">Available Metrics</span>
+                <div style="font-size:.75rem;color:var(--text-muted);font-family:var(--font-data);display:flex;flex-wrap:wrap;gap:.4rem">
+                    <template x-for="m in ['cpuPercent','memPercent','cpuTemp','gpuTemp','disk_percent','ping_ms']" :key="m">
+                        <span class="badge bn" x-text="m" style="font-size:.65rem;cursor:pointer" @click="navigator.clipboard.writeText(m).catch(()=>{})"></span>
+                    </template>
+                </div>
+                <p style="font-size:.7rem;color:var(--text-muted);margin-top:.5rem">
+                    Conditions use the format: <code>metric &gt; value</code>.
+                    Supported operators: <code>&gt; &lt; &gt;= &lt;= == !=</code>.
+                    For array metrics use: <code>services[0].status</code>.
+                </p>
+            </div>
+        </div>
+
         <div x-show="settingsTab==='shortcuts'" role="tabpanel">
             <div class="s-section">
                 <span class="s-label">Keyboard Shortcuts</span>
@@ -1547,7 +1732,7 @@
 
         <div class="settings-footer">
             <button class="btn btn-sm" @click="showSettings=false">Cancel</button>
-            <button class="btn btn-sm btn-primary" @click="applySettings()">
+            <button class="btn btn-sm btn-primary" @click="applySettings()" :disabled="userRole!=='admin'" :title="userRole!=='admin'?'Admin role required':'Save and apply settings'">
                 <i class="fas fa-check" aria-hidden="true"></i> Save &amp; Apply
             </button>
         </div>

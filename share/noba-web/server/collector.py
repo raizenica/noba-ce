@@ -16,7 +16,8 @@ from .metrics import (
 from .integrations import (
     get_pihole, get_plex, get_kuma, get_truenas, get_servarr, get_qbit, get_proxmox,
 )
-from .alerts import build_threshold_alerts, evaluate_alert_rules
+from .alerts import build_threshold_alerts, check_anomalies, evaluate_alert_rules
+from .plugins import plugin_manager
 from .yaml_config import read_yaml_settings
 
 logger = logging.getLogger("noba")
@@ -144,6 +145,7 @@ def collect_stats(qs: dict) -> dict:
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     stats["alerts"] = build_threshold_alerts(stats, read_yaml_settings)
+    stats["alerts"].extend(check_anomalies(db, read_yaml_settings))
 
     # ── BMC sentinel ─────────────────────────────────────────────────────────
     for fut, (os_ip, bmc_ip) in bmc_futs.items():
@@ -159,6 +161,10 @@ def collect_stats(qs: dict) -> dict:
             pass
 
     evaluate_alert_rules(stats, read_yaml_settings)
+
+    # ── Plugins ──────────────────────────────────────────────────────────────
+    if plugin_manager.count:
+        stats["plugins"] = plugin_manager.get_all()
 
     # ── Persist history ───────────────────────────────────────────────────────
     try:

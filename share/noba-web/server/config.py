@@ -59,7 +59,7 @@ SCRIPT_MAP = {
     "check_updates": "noba-update.sh",
 }
 ALLOWED_ACTIONS = frozenset({"start", "stop", "restart", "poweroff"})
-VALID_ROLES     = ("viewer", "admin")
+VALID_ROLES     = ("viewer", "operator", "admin")
 
 HISTORY_METRICS = [
     "cpu_percent", "mem_percent", "cpu_temp", "gpu_temp",
