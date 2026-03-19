@@ -700,5 +700,163 @@ function actionsMixin() {
                 this.addToast('Failed to fetch audit log: ' + e.message, 'error');
             }
         },
+
+
+        // ── Automation CRUD ─────────────────────────────────────────────────
+
+        showAutoModal: false,
+        autoModalMode: 'create',
+        autoForm: { id: '', name: '', type: 'script', config: {}, schedule: '', enabled: true },
+        autoList: [],
+        autoListLoading: false,
+
+        /** Fetch all automations from the DB. */
+        async fetchAutomations() {
+            this.autoListLoading = true;
+            try {
+                const res = await fetch('/api/automations', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                this.autoList = await res.json();
+            } catch (e) {
+                this.addToast('Failed to load automations: ' + e.message, 'error');
+            } finally {
+                this.autoListLoading = false;
+            }
+        },
+
+        /** Open the create automation modal with a blank form. */
+        openCreateAuto() {
+            this.autoForm = { id: '', name: '', type: 'script', config: {}, schedule: '', enabled: true };
+            this.autoModalMode = 'create';
+            this.showAutoModal = true;
+        },
+
+        /** Open the edit modal populated with an existing automation. */
+        openEditAuto(auto) {
+            this.autoForm = {
+                id: auto.id,
+                name: auto.name,
+                type: auto.type,
+                config: JSON.parse(JSON.stringify(auto.config || {})),
+                schedule: auto.schedule || '',
+                enabled: auto.enabled,
+            };
+            this.autoModalMode = 'edit';
+            this.showAutoModal = true;
+        },
+
+        /** Save (create or update) the automation from the form. */
+        async saveAutomation() {
+            const f = this.autoForm;
+            if (!f.name.trim()) { this.addToast('Name is required', 'error'); return; }
+            const payload = { name: f.name, type: f.type, config: f.config,
+                              schedule: f.schedule || null, enabled: f.enabled };
+            try {
+                const url = this.autoModalMode === 'create'
+                    ? '/api/automations'
+                    : `/api/automations/${f.id}`;
+                const method = this.autoModalMode === 'create' ? 'POST' : 'PUT';
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const d = await res.json().catch(() => ({}));
+                    this.addToast(d.detail || 'Save failed', 'error');
+                    return;
+                }
+                this.showAutoModal = false;
+                this.addToast(this.autoModalMode === 'create' ? 'Automation created' : 'Automation updated', 'success');
+                await this.fetchAutomations();
+            } catch (e) {
+                this.addToast('Save error: ' + e.message, 'error');
+            }
+        },
+
+        /** Delete an automation (admin only, with confirmation). */
+        confirmDeleteAuto(auto) {
+            this.requestConfirm(`Delete automation "${auto.name}"?`, async () => {
+                try {
+                    const res = await fetch(`/api/automations/${auto.id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': 'Bearer ' + this._token() },
+                    });
+                    if (!res.ok) {
+                        const d = await res.json().catch(() => ({}));
+                        this.addToast(d.detail || 'Delete failed', 'error');
+                        return;
+                    }
+                    this.addToast('Automation deleted', 'success');
+                    await this.fetchAutomations();
+                } catch (e) {
+                    this.addToast('Delete error: ' + e.message, 'error');
+                }
+            });
+        },
+
+        /** Manually run an automation and show live output. */
+        async runAutomation(auto) {
+            if (!this.authenticated || this.runningScript) return;
+            this.runningScript = true;
+            this.activeRunId = null;
+            this.modalTitle = `Running: ${auto.name}`;
+            this.modalOutput = `>> [${new Date().toLocaleTimeString()}] Starting automation...\n`;
+            this.showModal = true;
+
+            const token = this._token();
+            let runId = null;
+
+            try {
+                const res = await fetch(`/api/automations/${auto.id}/run`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token },
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    this.modalTitle = '\u2717 Failed';
+                    this.modalOutput += (err.detail || 'Request failed') + '\n';
+                    this.addToast(err.detail || `${auto.name} failed to start`, 'error');
+                    this.runningScript = false;
+                    return;
+                }
+                const result = await res.json();
+                runId = result.run_id;
+                this.activeRunId = runId;
+            } catch {
+                this.modalTitle = '\u2717 Connection Error';
+                this.addToast('Connection error', 'error');
+                this.runningScript = false;
+                return;
+            }
+
+            const poll = setInterval(async () => {
+                try {
+                    const r = await fetch(`/api/runs/${runId}`, {
+                        headers: { 'Authorization': 'Bearer ' + token },
+                    });
+                    if (!r.ok) return;
+                    const run = await r.json();
+                    if (run.output) {
+                        this.modalOutput = run.output;
+                        const el = document.getElementById('console-out');
+                        if (el) el.scrollTop = el.scrollHeight;
+                    }
+                    if (run.status !== 'running') {
+                        clearInterval(poll);
+                        const ok = run.status === 'done';
+                        this.modalTitle = ok ? '\u2713 Completed'
+                            : run.status === 'cancelled' ? '\u2718 Cancelled'
+                            : '\u2717 ' + (run.status === 'timeout' ? 'Timed Out' : 'Failed');
+                        if (run.error) this.modalOutput += '\n' + run.error + '\n';
+                        this.addToast(`${auto.name} ${run.status}`, ok ? 'success' : 'error');
+                        this.runningScript = false;
+                        this.activeRunId = null;
+                    }
+                } catch { /* non-fatal */ }
+            }, 1000);
+        },
     };
 }

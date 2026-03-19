@@ -301,6 +301,7 @@ function dashboard() {
                 this.fetchSettings(),
                 this.fetchCloudRemotes(),
                 this.fetchLog(),
+                this.fetchAutomations(),
             ]);
 
             if (this.userRole === 'admin') await this.fetchUsers();
@@ -397,6 +398,8 @@ function dashboard() {
                     this.showAuditModal = false;
                     this.showShortcutsModal = false;
                     this.showSessionsModal = false;
+                    this.showAutoModal = false;
+                    this.showRunHistoryModal = false;
                 }
             };
             document.addEventListener('keydown', this._keydownHandler);

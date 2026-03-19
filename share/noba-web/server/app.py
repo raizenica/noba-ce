@@ -99,7 +99,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins or [],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -464,6 +464,177 @@ def api_run_cancel(run_id: int, request: Request, auth=Depends(_require_operator
         raise HTTPException(404, "Run not active")
     db.audit_log("job_cancel", username, f"Cancelled run {run_id}", _client_ip(request))
     return {"success": True}
+
+
+# ── /api/automations — CRUD + manual trigger ─────────────────────────────────
+def _validate_auto_config(atype: str, config: dict) -> None:
+    if atype == "script":
+        if not config.get("command") and not config.get("script"):
+            raise HTTPException(400, "Script automation requires 'command' or 'script' in config")
+    elif atype == "webhook":
+        url = config.get("url", "")
+        if not url or not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "Webhook requires a valid 'url' in config")
+    elif atype == "service":
+        if not config.get("service"):
+            raise HTTPException(400, "Service automation requires 'service' in config")
+        if config.get("action", "restart") not in ("start", "stop", "restart"):
+            raise HTTPException(400, "Service action must be start, stop, or restart")
+
+
+def _build_auto_script_process(config: dict) -> subprocess.Popen | None:
+    script_key = config.get("script", "")
+    command = config.get("command", "")
+    args = config.get("args", "")
+    if script_key and script_key in SCRIPT_MAP:
+        sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script_key])
+        if not os.path.isfile(sfile):
+            return None
+        cmd = [sfile, "--verbose"]
+        if args:
+            cmd += shlex.split(args) if isinstance(args, str) else [str(a) for a in args]
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True, cwd=SCRIPT_DIR)
+    if command:
+        return subprocess.Popen(["bash", "-c", command],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    return None
+
+
+def _build_auto_webhook_process(config: dict) -> subprocess.Popen | None:
+    url = config.get("url", "")
+    method = config.get("method", "POST").upper()
+    body = config.get("body")
+    cmd = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "-X", method]
+    for k, v in config.get("headers", {}).items():
+        cmd += ["-H", f"{k}: {v}"]
+    if body:
+        if isinstance(body, (dict, list)):
+            cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
+        elif isinstance(body, str):
+            cmd += ["-d", body]
+    cmd.append(url)
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+def _build_auto_service_process(config: dict) -> subprocess.Popen | None:
+    svc = config.get("service", "")
+    action = config.get("action", "restart")
+    if not svc or not validate_service_name(svc) or action not in ("start", "stop", "restart"):
+        return None
+    if config.get("is_user"):
+        cmd = ["systemctl", "--user", action, svc]
+    else:
+        cmd = ["sudo", "-n", "systemctl", action, svc]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+_AUTO_BUILDERS = {"script": _build_auto_script_process, "webhook": _build_auto_webhook_process,
+                  "service": _build_auto_service_process}
+_AUTO_TYPES = frozenset(_AUTO_BUILDERS)
+
+
+@app.get("/api/automations")
+def api_automations_list(request: Request, auth=Depends(_get_auth)):
+    type_filter = request.query_params.get("type")
+    return db.list_automations(type_filter=type_filter)
+
+
+@app.post("/api/automations")
+async def api_automations_create(request: Request, auth=Depends(_require_operator)):
+    import uuid
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    atype = (body.get("type") or "").strip()
+    config = body.get("config", {})
+    schedule = body.get("schedule") or None
+    enabled = body.get("enabled", True)
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if atype not in _AUTO_TYPES:
+        raise HTTPException(400, f"Type must be one of: {', '.join(sorted(_AUTO_TYPES))}")
+    if not isinstance(config, dict):
+        raise HTTPException(400, "Config must be a JSON object")
+    _validate_auto_config(atype, config)
+    auto_id = uuid.uuid4().hex[:12]
+    if not db.insert_automation(auto_id, name, atype, config, schedule, enabled):
+        raise HTTPException(500, "Failed to create automation")
+    db.audit_log("automation_create", username, f"Created '{name}' ({atype})", ip)
+    return {"id": auto_id, "status": "ok"}
+
+
+@app.put("/api/automations/{auto_id}")
+async def api_automations_update(auto_id: str, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    ip = _client_ip(request)
+    existing = db.get_automation(auto_id)
+    if not existing:
+        raise HTTPException(404, "Automation not found")
+    body = await _read_body(request)
+    updates: dict = {}
+    if "name" in body:
+        updates["name"] = (body["name"] or "").strip()
+    if "type" in body:
+        if body["type"] not in _AUTO_TYPES:
+            raise HTTPException(400, "Invalid type")
+        updates["type"] = body["type"]
+    if "config" in body:
+        atype = body.get("type", existing["type"])
+        _validate_auto_config(atype, body["config"])
+        updates["config"] = body["config"]
+    if "schedule" in body:
+        updates["schedule"] = body["schedule"] or None
+    if "enabled" in body:
+        updates["enabled"] = body["enabled"]
+    if not db.update_automation(auto_id, **updates):
+        raise HTTPException(500, "Failed to update automation")
+    db.audit_log("automation_update", username, f"Updated '{auto_id}'", ip)
+    return {"status": "ok"}
+
+
+@app.delete("/api/automations/{auto_id}")
+def api_automations_delete(auto_id: str, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    ip = _client_ip(request)
+    existing = db.get_automation(auto_id)
+    if not existing:
+        raise HTTPException(404, "Automation not found")
+    if not db.delete_automation(auto_id):
+        raise HTTPException(500, "Failed to delete automation")
+    db.audit_log("automation_delete", username, f"Deleted '{existing['name']}'", ip)
+    return {"status": "ok"}
+
+
+@app.post("/api/automations/{auto_id}/run")
+def api_automations_run(auto_id: str, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    ip = _client_ip(request)
+    auto = db.get_automation(auto_id)
+    if not auto:
+        raise HTTPException(404, "Automation not found")
+    builder = _AUTO_BUILDERS.get(auto["type"])
+    if not builder:
+        raise HTTPException(400, f"Unsupported type: {auto['type']}")
+    config = auto["config"]
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(config)
+
+    try:
+        run_id = job_runner.submit(
+            make_process, automation_id=auto_id,
+            trigger=f"auto:{auto['type']}:{auto['name']}",
+            triggered_by=username,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    db.audit_log("automation_run", username, f"Run '{auto['name']}' -> run_id={run_id}", ip)
+    return {"success": True, "run_id": run_id}
 
 
 # ── /api/admin/users ──────────────────────────────────────────────────────────

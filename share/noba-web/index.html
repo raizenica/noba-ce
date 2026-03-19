@@ -923,7 +923,7 @@
             </div>
         </div>
 
-        <div class="card" data-id="card-automations" x-show="vis.automations && automations.length > 0">
+        <div class="card" data-id="card-automations" x-show="vis.automations">
             <div class="card-hdr">
                 <i class="fas fa-robot card-icon" aria-hidden="true"></i>
                 <span class="card-title">Automation Deck</span>
@@ -933,14 +933,40 @@
                         :aria-expanded="!collapsed.automations"
                         aria-controls="body-automations"
                         aria-label="Toggle Automation Deck"></button>
+                <button class="icon-btn" style="width:auto;padding:0 .3rem;margin-right:.3rem"
+                        x-show="userRole !== 'viewer'"
+                        @click="openCreateAuto()"
+                        title="New Automation" aria-label="Create Automation">
+                    <i class="fas fa-plus"></i>
+                </button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body action-list" id="body-automations" x-show="!collapsed.automations">
-                <template x-for="act in automations" :key="act.id">
-                    <button class="btn btn-primary" @click="triggerWebhook(act.id, act.name)" style="margin-bottom:.4rem">
-                        <i class="fas" :class="act.icon || 'fa-bolt'" aria-hidden="true"></i>
-                        <span x-text="act.name"></span>
-                    </button>
+                <div x-show="autoListLoading" style="text-align:center;padding:.5rem;opacity:.6">Loading...</div>
+                <div x-show="!autoListLoading && autoList.length === 0" class="empty-msg">No automations defined. Click + to create one.</div>
+                <template x-for="auto in autoList" :key="auto.id">
+                    <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.4rem">
+                        <button class="btn btn-primary" style="flex:1;text-align:left"
+                                :disabled="runningScript || !auto.enabled"
+                                :style="!auto.enabled ? 'opacity:.5' : ''"
+                                @click="runAutomation(auto)"
+                                x-show="userRole !== 'viewer'">
+                            <i class="fas" :class="auto.type==='webhook'?'fa-globe':auto.type==='service'?'fa-cog':'fa-terminal'" aria-hidden="true"></i>
+                            <span x-text="auto.name"></span>
+                            <span class="badge" :class="auto.enabled ? 'bs' : 'bw'" x-text="auto.type" style="margin-left:auto;font-size:.6rem"></span>
+                        </button>
+                        <span x-show="userRole === 'viewer'" x-text="auto.name" style="flex:1"></span>
+                        <button class="icon-btn" style="width:26px;height:26px"
+                                x-show="userRole !== 'viewer'"
+                                @click="openEditAuto(auto)" title="Edit">
+                            <i class="fas fa-pen" style="font-size:.65rem"></i>
+                        </button>
+                        <button class="icon-btn" style="width:26px;height:26px;color:var(--danger)"
+                                x-show="userRole === 'admin'"
+                                @click="confirmDeleteAuto(auto)" title="Delete">
+                            <i class="fas fa-trash" style="font-size:.65rem"></i>
+                        </button>
+                    </div>
                 </template>
             </div>
         </div>
@@ -1397,6 +1423,123 @@
         <div class="modal-footer">
             <button class="btn btn-sm" @click="fetchRunHistory()" :disabled="runHistoryLoading">Refresh</button>
             <button class="btn btn-sm" @click="showRunHistoryModal=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Automation Create/Edit Modal -->
+<div x-show="showAutoModal"
+     class="modal-overlay"
+     style="display:none"
+     @click.self="showAutoModal=false"
+     role="dialog" aria-modal="true" aria-labelledby="auto-modal-title" x-cloak>
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-title" id="auto-modal-title">
+            <i class="fas fa-robot" style="color:var(--accent)" aria-hidden="true"></i>
+            <span x-text="autoModalMode === 'create' ? 'New Automation' : 'Edit Automation'"></span>
+        </div>
+
+        <div style="margin-bottom:.75rem">
+            <label class="field-label">Name</label>
+            <input class="field-input" type="text" x-model="autoForm.name" placeholder="My Backup Job">
+        </div>
+
+        <div class="field-2">
+            <div>
+                <label class="field-label">Type</label>
+                <select class="field-select" x-model="autoForm.type" @change="autoForm.config = {}">
+                    <option value="script">Script</option>
+                    <option value="webhook">Webhook</option>
+                    <option value="service">Service</option>
+                </select>
+            </div>
+            <div>
+                <label class="field-label">Schedule (cron, optional)</label>
+                <input class="field-input" type="text" x-model="autoForm.schedule" placeholder="0 3 * * *">
+            </div>
+        </div>
+
+        <!-- Script config -->
+        <template x-if="autoForm.type === 'script'">
+            <div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">Built-in Script</label>
+                    <select class="field-select" x-model="autoForm.config.script">
+                        <option value="">Custom command...</option>
+                        <option value="backup">backup</option>
+                        <option value="cloud">cloud</option>
+                        <option value="verify">verify</option>
+                        <option value="organize">organize</option>
+                        <option value="diskcheck">diskcheck</option>
+                        <option value="check_updates">check_updates</option>
+                    </select>
+                </div>
+                <div style="margin-bottom:.75rem" x-show="!autoForm.config.script">
+                    <label class="field-label">Custom Command</label>
+                    <input class="field-input" type="text" x-model="autoForm.config.command" placeholder="bash /path/to/script.sh">
+                </div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">Arguments (optional)</label>
+                    <input class="field-input" type="text" x-model="autoForm.config.args" placeholder="--dry-run">
+                </div>
+            </div>
+        </template>
+
+        <!-- Webhook config -->
+        <template x-if="autoForm.type === 'webhook'">
+            <div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">URL</label>
+                    <input class="field-input" type="url" x-model="autoForm.config.url" placeholder="https://example.com/hook">
+                </div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">Method</label>
+                    <select class="field-select" x-model="autoForm.config.method">
+                        <option value="POST">POST</option>
+                        <option value="GET">GET</option>
+                        <option value="PUT">PUT</option>
+                    </select>
+                </div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">Body (JSON, optional)</label>
+                    <input class="field-input" type="text" x-model="autoForm.config.body" placeholder='{"key": "value"}'>
+                </div>
+            </div>
+        </template>
+
+        <!-- Service config -->
+        <template x-if="autoForm.type === 'service'">
+            <div>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label">Service Name</label>
+                        <input class="field-input" type="text" x-model="autoForm.config.service" placeholder="docker.service">
+                    </div>
+                    <div>
+                        <label class="field-label">Action</label>
+                        <select class="field-select" x-model="autoForm.config.action">
+                            <option value="restart">Restart</option>
+                            <option value="start">Start</option>
+                            <option value="stop">Stop</option>
+                        </select>
+                    </div>
+                </div>
+                <label class="toggle-item" style="margin-top:.5rem">
+                    <input type="checkbox" x-model="autoForm.config.is_user"> User-level service (--user)
+                </label>
+            </div>
+        </template>
+
+        <label class="toggle-item" style="margin-top:.75rem;margin-bottom:.5rem">
+            <input type="checkbox" x-model="autoForm.enabled"> Enabled
+        </label>
+
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showAutoModal=false">Cancel</button>
+            <button class="btn btn-sm btn-primary" @click="saveAutomation()">
+                <i class="fas fa-save" aria-hidden="true"></i>
+                <span x-text="autoModalMode === 'create' ? 'Create' : 'Save'"></span>
+            </button>
         </div>
     </div>
 </div>

@@ -176,3 +176,73 @@ class TestPruning:
             assert len(rows) == 0
         finally:
             _cleanup(path)
+
+
+class TestAutomations:
+    def test_insert_and_list(self):
+        db, path = _make_db()
+        try:
+            ok = db.insert_automation("a1", "Test Auto", "script", {"command": "echo hi"})
+            assert ok
+            autos = db.list_automations()
+            assert len(autos) == 1
+            assert autos[0]["name"] == "Test Auto"
+            assert autos[0]["type"] == "script"
+            assert autos[0]["config"]["command"] == "echo hi"
+            assert autos[0]["enabled"] is True
+        finally:
+            _cleanup(path)
+
+    def test_get_automation(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("a2", "Hook", "webhook", {"url": "http://x.com"})
+            auto = db.get_automation("a2")
+            assert auto is not None
+            assert auto["name"] == "Hook"
+            assert db.get_automation("nonexistent") is None
+        finally:
+            _cleanup(path)
+
+    def test_update_automation(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("a3", "Old", "script", {"command": "ls"})
+            ok = db.update_automation("a3", name="New", enabled=False)
+            assert ok
+            auto = db.get_automation("a3")
+            assert auto["name"] == "New"
+            assert auto["enabled"] is False
+        finally:
+            _cleanup(path)
+
+    def test_delete_automation(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("a4", "Del", "service", {"service": "sshd"})
+            assert db.delete_automation("a4")
+            assert db.get_automation("a4") is None
+            assert not db.delete_automation("a4")
+        finally:
+            _cleanup(path)
+
+    def test_list_type_filter(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("s1", "Script1", "script", {})
+            db.insert_automation("w1", "Webhook1", "webhook", {"url": "http://x"})
+            assert len(db.list_automations(type_filter="script")) == 1
+            assert len(db.list_automations(type_filter="webhook")) == 1
+            assert len(db.list_automations()) == 2
+        finally:
+            _cleanup(path)
+
+    def test_duplicate_id_ignored(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("dup", "First", "script", {})
+            db.insert_automation("dup", "Second", "webhook", {"url": "http://x"})
+            auto = db.get_automation("dup")
+            assert auto["name"] == "First"
+        finally:
+            _cleanup(path)
