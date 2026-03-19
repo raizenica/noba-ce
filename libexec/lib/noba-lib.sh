@@ -42,8 +42,9 @@ log_error()   { printf "%b[%s] [ERROR]%b %s\n"   "$RED" "$(_timestamp)" "$NC" "$
 log_success() { printf "%b[%s] [SUCCESS]%b %s\n" "$GREEN" "$(_timestamp)" "$NC" "$*"; }
 
 log_debug() {
-    [[ "${VERBOSE:-false}" == true ]] && \
+    if [[ "${VERBOSE:-false}" == true ]]; then
         printf "%b[%s] [DEBUG]%b %s\n" "$CYAN" "$(_timestamp)" "$NC" "$*"
+    fi
 }
 
 log_verbose() {
@@ -147,7 +148,7 @@ _NOBA_CLEANUP_DIRS=()
 _noba_cleanup() {
     local dir
     for dir in "${_NOBA_CLEANUP_DIRS[@]:-}"; do
-        [[ -d "$dir" ]] && rm -rf "$dir"
+        if [[ -d "$dir" ]]; then rm -rf "$dir"; fi
     done
 }
 trap '_noba_cleanup' EXIT

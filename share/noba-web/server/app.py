@@ -76,6 +76,11 @@ async def lifespan(app: FastAPI):
     get_shutdown_flag().set()
     db.audit_log("system_stop", "system", "Server stopping")
     try:
+        from .integrations import _client as _http_client
+        _http_client.close()
+    except Exception:
+        pass
+    try:
         os.unlink(PID_FILE)
     except Exception:
         pass
@@ -235,12 +240,20 @@ def api_cloud_remotes(auth=Depends(_get_auth)):
 
 
 # ── /api/history/{metric} ─────────────────────────────────────────────────────
+def _int_param(request: Request, name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(request.query_params.get(name, str(default)))
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"Invalid {name} parameter")
+    return max(lo, min(hi, v))
+
+
 @app.get("/api/history/{metric}")
 def api_history(metric: str, request: Request, auth=Depends(_get_auth)):
     if metric not in HISTORY_METRICS:
         raise HTTPException(400, "Unknown metric")
-    range_h    = int(request.query_params.get("range",      "24"))
-    resolution = int(request.query_params.get("resolution", "60"))
+    range_h    = _int_param(request, "range", 24, 1, 8760)
+    resolution = _int_param(request, "resolution", 60, 1, 3600)
     anomaly    = request.query_params.get("anomaly", "0") == "1"
     return db.get_history(metric, range_h, resolution, anomaly)
 
@@ -249,8 +262,8 @@ def api_history(metric: str, request: Request, auth=Depends(_get_auth)):
 def api_history_export(metric: str, request: Request, auth=Depends(_get_auth)):
     if metric not in HISTORY_METRICS:
         raise HTTPException(400, "Unknown metric")
-    range_h    = int(request.query_params.get("range",      "24"))
-    resolution = int(request.query_params.get("resolution", "60"))
+    range_h    = _int_param(request, "range", 24, 1, 8760)
+    resolution = _int_param(request, "resolution", 60, 1, 3600)
     rows = db.get_history(metric, range_h, resolution)
     lines = ["timestamp_unix,datetime,value"]
     for row in rows:
@@ -269,7 +282,7 @@ def api_history_export(metric: str, request: Request, auth=Depends(_get_auth)):
 # ── /api/audit ────────────────────────────────────────────────────────────────
 @app.get("/api/audit")
 def api_audit(request: Request, auth=Depends(_require_admin)):
-    limit = int(request.query_params.get("limit", "100"))
+    limit = _int_param(request, "limit", 100, 1, 1000)
     return db.get_audit(limit)
 
 

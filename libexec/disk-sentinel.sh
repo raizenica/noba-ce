@@ -380,7 +380,7 @@ if [[ "$DRY_RUN" != true ]]; then
     {
         echo "LAST_RUN=$(date '+%Y-%m-%d %H:%M:%S')"
         echo "ALERT_COUNT=$ALERT_COUNT"
-        echo "STATUS=$(( ALERT_COUNT > 0 )) && echo 'alert' || echo 'ok'"
+        if (( ALERT_COUNT > 0 )); then echo "STATUS=alert"; else echo "STATUS=ok"; fi
     } > "$STATE_FILE"
 fi
 

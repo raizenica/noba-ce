@@ -104,10 +104,11 @@ class UserStore:
         try:
             os.makedirs(os.path.dirname(USER_DB), exist_ok=True)
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with self._lock, open(fd, "w", encoding="utf-8") as f:
-                for username, (hashval, role) in self._db.items():
-                    f.write(f"{username}:{hashval}:{role}\n")
-            os.replace(tmp, USER_DB)
+            with self._lock:
+                with open(fd, "w", encoding="utf-8") as f:
+                    for username, (hashval, role) in self._db.items():
+                        f.write(f"{username}:{hashval}:{role}\n")
+                os.replace(tmp, USER_DB)
         except Exception:
             if os.path.exists(tmp):
                 try:
