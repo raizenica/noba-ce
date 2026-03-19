@@ -2568,6 +2568,43 @@ function actionsMixin() {
             } catch { /* silent */ }
         },
 
+        async deployAgent(host, user, pass_, port) {
+            if (!confirm(`Deploy agent to ${user}@${host}?`)) return;
+            this.deploying = true;
+            this.deployResult = '';
+            try {
+                const res = await fetch('/api/agents/deploy', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host, ssh_user: user, ssh_pass: pass_, ssh_port: port }),
+                });
+                const d = await res.json();
+                this.deployResult = d.status === 'ok'
+                    ? `Success! Agent deployed to ${host}`
+                    : `Error: ${d.error || d.output || 'Deploy failed'}`;
+                if (d.status === 'ok') this.addToast(`Agent deployed to ${host}`, 'success');
+            } catch (e) { this.deployResult = 'error: ' + e.message; }
+            finally { this.deploying = false; }
+        },
+
+        async generateInstallCmd() {
+            const cfg = await fetch('/api/settings', {
+                headers: { 'Authorization': 'Bearer ' + this._token() },
+            }).then(r => r.json()).catch(() => ({}));
+            const key = (cfg.agentKeys || '').split(',')[0]?.trim() || 'YOUR_KEY';
+            const server = window.location.origin;
+            this.installCmd = `curl -sf "${server}/api/agent/install-script?key=${key}" | sudo bash`;
+        },
+
+        async generateWinCmd() {
+            const cfg = await fetch('/api/settings', {
+                headers: { 'Authorization': 'Bearer ' + this._token() },
+            }).then(r => r.json()).catch(() => ({}));
+            const key = (cfg.agentKeys || '').split(',')[0]?.trim() || 'YOUR_KEY';
+            const server = window.location.origin;
+            this.installCmd = `irm "${server}/api/agent/update" -Headers @{"X-Agent-Key"="${key}"} -OutFile agent.py; python agent.py --server ${server} --key ${key} --once`;
+        },
+
         // -- Incident Timeline (Round 11) ------------------------------------
 
         async fetchIncidents(hours) {

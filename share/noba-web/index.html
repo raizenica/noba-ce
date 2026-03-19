@@ -5113,7 +5113,43 @@
                     <button class="btn btn-primary btn-sm" @click="sendAgentExec()" :disabled="!agentCmdTarget || !agentCmdInput.trim() || agentCmdSending"><i class="fas fa-terminal"></i> Run</button>
                 </div>
             </div>
-            <div x-show="!agents || agents.length===0" class="empty-msg">No agents reporting. Deploy agents to remote nodes to see their metrics here.</div>
+            <div x-show="!agents || agents.length===0" class="empty-msg">No agents reporting. Deploy an agent to get started.</div>
+            <!-- Deploy new agent section -->
+            <div x-show="userRole==='admin'" style="margin-top:1rem;padding:.8rem;border:1px solid var(--accent);border-radius:6px;background:color-mix(in srgb, var(--accent) 5%, var(--surface))">
+                <div style="font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem"><i class="fas fa-rocket" style="margin-right:.4rem"></i>Deploy Agent</div>
+                <div x-data="{deployTab:'remote', deployHost:'', deployUser:'kevin', deployPass:'', deployPort:22, deploying:false, deployResult:'', installCmd:''}">
+                    <div style="display:flex;gap:.3rem;margin-bottom:.6rem">
+                        <button class="btn btn-xs" :class="deployTab==='remote'?'btn-primary':''" @click="deployTab='remote'">SSH Deploy</button>
+                        <button class="btn btn-xs" :class="deployTab==='script'?'btn-primary':''" @click="deployTab='script'; generateInstallCmd()">Install Script</button>
+                    </div>
+                    <!-- SSH Deploy -->
+                    <div x-show="deployTab==='remote'">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">
+                            <div><label class="field-label">Host / IP</label><input class="field-input" type="text" x-model="deployHost" placeholder="100.74.147.100" style="font-size:.75rem"></div>
+                            <div><label class="field-label">SSH User</label><input class="field-input" type="text" x-model="deployUser" placeholder="kevin" style="font-size:.75rem"></div>
+                            <div><label class="field-label">SSH Password</label><input class="field-input" type="password" x-model="deployPass" style="font-size:.75rem"></div>
+                            <div><label class="field-label">Port</label><input class="field-input" type="number" x-model.number="deployPort" style="font-size:.75rem"></div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" style="margin-top:.5rem;width:100%" @click="deployAgent(deployHost, deployUser, deployPass, deployPort)" :disabled="deploying || !deployHost || !deployUser">
+                            <i class="fas" :class="deploying?'fa-spinner fa-spin':'fa-satellite-dish'"></i>
+                            <span x-text="deploying ? 'Deploying...' : 'Deploy Agent'"></span>
+                        </button>
+                    </div>
+                    <!-- Install Script -->
+                    <div x-show="deployTab==='script'" x-data="{scriptOS:'linux'}">
+                        <div style="display:flex;gap:.3rem;margin-bottom:.4rem">
+                            <button class="btn btn-xs" :class="scriptOS==='linux'?'btn-primary':''" @click="scriptOS='linux'; generateInstallCmd()"><i class="fab fa-linux"></i> Linux</button>
+                            <button class="btn btn-xs" :class="scriptOS==='windows'?'btn-primary':''" @click="scriptOS='windows'; generateWinCmd()"><i class="fab fa-windows"></i> Windows</button>
+                        </div>
+                        <p style="font-size:.7rem;color:var(--text-muted);margin-bottom:.4rem" x-text="scriptOS==='linux' ? 'Paste in any Linux terminal:' : 'Run in PowerShell (Admin):'"></p>
+                        <div style="position:relative">
+                            <pre style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.5rem;font-size:.65rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:100px" x-text="installCmd || 'Generating...'"></pre>
+                            <button class="btn btn-xs" style="position:absolute;top:4px;right:4px" @click="navigator.clipboard.writeText(installCmd); addToast('Copied!','success')"><i class="fas fa-copy"></i></button>
+                        </div>
+                    </div>
+                    <div x-show="deployResult" style="margin-top:.4rem;font-size:.7rem;padding:.3rem .5rem;border-radius:4px" :style="deployResult.includes('error')?'background:rgba(255,23,68,.1);color:var(--danger)':'background:rgba(0,230,118,.1);color:var(--success)'" x-text="deployResult"></div>
+                </div>
+            </div>
         </div>
     </div>
 </div>

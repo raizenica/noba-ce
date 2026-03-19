@@ -3967,6 +3967,169 @@ def api_agent_update(request: Request):
     return FileResponse(agent_path, media_type="text/x-python")
 
 
+@app.get("/api/agent/install-script")
+def api_agent_install_script(request: Request):
+    """Generate a one-liner install script. Auth via X-Agent-Key."""
+    key = request.headers.get("X-Agent-Key", "") or request.query_params.get("key", "")
+    if not key:
+        raise HTTPException(401, "Missing agent key")
+    cfg = read_yaml_settings()
+    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
+    if not valid_keys or key not in valid_keys:
+        raise HTTPException(403, "Invalid agent key")
+    # Build the server URL from the request
+    host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", "localhost:8080"))
+    scheme = request.headers.get("X-Forwarded-Proto", "http")
+    server_url = f"{scheme}://{host}"
+    script = f"""#!/bin/bash
+# NOBA Agent — Auto-installer
+set -e
+INSTALL_DIR="/opt/noba-agent"
+SERVER="{server_url}"
+KEY="{key}"
+HOSTNAME="$(hostname)"
+
+echo "[noba] Installing agent on $HOSTNAME..."
+sudo mkdir -p "$INSTALL_DIR"
+curl -sf "$SERVER/api/agent/update" -H "X-Agent-Key: $KEY" -o "$INSTALL_DIR/agent.py"
+sudo chmod +x "$INSTALL_DIR/agent.py"
+
+# Install psutil if possible
+command -v apt-get &>/dev/null && sudo apt-get install -y python3-psutil 2>/dev/null || true
+command -v dnf &>/dev/null && sudo dnf install -y python3-psutil 2>/dev/null || true
+
+# Write config
+sudo tee /etc/noba-agent.yaml > /dev/null <<EOF
+server: $SERVER
+api_key: $KEY
+interval: 30
+hostname: $HOSTNAME
+EOF
+
+# Install systemd service
+sudo tee /etc/systemd/system/noba-agent.service > /dev/null <<EOF
+[Unit]
+Description=NOBA Agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=$(command -v python3) $INSTALL_DIR/agent.py --config /etc/noba-agent.yaml
+Restart=always
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now noba-agent
+echo "[noba] Agent installed and running on $HOSTNAME"
+"""
+    return Response(content=script, media_type="text/x-shellscript",
+                    headers={"Content-Disposition": "inline"})
+
+
+@app.post("/api/agents/deploy")
+async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
+    """Remote deploy: SSH into a node and install the agent."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    target_host = body.get("host", "")
+    ssh_user = body.get("ssh_user", "")
+    ssh_pass = body.get("ssh_pass", "")
+    target_port = int(body.get("ssh_port", 22))
+
+    if not target_host or not ssh_user:
+        raise HTTPException(400, "host and ssh_user are required")
+
+    import re
+    if not re.match(r'^[a-zA-Z0-9._:-]+$', target_host):
+        raise HTTPException(400, "Invalid hostname")
+
+    cfg = read_yaml_settings()
+    agent_keys = cfg.get("agentKeys", "")
+    if not agent_keys:
+        raise HTTPException(400, "No agent keys configured. Set agentKeys in settings first.")
+    agent_key = agent_keys.split(",")[0].strip()
+
+    # Build server URL
+    host_header = request.headers.get("Host", "localhost:8080")
+    server_url = f"http://{host_header}"
+
+    agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
+    if not agent_path.exists():
+        raise HTTPException(500, "Agent file not found on server")
+
+    # Check for sshpass
+    import shutil
+    if not shutil.which("sshpass"):
+        raise HTTPException(400, "sshpass not installed on server. Use the install script method instead.")
+
+    # Deploy via sshpass+scp+ssh
+    ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+    target = f"{ssh_user}@{target_host}"
+    env = {**os.environ, "SSHPASS": ssh_pass} if ssh_pass else os.environ
+    ssh_cmd = f"sshpass -e ssh -p {target_port}" if ssh_pass else f"ssh -p {target_port}"
+    scp_cmd = f"sshpass -e scp -P {target_port}" if ssh_pass else f"scp -P {target_port}"
+
+    try:
+        # Step 1: Copy agent
+        result = subprocess.run(
+            f"{scp_cmd} {ssh_opts} {agent_path} {target}:/tmp/noba-agent.py",
+            shell=True, capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            return {"status": "error", "step": "copy", "error": result.stderr[:500]}
+
+        # Step 2: Install
+        install_cmds = f"""
+sudo mkdir -p /opt/noba-agent
+sudo cp /tmp/noba-agent.py /opt/noba-agent/agent.py
+sudo chmod +x /opt/noba-agent/agent.py
+command -v apt-get >/dev/null && sudo apt-get install -y python3-psutil 2>/dev/null || true
+command -v dnf >/dev/null && sudo dnf install -y python3-psutil 2>/dev/null || true
+sudo tee /etc/noba-agent.yaml > /dev/null <<AGENTCFG
+server: {server_url}
+api_key: {agent_key}
+interval: 30
+hostname: $(hostname)
+AGENTCFG
+sudo tee /etc/systemd/system/noba-agent.service > /dev/null <<SVC
+[Unit]
+Description=NOBA Agent
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=$(command -v python3 || echo /usr/bin/python3) /opt/noba-agent/agent.py --config /etc/noba-agent.yaml
+Restart=always
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+SVC
+sudo systemctl daemon-reload
+sudo systemctl enable --now noba-agent 2>&1
+systemctl is-active noba-agent
+"""
+        result = subprocess.run(
+            f'{ssh_cmd} {ssh_opts} {target} "bash -s"',
+            input=install_cmds, shell=True, capture_output=True, text=True,
+            timeout=60, env=env,
+        )
+        success = "active" in result.stdout
+        db.audit_log("agent_deploy", username, f"host={target_host} user={ssh_user} ok={success}", ip)
+        return {
+            "status": "ok" if success else "error",
+            "host": target_host,
+            "output": result.stdout[:1000],
+            "error": result.stderr[:500] if not success else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "error": "SSH connection timed out"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 # ── Incident endpoints ───────────────────────────────────────────────────────
 @app.get("/api/incidents")
 def api_incidents(request: Request, auth=Depends(_get_auth)):
