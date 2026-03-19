@@ -78,8 +78,8 @@ EOF
 # -------------------------------------------------------------------
 # Parse command-line arguments
 # -------------------------------------------------------------------
-if ! PARSED_ARGS=$(getopt -o '' \
-    -l repo:,remote:,branch:,system,auto-yes,dry-run,help,version \
+if ! PARSED_ARGS=$(getopt -o 'v' \
+    -l repo:,remote:,branch:,system,auto-yes,dry-run,verbose,help,version \
     -- "$@"); then
     log_error "Invalid argument"
     exit 1
@@ -111,6 +111,10 @@ while true; do
             ;;
         --dry-run)
             DRY_RUN=true
+            shift
+            ;;
+        -v|--verbose)
+            export VERBOSE=true
             shift
             ;;
         --help)

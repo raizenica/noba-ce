@@ -1488,6 +1488,7 @@ def _build_command(script: str, safe_args: list[str], args_in) -> list[str] | No
     if script in SCRIPT_MAP:
         sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
         if os.path.isfile(sfile):
+            # All noba scripts accept --verbose
             return [sfile, "--verbose"] + safe_args
     return None
 

@@ -80,6 +80,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)    DRY_RUN=true; shift ;;
         --max-depth)  MAX_DEPTH="$2"; shift 2 ;;
         --exclude)    EXCLUDE_PATTERNS="$2"; shift 2 ;;
+        -v|--verbose) export VERBOSE=true; shift ;;
         --help)
             echo "Usage: organize-downloads.sh [OPTIONS]"
             echo "  --dry-run          Show what would happen without moving files"
