@@ -823,6 +823,13 @@ function actionsMixin() {
                     return;
                 }
                 const result = await res.json();
+                if (result.workflow) {
+                    this.modalTitle = '\u2713 Workflow Started';
+                    this.modalOutput += `Workflow "${auto.name}" started with ${result.steps} steps.\nCheck Run History for progress.\n`;
+                    this.addToast(`Workflow started (${result.steps} steps)`, 'success');
+                    this.runningScript = false;
+                    return;
+                }
                 runId = result.run_id;
                 this.activeRunId = runId;
             } catch {

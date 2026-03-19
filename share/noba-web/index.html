@@ -951,7 +951,7 @@
                                 :style="!auto.enabled ? 'opacity:.5' : ''"
                                 @click="runAutomation(auto)"
                                 x-show="userRole !== 'viewer'">
-                            <i class="fas" :class="auto.type==='webhook'?'fa-globe':auto.type==='service'?'fa-cog':'fa-terminal'" aria-hidden="true"></i>
+                            <i class="fas" :class="auto.type==='webhook'?'fa-globe':auto.type==='service'?'fa-cog':auto.type==='workflow'?'fa-project-diagram':'fa-terminal'" aria-hidden="true"></i>
                             <span x-text="auto.name"></span>
                             <span x-show="auto.schedule" class="badge bi" style="font-size:.55rem;margin-left:.3rem" :title="'Schedule: ' + auto.schedule"><i class="fas fa-clock" aria-hidden="true"></i></span>
                             <span class="badge" :class="auto.enabled ? 'bs' : 'bw'" x-text="auto.type" style="margin-left:auto;font-size:.6rem"></span>
@@ -1452,6 +1452,7 @@
                     <option value="script">Script</option>
                     <option value="webhook">Webhook</option>
                     <option value="service">Service</option>
+                    <option value="workflow">Workflow</option>
                 </select>
             </div>
             <div>
@@ -1528,6 +1529,30 @@
                 <label class="toggle-item" style="margin-top:.5rem">
                     <input type="checkbox" x-model="autoForm.config.is_user"> User-level service (--user)
                 </label>
+            </div>
+        </template>
+
+        <!-- Workflow config -->
+        <template x-if="autoForm.type === 'workflow'">
+            <div>
+                <div style="margin-bottom:.75rem">
+                    <label class="field-label">Steps (automation IDs, one per line)</label>
+                    <textarea class="field-input" rows="4"
+                              :value="(autoForm.config.steps||[]).join('\n')"
+                              @input="autoForm.config.steps = $event.target.value.split('\n').map(s=>s.trim()).filter(s=>s)"
+                              placeholder="paste automation IDs, one per line"></textarea>
+                </div>
+                <div x-show="autoList.filter(a=>a.type!=='workflow').length" style="margin-bottom:.75rem">
+                    <label class="field-label">Available automations (click to add)</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:.3rem">
+                        <template x-for="a in autoList.filter(a=>a.type!=='workflow')" :key="a.id">
+                            <button class="btn btn-sm" type="button" style="font-size:.7rem"
+                                    @click="if(!autoForm.config.steps) autoForm.config.steps=[]; if(!autoForm.config.steps.includes(a.id)) autoForm.config.steps.push(a.id)">
+                                <span x-text="a.name"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
             </div>
         </template>
 

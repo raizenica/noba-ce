@@ -115,14 +115,17 @@ class Scheduler:
 
     def _trigger(self, auto: dict) -> None:
         """Submit an automation to the job runner."""
-        from .app import _build_auto_script_process, _build_auto_webhook_process, _build_auto_service_process
+        from .app import _AUTO_BUILDERS, _run_workflow
 
-        builders = {
-            "script": _build_auto_script_process,
-            "webhook": _build_auto_webhook_process,
-            "service": _build_auto_service_process,
-        }
-        builder = builders.get(auto["type"])
+        # Workflow: chain steps
+        if auto["type"] == "workflow":
+            steps = auto["config"].get("steps", [])
+            if steps:
+                _run_workflow(auto["id"], steps, "scheduler")
+                logger.info("Scheduler triggered workflow '%s' (%d steps)", auto["name"], len(steps))
+            return
+
+        builder = _AUTO_BUILDERS.get(auto["type"])
         if not builder:
             logger.warning("Scheduler: unknown type %s for %s", auto["type"], auto["id"])
             return

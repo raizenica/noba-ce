@@ -36,12 +36,16 @@ class JobRunner:
         automation_id: str | None = None,
         trigger: str = "manual",
         triggered_by: str = "system",
+        on_complete: Callable[[int, str], None] | None = None,
     ) -> int:
         """Queue and start a job.  Returns the run_id.
 
         ``run_fn`` receives the run_id and must return a ``Popen`` handle
         (or ``None`` if the command could not be built).  The runner
         captures its output, enforces timeouts and records the result.
+
+        ``on_complete``, if given, is called with ``(run_id, status)``
+        after the job finishes (regardless of outcome).
         """
         with self._lock:
             if len(self._active) >= self._max:
@@ -59,7 +63,7 @@ class JobRunner:
 
         t = threading.Thread(
             target=self._run,
-            args=(run_id, run_fn, entry),
+            args=(run_id, run_fn, entry, on_complete),
             daemon=True,
             name=f"job-{run_id}",
         )
@@ -114,6 +118,7 @@ class JobRunner:
         run_id: int,
         run_fn: Callable[[int], subprocess.Popen | None],
         entry: dict,
+        on_complete: Callable[[int, str], None] | None = None,
     ) -> None:
         status = "failed"
         output_buf: list[str] = []
@@ -174,6 +179,11 @@ class JobRunner:
                               exit_code=exit_code, error=error)
             with self._lock:
                 self._active.pop(run_id, None)
+            if on_complete:
+                try:
+                    on_complete(run_id, status)
+                except Exception as cb_exc:
+                    logger.error("on_complete callback error for job %d: %s", run_id, cb_exc)
 
     @staticmethod
     def _kill_process(proc: subprocess.Popen) -> None:

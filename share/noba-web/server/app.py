@@ -483,6 +483,10 @@ def _validate_auto_config(atype: str, config: dict) -> None:
             raise HTTPException(400, "Service automation requires 'service' in config")
         if config.get("action", "restart") not in ("start", "stop", "restart"):
             raise HTTPException(400, "Service action must be start, stop, or restart")
+    elif atype == "workflow":
+        steps = config.get("steps", [])
+        if not isinstance(steps, list) or len(steps) < 1:
+            raise HTTPException(400, "Workflow requires 'steps' list with at least one automation ID")
 
 
 def _build_auto_script_process(config: dict) -> subprocess.Popen | None:
@@ -537,7 +541,48 @@ def _build_auto_service_process(config: dict) -> subprocess.Popen | None:
 
 _AUTO_BUILDERS = {"script": _build_auto_script_process, "webhook": _build_auto_webhook_process,
                   "service": _build_auto_service_process}
-_AUTO_TYPES = frozenset(_AUTO_BUILDERS)
+_AUTO_TYPES = frozenset(list(_AUTO_BUILDERS) + ["workflow"])
+
+
+def _run_workflow(auto_id: str, steps: list[str], triggered_by: str, step_idx: int = 0) -> None:
+    """Chain-execute workflow steps sequentially via on_complete callbacks."""
+    if step_idx >= len(steps):
+        return
+    step_auto_id = steps[step_idx]
+    step_auto = db.get_automation(step_auto_id)
+    if not step_auto:
+        logger.warning("Workflow %s: step %d auto '%s' not found, skipping", auto_id, step_idx, step_auto_id)
+        _run_workflow(auto_id, steps, triggered_by, step_idx + 1)
+        return
+
+    builder = _AUTO_BUILDERS.get(step_auto["type"])
+    if not builder:
+        logger.warning("Workflow %s: step %d has unsupported type '%s'", auto_id, step_idx, step_auto["type"])
+        _run_workflow(auto_id, steps, triggered_by, step_idx + 1)
+        return
+
+    config = step_auto["config"]
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(config)
+
+    def on_step_complete(_run_id: int, status: str) -> None:
+        if status == "done":
+            _run_workflow(auto_id, steps, triggered_by, step_idx + 1)
+        else:
+            logger.info("Workflow %s: step %d ('%s') %s — stopping chain",
+                        auto_id, step_idx, step_auto["name"], status)
+
+    try:
+        job_runner.submit(
+            make_process,
+            automation_id=step_auto_id,
+            trigger=f"workflow:{auto_id}:step{step_idx}",
+            triggered_by=triggered_by,
+            on_complete=on_step_complete,
+        )
+    except RuntimeError as exc:
+        logger.warning("Workflow %s: step %d submit failed: %s", auto_id, step_idx, exc)
 
 
 @app.get("/api/automations")
@@ -620,10 +665,20 @@ def api_automations_run(auto_id: str, request: Request, auth=Depends(_require_op
     auto = db.get_automation(auto_id)
     if not auto:
         raise HTTPException(404, "Automation not found")
+    config = auto["config"]
+
+    # Workflow: chain execution of steps
+    if auto["type"] == "workflow":
+        steps = config.get("steps", [])
+        if not steps:
+            raise HTTPException(400, "Workflow has no steps")
+        _run_workflow(auto_id, steps, username)
+        db.audit_log("automation_run", username, f"Workflow '{auto['name']}' started ({len(steps)} steps)", ip)
+        return {"success": True, "run_id": None, "workflow": True, "steps": len(steps)}
+
     builder = _AUTO_BUILDERS.get(auto["type"])
     if not builder:
         raise HTTPException(400, f"Unsupported type: {auto['type']}")
-    config = auto["config"]
 
     def make_process(_run_id: int) -> subprocess.Popen | None:
         return builder(config)
