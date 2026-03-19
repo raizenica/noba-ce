@@ -407,6 +407,61 @@ async def api_config_restore(request: Request, auth=Depends(_require_admin)):
     return {"status": "ok"}
 
 
+# ── /api/backup/status ───────────────────────────────────────────────────────
+def _read_state_file(path: str) -> dict:
+    """Parse a key=value state file into a dict."""
+    result: dict = {}
+    if not os.path.exists(path):
+        return result
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                result[key.strip()] = val.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/api/backup/status")
+def api_backup_status(auth=Depends(_get_auth)):
+    from .config import BACKUP_STATE_FILE, CLOUD_STATE_FILE
+
+    nas = _read_state_file(BACKUP_STATE_FILE)
+    cloud = _read_state_file(CLOUD_STATE_FILE)
+
+    def _build_nas(state: dict) -> dict | None:
+        if not state:
+            return None
+        exit_code = state.get("exit_code", "")
+        dur = state.get("duration", "")
+        return {
+            "exit_code": int(exit_code) if exit_code.isdigit() else None,
+            "snapshot": state.get("snapshot", ""),
+            "duration": int(dur) if dur.isdigit() else None,
+            "failed_sources": state.get("failed_sources", ""),
+            "timestamp": state.get("timestamp", ""),
+        }
+
+    def _build_cloud(state: dict) -> dict | None:
+        if not state:
+            return None
+        status = state.get("LAST_STATUS", "")
+        return {
+            "exit_code": 0 if status.lower() in ("ok", "success", "0") else (1 if status else None),
+            "snapshot": "",
+            "duration": None,
+            "failed_sources": "",
+            "timestamp": state.get("LAST_SYNC_TIME", ""),
+            "size": state.get("LAST_SIZE", ""),
+        }
+
+    return {"nas": _build_nas(nas), "cloud": _build_cloud(cloud)}
+
+
 # ── /api/log-viewer ───────────────────────────────────────────────────────────
 @app.get("/api/log-viewer")
 def api_log_viewer(request: Request, auth=Depends(_get_auth)):

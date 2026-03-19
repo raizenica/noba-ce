@@ -59,6 +59,15 @@ _NOTIF_WEB_KEYS = frozenset([
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
     "gotifyEnabled",   "gotifyUrl",        "gotifyAppToken",
 ])
+_BACKUP_WEB_KEYS = frozenset([
+    "backupSources", "backupDest", "backupRetentionDays", "backupKeepCount",
+    "backupVerifySample", "backupMaxDelete", "backupEmail",
+    "cloudRemote", "downloadsDir",
+])
+
+# ── State file paths ────────────────────────────────────────────────────────
+BACKUP_STATE_FILE = os.path.join(LOG_DIR, "backup-to-nas.state")
+CLOUD_STATE_FILE  = os.path.join(LOG_DIR, "cloud-backup.state")
 
 # ── Script / action maps ─────────────────────────────────────────────────────
 SCRIPT_MAP = {

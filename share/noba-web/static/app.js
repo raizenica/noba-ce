@@ -24,7 +24,9 @@ function dashboard() {
         'radarrUrl',  'radarrKey',
         'sonarrUrl',  'sonarrKey',
         'qbitUrl',    'qbitUser',  'qbitPass',
-        'backupSources', 'backupDest', 'cloudRemote', 'downloadsDir',
+        'backupSources', 'backupDest', 'backupRetentionDays', 'backupKeepCount',
+        'backupVerifySample', 'backupMaxDelete', 'backupEmail',
+        'cloudRemote', 'downloadsDir',
         'customActions', 'automations',
         'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName', 'proxmoxTokenValue',
         'adguardUrl', 'adguardUser', 'adguardPass',
@@ -179,6 +181,10 @@ function dashboard() {
         // ── Dynamic / job settings ─────────────────────────────────────────────
         customActions: [], automations: [], alertRules: [],
         backupSources: [], backupDest: '', cloudRemote: '', downloadsDir: '',
+        backupRetentionDays: 7, backupKeepCount: 0, backupVerifySample: 20,
+        backupMaxDelete: '', backupEmail: '',
+        backupStatus: null, cloudStatus: null,
+        newBackupSource: '',
         cloudRemotes: [], selectedCloudRemote: '', cloudRemotesLoading: false,
         rcloneAvailable: null, rcloneVersion: '', cloudTestResults: {},
 
@@ -300,6 +306,7 @@ function dashboard() {
             await Promise.all([
                 this.fetchSettings(),
                 this.fetchCloudRemotes(),
+                this.fetchBackupStatus(),
                 this.fetchLog(),
                 this.fetchAutomations(),
                 this.fetchAutoTemplates(),
@@ -682,6 +689,38 @@ function dashboard() {
                 this.addToast('Failed to fetch cloud remotes: ' + e.message, 'error');
             } finally {
                 this.cloudRemotesLoading = false;
+            }
+        },
+
+        /** Fetch last backup/cloud sync status from state files. */
+        async fetchBackupStatus() {
+            if (!this.authenticated) return;
+            try {
+                const res = await fetch('/api/backup/status', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) return;
+                const d = await res.json();
+                this.backupStatus = d.nas || null;
+                this.cloudStatus  = d.cloud || null;
+            } catch { /* silent */ }
+        },
+
+        /** Add a directory to the backup sources list. */
+        addBackupSource() {
+            const src = (this.newBackupSource || '').trim();
+            if (!src) return;
+            if (!Array.isArray(this.backupSources)) this.backupSources = [];
+            if (!this.backupSources.includes(src)) {
+                this.backupSources.push(src);
+            }
+            this.newBackupSource = '';
+        },
+
+        /** Remove a directory from the backup sources list. */
+        removeBackupSource(idx) {
+            if (Array.isArray(this.backupSources)) {
+                this.backupSources.splice(idx, 1);
             }
         },
 

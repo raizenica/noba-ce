@@ -49,7 +49,7 @@ JSON_OUTPUT=false
 if command -v get_config &>/dev/null; then
     DEST="$(get_config ".backup.dest" "$DEST")"
     EMAIL="$(get_config ".email" "$EMAIL")"
-    VERIFY_SAMPLE="$(get_config ".backup_verifier.num_files" "$VERIFY_SAMPLE")"
+    VERIFY_SAMPLE="$(get_config ".backup.verify_sample" "$VERIFY_SAMPLE")"
 
     raw_sources=$(get_config_array ".backup.sources" 2>/dev/null || true)
     if [[ -n "$raw_sources" ]]; then

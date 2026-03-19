@@ -10,7 +10,7 @@ import time
 
 import yaml
 
-from .config import NOBA_YAML, WEB_KEYS, _NOTIF_WEB_KEYS
+from .config import NOBA_YAML, WEB_KEYS, _BACKUP_WEB_KEYS, _NOTIF_WEB_KEYS
 
 logger = logging.getLogger("noba")
 
@@ -38,6 +38,8 @@ def read_yaml_settings() -> dict:
     defaults: dict = {
         "piholeUrl": "", "piholeToken": "", "monitoredServices": "", "radarIps": "", "bookmarksStr": "",
         "plexUrl": "", "plexToken": "", "kumaUrl": "", "bmcMap": "", "backupSources": [], "backupDest": "",
+        "backupRetentionDays": 7, "backupKeepCount": 0, "backupVerifySample": 20,
+        "backupMaxDelete": "", "backupEmail": "",
         "cloudRemote": "", "downloadsDir": "", "truenasUrl": "", "truenasKey": "",
         "radarrUrl": "", "radarrKey": "", "sonarrUrl": "", "sonarrKey": "",
         "qbitUrl": "", "qbitUser": "", "qbitPass": "",
@@ -60,17 +62,30 @@ def read_yaml_settings() -> dict:
             for k in WEB_KEYS:
                 if k in web:
                     defaults[k] = web[k]
+            # ── Backup section ────────────────────────────────────────────
             backup = full.get("backup") or {}
             if "sources" in backup:
                 defaults["backupSources"] = backup["sources"]
             if "dest" in backup:
                 defaults["backupDest"] = backup["dest"]
+            if "retention_days" in backup:
+                defaults["backupRetentionDays"] = int(backup["retention_days"])
+            if "keep_count" in backup:
+                defaults["backupKeepCount"] = int(backup["keep_count"])
+            if "verify_sample" in backup:
+                defaults["backupVerifySample"] = int(backup["verify_sample"])
+            if "max_delete" in backup:
+                defaults["backupMaxDelete"] = str(backup["max_delete"])
+            if "email" in backup:
+                defaults["backupEmail"] = str(backup["email"])
+            # ── Cloud / downloads ─────────────────────────────────────────
             cloud = full.get("cloud") or {}
             if "remote" in cloud:
                 defaults["cloudRemote"] = cloud["remote"]
             dl = full.get("downloads") or {}
             if "dir" in dl:
                 defaults["downloadsDir"] = dl["dir"]
+            # ── Notifications ─────────────────────────────────────────────
             notif = full.get("notifications") or {}
             if notif:
                 defaults["notifications"] = notif
@@ -112,9 +127,38 @@ def write_yaml_settings(settings: dict) -> bool:
         else:
             config = {}
 
-        # Build web section (all WEB_KEYS except notification-specific keys)
+        # Build web section (all WEB_KEYS except notification/backup-specific keys)
         config["web"] = {k: v for k, v in settings.items()
                          if k in WEB_KEYS and k not in _NOTIF_WEB_KEYS}
+
+        # Build backup section from settings
+        if any(k in settings for k in _BACKUP_WEB_KEYS):
+            bk = config.get("backup") or {}
+            if "backupSources" in settings:
+                bk["sources"] = settings["backupSources"]
+            if "backupDest" in settings:
+                bk["dest"] = settings["backupDest"]
+            if "backupRetentionDays" in settings:
+                bk["retention_days"] = int(settings["backupRetentionDays"])
+            if "backupKeepCount" in settings:
+                bk["keep_count"] = int(settings["backupKeepCount"])
+            if "backupVerifySample" in settings:
+                bk["verify_sample"] = int(settings["backupVerifySample"])
+            if "backupMaxDelete" in settings:
+                bk["max_delete"] = settings["backupMaxDelete"]
+            if "backupEmail" in settings:
+                bk["email"] = settings["backupEmail"]
+            config["backup"] = bk
+            # Cloud remote
+            if "cloudRemote" in settings:
+                cloud = config.get("cloud") or {}
+                cloud["remote"] = settings["cloudRemote"]
+                config["cloud"] = cloud
+            # Downloads dir
+            if "downloadsDir" in settings:
+                dl = config.get("downloads") or {}
+                dl["dir"] = settings["downloadsDir"]
+                config["downloads"] = dl
 
         # Build notifications section
         has_push = any(k in settings for k in ("pushoverEnabled", "pushoverAppToken", "pushoverUserKey"))

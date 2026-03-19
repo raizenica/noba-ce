@@ -556,7 +556,7 @@ function actionsMixin() {
 
         /** Format power-on hours as "Xd Yh". */
         formatPoh(hours) {
-            if (!hours) return '\u2014';
+            if (hours == null) return '\u2014';
             const d = Math.floor(hours / 24);
             const h = hours % 24;
             return d > 0 ? `${d}d ${h}h` : `${h}h`;

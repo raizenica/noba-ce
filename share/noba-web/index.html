@@ -1039,9 +1039,26 @@
                 <div class="action-group" x-data="{ opt: false, target: 'all', dryRun: false, verify: false }">
                     <button class="btn" :disabled="runningScript" @click="opt = !opt" :aria-expanded="opt">
                         <i class="fas fa-database" aria-hidden="true"></i> NAS Backup Job
+                        <template x-if="backupStatus">
+                            <span class="badge" style="margin-left:.4rem;font-size:.6rem"
+                                  :class="backupStatus.exit_code === 0 ? 'bs' : 'bd'"
+                                  x-text="backupStatus.exit_code === 0 ? 'OK' : 'FAIL'"></span>
+                        </template>
                         <i class="fas fa-chevron-down" style="margin-left:auto;font-size:.7rem;transition:transform .2s" :style="opt?'transform:rotate(180deg)':''" aria-hidden="true"></i>
                     </button>
                     <div class="action-opts" x-show="opt" style="display:none">
+                        <div x-show="backupStatus" style="margin-bottom:.75rem;padding:.5rem .65rem;background:var(--surface-2);border-radius:4px;font-size:.78rem;display:flex;flex-wrap:wrap;gap:.4rem .8rem;align-items:center">
+                            <span style="color:var(--text-muted)">Last run:</span>
+                            <span x-text="backupStatus && backupStatus.timestamp ? new Date(backupStatus.timestamp).toLocaleString() : 'Unknown'"></span>
+                            <span x-show="backupStatus && backupStatus.duration != null" style="color:var(--text-muted)">
+                                <i class="fas fa-clock" aria-hidden="true" style="margin-right:.2rem"></i>
+                                <span x-text="backupStatus && backupStatus.duration >= 60 ? Math.floor(backupStatus.duration / 60) + 'm ' + (backupStatus.duration % 60) + 's' : ((backupStatus && backupStatus.duration) || 0) + 's'"></span>
+                            </span>
+                            <span class="badge" style="font-size:.6rem"
+                                  :class="backupStatus && backupStatus.exit_code === 0 ? 'bs' : 'bd'"
+                                  x-text="backupStatus && backupStatus.exit_code === 0 ? 'Success' : 'Failed'"></span>
+                            <span x-show="backupStatus && backupStatus.failed_sources" style="color:var(--danger);font-size:.7rem" x-text="'Failed: ' + (backupStatus ? backupStatus.failed_sources : '')"></span>
+                        </div>
                         <div style="margin-bottom:.75rem">
                             <label class="field-label" for="backup-target">Source Target</label>
                             <select id="backup-target" class="theme-select" style="width:100%;margin-bottom:.5rem" x-model="target">
@@ -1073,6 +1090,11 @@
                 <div class="action-group" x-data="{ opt: false, dryRun: false }">
                     <button class="btn" :disabled="runningScript" @click="opt = !opt" :aria-expanded="opt">
                         <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i> Cloud Sync Job
+                        <template x-if="cloudStatus">
+                            <span class="badge" style="margin-left:.4rem;font-size:.6rem"
+                                  :class="cloudStatus.exit_code === 0 ? 'bs' : 'bd'"
+                                  x-text="cloudStatus.exit_code === 0 ? 'OK' : 'FAIL'"></span>
+                        </template>
                         <span x-show="cloudRemotes && cloudRemotes.length > 0" class="badge ba" style="margin-left:.4rem;text-transform:none;font-size:.6rem" x-text="cloudRemotes.length + ' remote' + (cloudRemotes.length !== 1 ? 's' : '')"></span>
                         <span x-show="rcloneAvailable === false" class="badge bd" style="margin-left:.4rem;font-size:.6rem">no rclone</span>
                         <i class="fas fa-chevron-down" style="margin-left:auto;font-size:.7rem;transition:transform .2s" :style="opt?'transform:rotate(180deg)':''" aria-hidden="true"></i>
@@ -1719,8 +1741,8 @@
             <button class="stab" role="tab" :aria-selected="settingsTab==='data'" :class="settingsTab==='data'?'active':''" @click="settingsTab='data'">
                 <i class="fas fa-database" aria-hidden="true"></i> General
             </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='cloud'" :class="settingsTab==='cloud'?'active':''" @click="settingsTab='cloud'; fetchCloudRemotes()">
-                <i class="fas fa-cloud" aria-hidden="true"></i> Cloud
+            <button class="stab" role="tab" :aria-selected="settingsTab==='backup'" :class="settingsTab==='backup'?'active':''" @click="settingsTab='backup'; fetchCloudRemotes(); fetchBackupStatus()">
+                <i class="fas fa-archive" aria-hidden="true"></i> Backup
             </button>
             <button class="stab" role="tab" :aria-selected="settingsTab==='integrations'" :class="settingsTab==='integrations'?'active':''" @click="settingsTab='integrations'">
                 <i class="fas fa-plug" aria-hidden="true"></i> Integrations
@@ -2101,17 +2123,92 @@
             </div>
         </div>
 
-        <div x-show="settingsTab==='cloud'" role="tabpanel">
+        <div x-show="settingsTab==='backup'" role="tabpanel">
+            <!-- Source Directories -->
             <div class="s-section">
-                <span class="s-label">Cloud Remotes Configuration</span>
-                <div x-show="rcloneAvailable === false" style="color:var(--danger)" role="alert">rclone is not installed.</div>
+                <span class="s-label">Backup Sources</span>
+                <p class="help-text" style="margin-bottom:.6rem">Directories to include in NAS backups. One path per entry.</p>
+                <div style="display:flex;flex-direction:column;gap:.4rem;margin-bottom:.6rem">
+                    <template x-for="(src, idx) in backupSources" :key="idx">
+                        <div style="display:flex;align-items:center;gap:.4rem">
+                            <code style="flex:1;padding:.35rem .5rem;background:var(--surface-2);border-radius:4px;font-size:.78rem;overflow:hidden;text-overflow:ellipsis" x-text="src"></code>
+                            <button class="btn btn-sm" style="padding:.25rem .5rem;flex-shrink:0" @click="removeBackupSource(idx)" title="Remove">
+                                <i class="fas fa-times" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </template>
+                    <div x-show="!backupSources || backupSources.length === 0" style="color:var(--text-muted);font-size:.78rem">No sources configured.</div>
+                </div>
+                <div style="display:flex;gap:.4rem">
+                    <input class="field-input" type="text" x-model="newBackupSource" placeholder="/path/to/directory" @keydown.enter.prevent="addBackupSource()" style="flex:1">
+                    <button class="btn btn-sm" @click="addBackupSource()"><i class="fas fa-plus" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+            <!-- Destination -->
+            <div class="s-section">
+                <span class="s-label">Backup Destination</span>
+                <p class="help-text" style="margin-bottom:.6rem">NAS mount point or local path where backups are stored.</p>
+                <input class="field-input" type="text" x-model="backupDest" placeholder="/mnt/nas/backups">
+            </div>
+            <!-- Retention & Safety -->
+            <div class="s-section">
+                <span class="s-label">Retention &amp; Safety</span>
+                <div class="field-2">
+                    <div>
+                        <label class="field-label" for="s-bk-retention">Retention Days</label>
+                        <input id="s-bk-retention" class="field-input" type="number" min="1" x-model.number="backupRetentionDays" placeholder="7">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-bk-keep">Keep Count (min snapshots)</label>
+                        <input id="s-bk-keep" class="field-input" type="number" min="0" x-model.number="backupKeepCount" placeholder="0">
+                    </div>
+                </div>
+                <div class="field-2" style="margin-top:.6rem">
+                    <div>
+                        <label class="field-label" for="s-bk-verify">Verify Sample Size</label>
+                        <input id="s-bk-verify" class="field-input" type="number" min="0" x-model.number="backupVerifySample" placeholder="20">
+                    </div>
+                    <div>
+                        <label class="field-label" for="s-bk-maxdel">Max Delete (rsync safety)</label>
+                        <input id="s-bk-maxdel" class="field-input" type="text" x-model="backupMaxDelete" placeholder="Empty = no limit">
+                    </div>
+                </div>
+            </div>
+            <!-- Email Reports -->
+            <div class="s-section">
+                <span class="s-label">Backup Email Reports</span>
+                <p class="help-text" style="margin-bottom:.6rem">Email address for backup completion reports.</p>
+                <input class="field-input" type="email" x-model="backupEmail" placeholder="admin@example.com">
+            </div>
+            <!-- Downloads Directory -->
+            <div class="s-section">
+                <span class="s-label">Downloads Directory</span>
+                <p class="help-text" style="margin-bottom:.6rem">Target directory for the Organize Downloads job.</p>
+                <input class="field-input" type="text" x-model="downloadsDir" placeholder="/downloads">
+            </div>
+            <!-- Cloud Remotes -->
+            <div class="s-section">
+                <span class="s-label">Cloud Remotes</span>
+                <div x-show="rcloneAvailable === false" style="color:var(--danger);font-size:.82rem;margin-bottom:.5rem" role="alert">
+                    <i class="fas fa-times-circle" aria-hidden="true"></i> rclone is not installed.
+                </div>
                 <div x-show="rcloneAvailable !== false && cloudRemotes && cloudRemotes.length > 0">
-                    <p class="help-text">Remotes found in rclone. Select default remote for Cloud Sync below.</p>
+                    <p class="help-text" style="margin-bottom:.5rem">Remotes detected from rclone config. Select the default remote for Cloud Sync.</p>
+                    <div style="display:flex;flex-direction:column;gap:.4rem;margin-bottom:.5rem">
+                        <template x-for="r in cloudRemotes" :key="r.name">
+                            <div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;background:var(--surface-2);border-radius:4px;border-left:3px solid" :style="'border-color:' + (r.color || 'var(--accent)')">
+                                <i :class="r.icon" :style="'color:' + (r.color || 'var(--accent)')" aria-hidden="true" style="width:1rem;text-align:center"></i>
+                                <span style="font-size:.82rem;font-weight:600" x-text="r.name"></span>
+                                <span class="badge" style="font-size:.6rem" :style="'background:' + (r.color||'var(--accent)') + '22;color:' + (r.color||'var(--accent)') + ';border-color:' + (r.color||'var(--accent)') + '44'" x-text="r.label"></span>
+                                <div x-show="r.quota" style="margin-left:auto;font-size:.65rem;color:var(--text-muted)" x-text="r.quota ? (humanBytes(r.quota.used) + ' / ' + humanBytes(r.quota.total)) : ''"></div>
+                            </div>
+                        </template>
+                    </div>
                 </div>
-                <div x-show="rcloneAvailable !== false && (!cloudRemotes || cloudRemotes.length === 0)" style="color:var(--warning)" role="status">
-                    No remotes configured. Run <code>rclone config</code>.
+                <div x-show="rcloneAvailable !== false && (!cloudRemotes || cloudRemotes.length === 0)" style="color:var(--warning);font-size:.82rem;margin-bottom:.5rem" role="status">
+                    <i class="fas fa-exclamation-triangle" aria-hidden="true"></i> No remotes configured. Run <code>rclone config</code>.
                 </div>
-                <button class="btn btn-sm" @click="fetchCloudRemotes()" style="margin-top:1rem">
+                <button class="btn btn-sm" @click="fetchCloudRemotes()">
                     <i class="fas fa-sync" :class="cloudRemotesLoading?'fa-spin':''" aria-hidden="true"></i> Refresh Remotes
                 </button>
             </div>
