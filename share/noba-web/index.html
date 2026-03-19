@@ -364,17 +364,17 @@
                     </div>
                     <div class="io-grid" style="margin-top:.5rem" x-show="qbit && qbit.status === 'online'">
                         <div class="io-stat">
-                            <div class="io-val io-down" x-text="humanBps(qbit.dl_speed)"></div>
+                            <div class="io-val io-down" x-text="humanBps(qbit?.dl_speed)"></div>
                             <div class="io-label"><i class="fas fa-arrow-down" aria-hidden="true"></i> DL</div>
                         </div>
                         <div class="io-stat">
-                            <div class="io-val io-up" x-text="humanBps(qbit.up_speed)"></div>
+                            <div class="io-val io-up" x-text="humanBps(qbit?.up_speed)"></div>
                             <div class="io-label"><i class="fas fa-arrow-up" aria-hidden="true"></i> UP</div>
                         </div>
                     </div>
                     <div class="row" x-show="qbit && qbit.status === 'online'">
                         <span class="row-label" style="font-size:.65rem">Active Torrents</span>
-                        <span class="row-val" x-text="qbit.active_torrents"></span>
+                        <span class="row-val" x-text="qbit?.active_torrents"></span>
                     </div>
                 </div>
                 <div class="row" x-show="radarrUrl">
@@ -578,7 +578,7 @@
                 <div class="proc-grid">
                     <div>
                         <div class="proc-hdr">Top CPU</div>
-                        <template x-for="p in topCpu" :key="p.name">
+                        <template x-for="(p, i) in topCpu" :key="'cpu-'+i">
                             <div class="proc-row">
                                 <span class="proc-n" x-text="p.name"></span>
                                 <span class="cpu-col" x-text="p.val"></span>
@@ -587,7 +587,7 @@
                     </div>
                     <div>
                         <div class="proc-hdr">Top Memory</div>
-                        <template x-for="p in topMem" :key="p.name">
+                        <template x-for="(p, i) in topMem" :key="'mem-'+i">
                             <div class="proc-row">
                                 <span class="proc-n" x-text="p.name"></span>
                                 <span class="mem-col" x-text="p.val"></span>
@@ -638,7 +638,7 @@
                 <span class="card-title">Proxmox VE</span>
                 <span class="card-count"
                       x-show="proxmox && proxmox.vms && proxmox.vms.length > 0"
-                      x-text="(proxmox.vms.length) + ' guests'"></span>
+                      x-text="(proxmox?.vms?.length || 0) + ' guests'"></span>
                 <span class="badge" :class="proxmox && proxmox.status==='online' ? 'bs' : 'bn'"
                       x-text="proxmox ? proxmox.status : 'offline'"
                       style="margin-left:auto;margin-right:.25rem"></span>
@@ -678,7 +678,7 @@
                                 </div>
                             </template>
                         </div>
-                        <div x-show="!proxmox.vms || proxmox.vms.length === 0" class="empty-msg">No VMs or containers found.</div>
+                        <div x-show="!proxmox?.vms || proxmox.vms.length === 0" class="empty-msg">No VMs or containers found.</div>
                     </div>
                 </template>
                 <template x-if="!proxmox || proxmox.status !== 'online'">
