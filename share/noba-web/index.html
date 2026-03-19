@@ -2699,11 +2699,8 @@
                         <input id="s-traefik-url" class="field-input" type="url" x-model="traefikUrl" placeholder="http://traefik:8080">
                     </div>
                     <div>
-                        <label class="field-label" for="s-traefik-key">API Key (optional)</label>
-                        <div class="reveal-wrap">
-                            <input id="s-traefik-key" class="field-input" type="password" x-model="traefikKey" autocomplete="off">
-                            <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
-                        </div>
+                        <label class="field-label" for="s-traefik-key">API (no auth needed)</label>
+                        <span class="field-hint" style="font-size:.75rem;color:var(--text-dim)">Traefik API uses no key — just enable the API in traefik config</span>
                     </div>
                 </div>
             </div>
@@ -2717,7 +2714,7 @@
                     <div>
                         <label class="field-label" for="s-npm-key">API Token</label>
                         <div class="reveal-wrap">
-                            <input id="s-npm-key" class="field-input" type="password" x-model="npmKey" autocomplete="off">
+                            <input id="s-npm-key" class="field-input" type="password" x-model="npmToken" autocomplete="off">
                             <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
                         </div>
                     </div>
@@ -2733,7 +2730,7 @@
                     <div>
                         <label class="field-label" for="s-authentik-key">API Token</label>
                         <div class="reveal-wrap">
-                            <input id="s-authentik-key" class="field-input" type="password" x-model="authentikKey" autocomplete="off">
+                            <input id="s-authentik-key" class="field-input" type="password" x-model="authentikToken" autocomplete="off">
                             <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
                         </div>
                     </div>
@@ -2751,7 +2748,7 @@
                     </div>
                     <div>
                         <label class="field-label" for="s-cf-zone">Zone ID</label>
-                        <input id="s-cf-zone" class="field-input" type="text" x-model="cloudflareZone" placeholder="Zone ID">
+                        <input id="s-cf-zone" class="field-input" type="text" x-model="cloudflareZoneId" placeholder="Zone ID">
                     </div>
                 </div>
             </div>
@@ -2905,7 +2902,7 @@
                     <div>
                         <label class="field-label" for="s-gitea-key">API Token</label>
                         <div class="reveal-wrap">
-                            <input id="s-gitea-key" class="field-input" type="password" x-model="giteaKey" autocomplete="off">
+                            <input id="s-gitea-key" class="field-input" type="password" x-model="giteaToken" autocomplete="off">
                             <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
                         </div>
                     </div>
@@ -2921,7 +2918,7 @@
                     <div>
                         <label class="field-label" for="s-gitlab-key">Personal Access Token</label>
                         <div class="reveal-wrap">
-                            <input id="s-gitlab-key" class="field-input" type="password" x-model="gitlabKey" autocomplete="off">
+                            <input id="s-gitlab-key" class="field-input" type="password" x-model="gitlabToken" autocomplete="off">
                             <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
                         </div>
                     </div>
@@ -2947,7 +2944,7 @@
                     <div>
                         <label class="field-label" for="s-paperless-key">API Token</label>
                         <div class="reveal-wrap">
-                            <input id="s-paperless-key" class="field-input" type="password" x-model="paperlessKey" autocomplete="off">
+                            <input id="s-paperless-key" class="field-input" type="password" x-model="paperlessToken" autocomplete="off">
                             <button type="button" class="reveal-btn" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" title="Toggle visibility"><i class="fas fa-eye"></i></button>
                         </div>
                     </div>
