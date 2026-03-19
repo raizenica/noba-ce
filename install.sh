@@ -1,8 +1,10 @@
 #!/bin/bash
 # install.sh – Smart installer for Noba Automation Suite
-# Version: 3.3.0
+# Version: 3.4.0
 
 set -euo pipefail
+
+readonly INSTALLER_VERSION="3.4.0"
 
 # ── Safety ─────────────────────────────────────────────────────────────────────
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -68,7 +70,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     show_help
 fi
 if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
-    echo "install.sh version 3.3.0"; exit 0
+    echo "install.sh version $INSTALLER_VERSION"; exit 0
 fi
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
@@ -129,7 +131,10 @@ write_manifest() {
         return
     }
 
-    printf '%s\n' "${INSTALLED_FILES[@]}" > "$tmp"
+    {
+        echo "# Noba v${INSTALLER_VERSION} — installed $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s\n' "${INSTALLED_FILES[@]}"
+    } > "$tmp"
     mv "$tmp" "$MANIFEST_FILE"
     say_ok "Manifest written: $MANIFEST_FILE"
 }
@@ -139,9 +144,11 @@ rollback() {
     if [[ "$exit_code" -ne 0 && "$DRY_RUN" == false ]]; then
         if [[ ${#INSTALLED_FILES[@]} -gt 0 ]]; then
             say_warn "Install failed — rolling back ${#INSTALLED_FILES[@]} installed file(s)..."
+            systemctl --user stop noba-web.service 2>/dev/null || true
             for f in "${INSTALLED_FILES[@]}"; do
                 rm -f "$f" && say_warn "  Removed: $f" || true
             done
+            find "${LIBEXEC_DIR:-/tmp}/web" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
         else
             say_warn "Install failed — no manifest entries to rollback."
         fi
@@ -400,7 +407,7 @@ while [[ $# -gt 0 ]]; do
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
         -h|--help)         show_help ;;
-        -v|--version)      echo "install.sh version 3.3.0"; exit 0 ;;
+        -v|--version)      echo "install.sh version $INSTALLER_VERSION"; exit 0 ;;
         *) say_err "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -410,7 +417,7 @@ if [[ "$UNINSTALL" == true ]]; then
 fi
 
 # ── Begin install ─────────────────────────────────────────────────────────────
-header "Noba Automation Suite Installer v3.3.0"
+header "Noba Automation Suite Installer v$INSTALLER_VERSION"
 
 detect_os
 say "OS: $OS_NAME ($OS_ID${OS_VERSION:+ $OS_VERSION})"
@@ -519,11 +526,45 @@ if [[ -d "$server_pkg_src" ]]; then
     if [[ "$DRY_RUN" == true ]]; then
         dry "install $server_pkg_src/ → $server_pkg_dst/"
     else
+        # Validate Python syntax before deploying
+        _syntax_ok=true
+        for pyf in "$server_pkg_src"/*.py; do
+            [[ -f "$pyf" ]] || continue
+            if ! python3 -m py_compile "$pyf" 2>/dev/null; then
+                say_err "Syntax error in $(basename "$pyf") — aborting deploy"
+                _syntax_ok=false
+            fi
+        done
+        if [[ "$_syntax_ok" != true ]]; then
+            say_err "Fix syntax errors before installing."
+            exit 1
+        fi
+
+        # Clean stale bytecode cache and leftover nested dirs
+        find "$server_pkg_dst" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        [[ -d "$server_pkg_dst/server" ]] && rm -rf "$server_pkg_dst/server"
+
+        # Deploy all .py files (top-level)
         mkdir -p "$server_pkg_dst"
         for pyf in "$server_pkg_src"/*.py; do
             [[ -f "$pyf" ]] || continue
             install_file "$pyf" "$server_pkg_dst/$(basename "$pyf")" 644
         done
+
+        # Deploy subdirectories (routers, etc.) recursively
+        shopt -s nullglob
+        for subdir in "$server_pkg_src"/*/; do
+            [[ -d "$subdir" ]] || continue
+            dirname=$(basename "$subdir")
+            [[ "$dirname" == "__pycache__" ]] && continue
+            mkdir -p "$server_pkg_dst/$dirname"
+            for pyf in "$subdir"*.py; do
+                [[ -f "$pyf" ]] || continue
+                install_file "$pyf" "$server_pkg_dst/$dirname/$(basename "$pyf")" 644
+            done
+        done
+        shopt -u nullglob
+
         say_ok "Web server package (FastAPI modules)"
     fi
 fi
@@ -627,7 +668,6 @@ web:
       url: "http://localhost:8080/api/health"
 
 backup_verifier:
-  num_files: 5
   checksum_cmd: "sha256sum"
 
 # Notifications (optional)
@@ -687,6 +727,17 @@ else
 fi
 
 reload_systemd
+
+# ── Restart web service if running ───────────────────────────────────────
+if [[ "$DRY_RUN" == false && "$NO_SYSTEMD" != true ]] && command -v systemctl &>/dev/null; then
+    if systemctl --user is-active noba-web.service &>/dev/null; then
+        if systemctl --user restart noba-web.service 2>/dev/null; then
+            say_ok "noba-web service restarted."
+        else
+            say_warn "Failed to restart noba-web — run: systemctl --user restart noba-web.service"
+        fi
+    fi
+fi
 
 # ── Finalise ──────────────────────────────────────────────────────────────────
 if [[ "$DRY_RUN" == false && ${#INSTALLED_FILES[@]} -gt 0 ]]; then
