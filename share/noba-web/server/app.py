@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import authenticate, load_legacy_user, pbkdf2_hash, rate_limiter, token_store, \
@@ -44,6 +44,16 @@ _server_start_time = time.time()
 
 # ── Static files directory ────────────────────────────────────────────────────
 _WEB_DIR = Path(__file__).parent.parent   # share/noba-web/
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _safe_int(value: object, default: int) -> int:
+    """Convert *value* to int, returning *default* on bad input."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return default
+
 
 # ── Cleanup loop ──────────────────────────────────────────────────────────────
 _prune_counter = 0
@@ -493,9 +503,9 @@ async def api_alert_rules_create(request: Request, auth=Depends(_require_admin))
         "severity": body.get("severity", "warning"),
         "message": body.get("message", condition),
         "channels": body.get("channels", []),
-        "cooldown": int(body.get("cooldown", 300)),
+        "cooldown": _safe_int(body.get("cooldown", 300), 300),
         "action": body.get("action"),
-        "max_retries": int(body.get("max_retries", 3)),
+        "max_retries": _safe_int(body.get("max_retries", 3), 3),
         "group": body.get("group", ""),
         "escalation": body.get("escalation", []),
     }
@@ -1275,7 +1285,7 @@ def _build_auto_service_process(config: dict) -> subprocess.Popen | None:
 
 
 def _build_auto_delay_process(config: dict) -> subprocess.Popen | None:
-    seconds = int(config.get("seconds", config.get("duration", 10)))
+    seconds = _safe_int(config.get("seconds", config.get("duration", 10)), 10)
     return subprocess.Popen(["sleep", str(seconds)], stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, start_new_session=True)
 
@@ -1513,7 +1523,7 @@ async def api_automations_run(auto_id: str, request: Request, auth=Depends(_requ
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
-        wf_retries = int(config.get("retries", 0))
+        wf_retries = _safe_int(config.get("retries", 0), 0)
         mode = config.get("mode", "sequential")
         if mode == "parallel":
             _run_parallel_workflow(auto_id, steps, username)
@@ -1730,7 +1740,7 @@ async def api_automations_trigger(auto_id: str, request: Request):
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
-        wf_retries = int(config.get("retries", 0))
+        wf_retries = _safe_int(config.get("retries", 0), 0)
         mode = config.get("mode", "sequential")
         if mode == "parallel":
             _run_parallel_workflow(auto_id, steps, triggered_by)
@@ -2129,7 +2139,6 @@ async def api_oidc_login(request: Request):
         "scope": "openid email profile",
         "redirect_uri": redirect_uri,
     })
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(f"{provider.rstrip('/')}/authorize?{params}")
 
 
@@ -2172,7 +2181,6 @@ async def api_oidc_callback(request: Request):
         noba_token = token_store.generate(email, "viewer")
         db.audit_log("oidc_login", email, "OIDC login", _client_ip(request))
         # Redirect to frontend with token
-        from fastapi.responses import RedirectResponse
         return RedirectResponse(f"/?token={noba_token}")
     except HTTPException:
         raise
@@ -2901,7 +2909,7 @@ async def api_custom_report(request: Request, auth=Depends(_get_auth)):
     """Generate a custom report from a template definition."""
     body = await _read_body(request)
     metrics = body.get("metrics", ["cpu_percent", "mem_percent"])
-    range_h = int(body.get("range_hours", 24))
+    range_h = _safe_int(body.get("range_hours", 24), 24)
     title = body.get("title", "Custom Report")
 
     report_data = {}
