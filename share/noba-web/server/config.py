@@ -63,6 +63,7 @@ _BACKUP_WEB_KEYS = frozenset([
     "backupSources", "backupDest", "backupRetentionDays", "backupKeepCount",
     "backupVerifySample", "backupMaxDelete", "backupEmail",
     "cloudRemote", "downloadsDir",
+    "organizeMaxDepth", "organizeExclude", "organizeCustomRules",
 ])
 
 # ── State file paths ────────────────────────────────────────────────────────

@@ -1165,10 +1165,48 @@
                             <label class="field-label">Target Directory</label>
                             <div class="badge bn" style="text-transform:none;font-family:var(--font-data)" x-text="downloadsDir || 'Not configured'"></div>
                         </div>
+                        <div class="field-2" style="margin-bottom:.75rem">
+                            <div>
+                                <label class="field-label">Max Depth</label>
+                                <select class="theme-select" style="width:100%" x-model.number="organizeMaxDepth">
+                                    <option value="1">1 — Top level only</option>
+                                    <option value="2">2 — One subfolder deep</option>
+                                    <option value="3">3 — Two subfolders deep</option>
+                                    <option value="5">5 — Deep scan</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="field-label">Exclude Patterns</label>
+                                <input class="field-input" type="text" x-model="organizeExclude" placeholder="*.part, *.crdownload" style="font-size:.78rem">
+                            </div>
+                        </div>
+                        <!-- Custom rules -->
+                        <div style="margin-bottom:.6rem">
+                            <label class="field-label">Custom Rules</label>
+                            <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.4rem">
+                                <template x-for="(rule, idx) in organizeCustomRules" :key="idx">
+                                    <span class="badge bn" style="font-size:.65rem;display:inline-flex;align-items:center;gap:.3rem">
+                                        <span x-text="rule"></span>
+                                        <button style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:.7rem" @click="removeOrgRule(idx)">&times;</button>
+                                    </span>
+                                </template>
+                            </div>
+                            <div style="display:flex;gap:.3rem">
+                                <input class="field-input" type="text" x-model="newOrgRule" placeholder="ext:Category (e.g. blend:3DModels)" style="flex:1;font-size:.78rem" @keydown.enter.prevent="addOrgRule()">
+                                <button class="btn btn-sm" @click="addOrgRule()" style="white-space:nowrap"><i class="fas fa-plus" aria-hidden="true"></i></button>
+                            </div>
+                        </div>
                         <div style="display:flex;gap:1rem;margin-bottom:.75rem">
                             <label class="toggle-item"><input type="checkbox" x-model="dryRun"> Dry Run</label>
                         </div>
-                        <button class="btn btn-sm btn-primary" style="width:100%" :disabled="runningScript" @click="runScript('organize', dryRun ? '--dry-run' : ''); opt = false;">
+                        <button class="btn btn-sm btn-primary" style="width:100%" :disabled="runningScript" @click="
+                            let args = [];
+                            if (dryRun) args.push('--dry-run');
+                            if (organizeMaxDepth > 1) args.push('--max-depth', organizeMaxDepth);
+                            if (organizeExclude) args.push('--exclude', organizeExclude);
+                            runScript('organize', args.join(' '));
+                            opt = false;
+                        ">
                             <i class="fas fa-play" aria-hidden="true"></i> Execute Job
                         </button>
                     </div>
