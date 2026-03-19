@@ -46,6 +46,9 @@ _server_start_time = time.time()
 _agent_data: dict[str, dict] = {}
 _agent_data_lock = threading.Lock()
 _AGENT_MAX_AGE = 120  # Consider agent offline after 2 minutes
+_agent_commands: dict[str, list] = {}  # hostname -> pending commands
+_agent_cmd_results: dict[str, list] = {}  # hostname -> recent results
+_agent_cmd_lock = threading.Lock()
 
 # ── Static files directory ────────────────────────────────────────────────────
 _WEB_DIR = Path(__file__).parent.parent   # share/noba-web/
@@ -3870,9 +3873,19 @@ async def api_agent_report(request: Request):
     hostname = body.get("hostname", "unknown")
     body["_received"] = time.time()
     body["_ip"] = _client_ip(request)
+    # Store command results if present
+    cmd_results = body.pop("_cmd_results", None)
+    if cmd_results:
+        with _agent_cmd_lock:
+            _agent_cmd_results[hostname] = cmd_results
     with _agent_data_lock:
         _agent_data[hostname] = body
-    return {"status": "ok"}
+    # Return pending commands (piggybacked on the response)
+    pending = []
+    with _agent_cmd_lock:
+        if hostname in _agent_commands:
+            pending = _agent_commands.pop(hostname)
+    return {"status": "ok", "commands": pending}
 
 
 @app.get("/api/agents")
@@ -3884,7 +3897,7 @@ def api_agents(auth=Depends(_get_auth)):
         for hostname, data in sorted(_agent_data.items()):
             age = now - data.get("_received", 0)
             agents.append({
-                **data,
+                **{k: v for k, v in data.items() if not k.startswith("_")},
                 "online": age < _AGENT_MAX_AGE,
                 "last_seen_s": int(age),
             })
@@ -3899,7 +3912,58 @@ def api_agent_detail(hostname: str, auth=Depends(_get_auth)):
     if not data:
         raise HTTPException(404, "Agent not found")
     age = time.time() - data.get("_received", 0)
-    return {**data, "online": age < _AGENT_MAX_AGE, "last_seen_s": int(age)}
+    # Include last command results
+    with _agent_cmd_lock:
+        cmd_results = _agent_cmd_results.get(hostname, [])
+    return {
+        **{k: v for k, v in data.items() if not k.startswith("_")},
+        "online": age < _AGENT_MAX_AGE,
+        "last_seen_s": int(age),
+        "cmd_results": cmd_results,
+    }
+
+
+@app.post("/api/agents/{hostname}/command")
+async def api_agent_command(hostname: str, request: Request, auth=Depends(_require_admin)):
+    """Queue a command for an agent. Delivered on next report cycle."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    cmd_type = body.get("type", "")
+    params = body.get("params", {})
+    valid_types = {"exec", "restart_service", "update_agent", "set_interval", "ping"}
+    if cmd_type not in valid_types:
+        raise HTTPException(400, f"Invalid command type. Valid: {', '.join(sorted(valid_types))}")
+    import secrets
+    cmd_id = secrets.token_hex(8)
+    cmd = {"id": cmd_id, "type": cmd_type, "params": params, "queued_by": username, "queued_at": int(time.time())}
+    with _agent_cmd_lock:
+        _agent_commands.setdefault(hostname, []).append(cmd)
+    db.audit_log("agent_command", username, f"host={hostname} type={cmd_type} id={cmd_id}", ip)
+    return {"status": "queued", "id": cmd_id}
+
+
+@app.get("/api/agents/{hostname}/results")
+def api_agent_results(hostname: str, auth=Depends(_get_auth)):
+    """Get command execution results for an agent."""
+    with _agent_cmd_lock:
+        return _agent_cmd_results.get(hostname, [])
+
+
+@app.get("/api/agent/update")
+def api_agent_update(request: Request):
+    """Serve the latest agent.py for self-update. Auth via X-Agent-Key."""
+    key = request.headers.get("X-Agent-Key", "")
+    if not key:
+        raise HTTPException(401, "Missing X-Agent-Key")
+    cfg = read_yaml_settings()
+    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
+    if not valid_keys or key not in valid_keys:
+        raise HTTPException(403, "Invalid agent key")
+    agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
+    if not agent_path.exists():
+        raise HTTPException(404, "Agent file not found")
+    return FileResponse(agent_path, media_type="text/x-python")
 
 
 # ── Incident endpoints ───────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ import urllib.request
 import urllib.error
 
 # ── Configuration ────────────────────────────────────────────────────────────
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_INTERVAL = 30
 DEFAULT_CONFIG = "/etc/noba-agent.yaml"
 # Mount types to exclude from disk reporting
@@ -381,10 +381,143 @@ def collect_metrics() -> dict:
     return data
 
 
+# ── Command execution ────────────────────────────────────────────────────────
+
+# Commands the agent is allowed to execute. Anything not here is rejected.
+ALLOWED_COMMANDS = {
+    "exec":             "_cmd_exec",
+    "restart_service":  "_cmd_restart_service",
+    "update_agent":     "_cmd_update_agent",
+    "set_interval":     "_cmd_set_interval",
+    "ping":             "_cmd_ping",
+}
+
+# Safety: max output size, max execution time
+_CMD_MAX_OUTPUT = 4096
+_CMD_TIMEOUT = 30
+
+
+def _cmd_exec(params: dict, ctx: dict) -> dict:
+    """Execute a shell command (with safety limits)."""
+    import subprocess
+    cmd = params.get("command", "")
+    if not cmd:
+        return {"status": "error", "error": "No command provided"}
+    timeout = min(params.get("timeout", _CMD_TIMEOUT), 60)
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+        )
+        return {
+            "status": "ok" if result.returncode == 0 else "error",
+            "exit_code": result.returncode,
+            "stdout": result.stdout[:_CMD_MAX_OUTPUT],
+            "stderr": result.stderr[:_CMD_MAX_OUTPUT],
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "error": f"Timeout after {timeout}s"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _cmd_restart_service(params: dict, ctx: dict) -> dict:
+    """Restart a systemd service."""
+    import subprocess
+    import re
+    service = params.get("service", "")
+    if not service or not re.match(r'^[a-zA-Z0-9@._-]+$', service) or len(service) > 128:
+        return {"status": "error", "error": "Invalid service name"}
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "systemctl", "restart", service],
+            capture_output=True, text=True, timeout=30,
+        )
+        return {
+            "status": "ok" if result.returncode == 0 else "error",
+            "exit_code": result.returncode,
+            "output": (result.stdout + result.stderr)[:_CMD_MAX_OUTPUT],
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _cmd_update_agent(params: dict, ctx: dict) -> dict:
+    """Download updated agent.py from the server and restart."""
+    server = ctx.get("server", "")
+    api_key = ctx.get("api_key", "")
+    if not server:
+        return {"status": "error", "error": "No server configured"}
+    url = f"{server.rstrip('/')}/api/agent/update"
+    req = urllib.request.Request(url, headers={"X-Agent-Key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                return {"status": "error", "error": f"HTTP {resp.status}"}
+            new_code = resp.read()
+        # Validate it's Python
+        if not new_code.startswith(b"#!/") and b"def main" not in new_code:
+            return {"status": "error", "error": "Invalid agent code"}
+        # Write to a temp file, then replace
+        agent_path = os.path.abspath(__file__)
+        tmp_path = agent_path + ".new"
+        with open(tmp_path, "wb") as f:
+            f.write(new_code)
+        os.replace(tmp_path, agent_path)
+        # Restart via systemd if available
+        import subprocess
+        subprocess.Popen(
+            ["sudo", "-n", "systemctl", "restart", "noba-agent"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return {"status": "ok", "message": "Agent updated, restarting..."}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _cmd_set_interval(params: dict, ctx: dict) -> dict:
+    """Change the collection interval."""
+    new_interval = params.get("interval", 0)
+    if not isinstance(new_interval, int) or new_interval < 5 or new_interval > 3600:
+        return {"status": "error", "error": "Interval must be 5-3600 seconds"}
+    ctx["interval"] = new_interval
+    return {"status": "ok", "interval": new_interval}
+
+
+def _cmd_ping(_params: dict, _ctx: dict) -> dict:
+    """Simple connectivity check."""
+    return {"status": "ok", "pong": int(time.time()), "version": VERSION}
+
+
+def execute_commands(commands: list, ctx: dict) -> list:
+    """Execute a list of commands and return results."""
+    results = []
+    handlers = {
+        "exec": _cmd_exec,
+        "restart_service": _cmd_restart_service,
+        "update_agent": _cmd_update_agent,
+        "set_interval": _cmd_set_interval,
+        "ping": _cmd_ping,
+    }
+    for cmd in commands[:10]:  # Max 10 commands per cycle
+        cmd_type = cmd.get("type", "")
+        cmd_id = cmd.get("id", "")
+        params = cmd.get("params", {})
+        handler = handlers.get(cmd_type)
+        if handler:
+            try:
+                result = handler(params, ctx)
+            except Exception as e:
+                result = {"status": "error", "error": str(e)}
+        else:
+            result = {"status": "error", "error": f"Unknown command: {cmd_type}"}
+        results.append({"id": cmd_id, "type": cmd_type, **result})
+    return results
+
+
 # ── Reporting ────────────────────────────────────────────────────────────────
 
-def report(server: str, api_key: str, metrics: dict) -> bool:
-    """Send metrics to NOBA server. Returns True on success."""
+def report(server: str, api_key: str, metrics: dict) -> tuple[bool, list]:
+    """Send metrics to NOBA server. Returns (success, pending_commands)."""
     url = f"{server.rstrip('/')}/api/agent/report"
     data = json.dumps(metrics).encode("utf-8")
     req = urllib.request.Request(
@@ -398,9 +531,12 @@ def report(server: str, api_key: str, metrics: dict) -> bool:
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, OSError):
-        return False
+            if resp.status == 200:
+                body = json.loads(resp.read())
+                return True, body.get("commands", [])
+            return False, []
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return False, []
 
 
 # ── Main Loop ────────────────────────────────────────────────────────────────
@@ -440,6 +576,8 @@ def main():
 
     consecutive_failures = 0
     max_backoff = 300  # 5 minutes max between retries
+    cmd_results = []  # Results from previous cycle's commands
+    ctx = {"server": server, "api_key": api_key, "interval": interval}
 
     while True:
         try:
@@ -448,16 +586,28 @@ def main():
                 metrics["hostname"] = hostname_override
             if cfg.get("tags"):
                 metrics["tags"] = cfg["tags"]
+            # Attach command results from previous cycle
+            if cmd_results:
+                metrics["_cmd_results"] = cmd_results
+                cmd_results = []
 
             if args.dry_run:
                 print(json.dumps(metrics, indent=2))
                 break
 
-            ok = report(server, api_key, metrics)
+            ok, commands = report(server, api_key, metrics)
             if ok:
                 if consecutive_failures > 0:
                     print(f"[agent] Connection restored after {consecutive_failures} failures")
                 consecutive_failures = 0
+                # Execute any pending commands from server
+                if commands:
+                    print(f"[agent] Received {len(commands)} command(s)")
+                    cmd_results = execute_commands(commands, ctx)
+                    # Check if interval was changed
+                    if ctx.get("interval") != interval:
+                        interval = ctx["interval"]
+                        print(f"[agent] Interval changed to {interval}s")
             else:
                 consecutive_failures += 1
                 if consecutive_failures <= 3 or consecutive_failures % 10 == 0:
