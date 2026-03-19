@@ -384,6 +384,7 @@ function dashboard() {
 
         // FIXED: plain object instead of Set so Alpine reactivity works correctly
         _dismissedAlerts: {},
+        _allCollapsed: false,
 
 
         // ── 2. Computed Properties ─────────────────────────────────────────────
