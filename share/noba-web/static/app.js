@@ -160,6 +160,7 @@ function dashboard() {
         _es: null, _poll: null, _lastHeartbeat: 0,
         _countdownTimer: null, _reconnecting: false,
         _masonryObserver: null, _keydownHandler: null,
+        _logTimer: null, _cloudTimer: null, _heartbeatTimer: null,
         _spokenAlerts: new Set(),
 
         // FIXED: plain object instead of Set so Alpine reactivity works correctly
@@ -252,16 +253,19 @@ function dashboard() {
 
             this.connectSSE();
 
-            setInterval(() => {
+            if (this._logTimer) clearInterval(this._logTimer);
+            this._logTimer = setInterval(() => {
                 if (this.vis.logs && !this.showSettings) this.fetchLog();
             }, 12000);
 
-            setInterval(() => {
+            if (this._cloudTimer) clearInterval(this._cloudTimer);
+            this._cloudTimer = setInterval(() => {
                 this.fetchCloudRemotes();
             }, 300_000);
 
             // Heartbeat watchdog — reconnects SSE if server goes silent for >15 s
-            setInterval(() => {
+            if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+            this._heartbeatTimer = setInterval(() => {
                 if (this.connStatus === 'sse' && this._lastHeartbeat &&
                     Date.now() - this._lastHeartbeat > 15_000 &&
                     !this._reconnecting) {
@@ -309,6 +313,9 @@ function dashboard() {
         },
 
         initKeyboard() {
+            if (this._keydownHandler) {
+                document.removeEventListener('keydown', this._keydownHandler);
+            }
             this._keydownHandler = (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
                 if (e.key === 's' && !this.showSettings && !this.showModal) {

@@ -111,6 +111,13 @@ function authMixin() {
                 document.removeEventListener('keydown', this._keydownHandler);
                 this._keydownHandler = null;
             }
+            if (this._masonryObserver) {
+                this._masonryObserver.disconnect();
+                this._masonryObserver = null;
+            }
+            if (this._logTimer)      { clearInterval(this._logTimer);      this._logTimer = null; }
+            if (this._cloudTimer)    { clearInterval(this._cloudTimer);    this._cloudTimer = null; }
+            if (this._heartbeatTimer){ clearInterval(this._heartbeatTimer);this._heartbeatTimer = null; }
         },
 
         // ── Admin user management ───────────────────────────────────────────────

@@ -269,7 +269,7 @@
                         </div>
                         <div class="row">
                             <span class="row-label">Active Apps</span>
-                            <span class="row-val" x-text="truenas.apps.filter(a => a.state === 'RUNNING').length + ' / ' + truenas.apps.length"></span>
+                            <span class="row-val" x-text="(truenas.apps || []).filter(a => a.state === 'RUNNING').length + ' / ' + (truenas.apps || []).length"></span>
                         </div>
                         <div class="row" x-show="truenas.alerts.length > 0">
                             <span class="row-label">Hardware Alerts</span>
@@ -360,7 +360,7 @@
                 <div x-show="qbitUrl" style="margin-bottom:1rem">
                     <div class="row" style="border-bottom:none;padding-bottom:0">
                         <span class="row-label" style="color:var(--text)">qBittorrent</span>
-                        <span class="badge" :class="qbit && qbit.status === 'online' ? 'bs' : 'bn'" x-text="qbit ? qbit.status.toUpperCase() : 'OFFLINE'"></span>
+                        <span class="badge" :class="qbit && qbit.status === 'online' ? 'bs' : 'bn'" x-text="qbit ? (qbit.status || 'offline').toUpperCase() : 'OFFLINE'"></span>
                     </div>
                     <div class="io-grid" style="margin-top:.5rem" x-show="qbit && qbit.status === 'online'">
                         <div class="io-stat">
@@ -670,7 +670,7 @@
                                          :class="vm.status==='running'?'dot-up':'dot-down'"
                                          :aria-label="vm.status"></div>
                                     <span class="ct-name" x-text="vm.name"></span>
-                                    <span class="ct-img" x-text="'#' + vm.vmid + ' · ' + vm.type.toUpperCase()"></span>
+                                    <span class="ct-img" x-text="'#' + vm.vmid + ' · ' + (vm.type || 'unknown').toUpperCase()"></span>
                                     <span class="badge" :class="vm.status==='running'?'bs':vm.status==='stopped'?'bw':'bn'"
                                           x-text="vm.status"></span>
                                     <span x-show="vm.status==='running'" class="badge bn"
