@@ -115,15 +115,11 @@ if [[ -n "$EXCLUDE_PATTERNS" ]]; then
 fi
 
 # Build list of known category folders to skip scanning into
-KNOWN_CATS=()
-for _v in "${EXT_MAP[@]}"; do
-    # Unique values
-    local _found=false 2>/dev/null || true
-    for _k in "${KNOWN_CATS[@]}"; do [[ "$_k" == "$_v" ]] && _found=true && break; done
-    [[ "$_found" != true ]] && KNOWN_CATS+=("$_v")
-done
+declare -A _seen_cats=()
+for _v in "${EXT_MAP[@]}"; do _seen_cats["$_v"]=1; done
+_seen_cats["Other"]=1
 FIND_PRUNE=()
-for _cat in "${KNOWN_CATS[@]}" "Other"; do
+for _cat in "${!_seen_cats[@]}"; do
     FIND_PRUNE+=(-not -path "$DOWNLOAD_DIR/$_cat/*")
 done
 
