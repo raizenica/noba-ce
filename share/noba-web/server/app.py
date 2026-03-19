@@ -1,4 +1,4 @@
-"""Noba Command Center – FastAPI application v1.12.0"""
+"""Noba Command Center – FastAPI application v1.13.0"""
 from __future__ import annotations
 
 import asyncio
