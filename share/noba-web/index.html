@@ -134,6 +134,15 @@
             <button class="icon-btn" @click="showInfluxModal=true" title="InfluxDB Query" x-show="authenticated && influxdbUrl" x-cloak>
                 <i class="fas fa-database"></i>
             </button>
+            <button class="icon-btn" @click="showGraylogModal=true" title="Graylog Logs" x-show="authenticated && graylogUrl" x-cloak>
+                <i class="fas fa-scroll"></i>
+            </button>
+            <button class="icon-btn" @click="showIncidentModal=true; fetchIncidents()" title="Incident Timeline" x-show="authenticated" x-cloak>
+                <i class="fas fa-exclamation-triangle"></i>
+            </button>
+            <button class="icon-btn" @click="showCorrelateModal=true" title="Metrics Correlation" x-show="authenticated" x-cloak>
+                <i class="fas fa-chart-line"></i>
+            </button>
             <button class="icon-btn" @click="showSyncModal=true; fetchSyncStatus()" title="Cross-Site Status" x-show="authenticated && Object.keys(siteMap).length > 0" x-cloak>
                 <i class="fas fa-sync"></i>
             </button>
@@ -826,6 +835,25 @@
                     <button class="btn btn-sm" @click="runRecovery('service-restart',{service:svcName})" :disabled="recoveryLoading || !svcName"><i class="fas fa-redo"></i></button>
                 </div>
                 <div x-show="recoveryResult" style="margin-top:.4rem;font-size:.75rem;padding:.3rem .5rem;background:var(--surface-2);border-radius:4px" x-text="recoveryResult"></div>
+            </div>
+        </div>
+
+        <!-- ── Remote Agents ────────────────────────────────────────────── -->
+        <div class="card" data-id="card-agents" x-show="vis.agents && agents && agents.length > 0" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr">
+                <i class="fas fa-satellite card-icon" style="color:#ab47bc" aria-hidden="true"></i>
+                <span class="card-title">Remote Agents</span>
+                <button class="icon-btn" @click="showAgentsModal=true" title="Agent details"><i class="fas fa-expand"></i></button>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.agents ? 'is-collapsed' : ''" @click="toggleCollapse('agents')" :aria-expanded="!collapsed.agents" aria-controls="body-agents" aria-label="Toggle Agents"></button>
+                <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
+            </div>
+            <div class="card-body" id="body-agents" x-show="!collapsed.agents">
+                <template x-for="a in (agents||[])" :key="a.hostname">
+                    <div class="row" style="font-size:.75rem">
+                        <span class="row-label"><i class="fas fa-circle" :class="a.online?'dot-up':'dot-down'" style="font-size:.35rem;margin-right:4px"></i><span x-text="a.hostname"></span></span>
+                        <span class="row-val" x-text="'CPU ' + (a.cpu_percent||0) + '% \u00b7 RAM ' + (a.mem_percent||0) + '%'"></span>
+                    </div>
+                </template>
             </div>
         </div>
 
@@ -2673,6 +2701,7 @@
                     <label class="toggle-item"><input type="checkbox" x-model="vis.tailscale"> Tailscale</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.frigate"> Cameras (Frigate)</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.recovery"> Recovery Actions</label>
+                    <label class="toggle-item"><input type="checkbox" x-model="vis.agents"> Remote Agents</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.radar"> Network Radar</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.kuma"> Uptime Kuma</label>
                     <label class="toggle-item"><input type="checkbox" x-model="vis.procs"> Resource Hogs</label>
@@ -2752,6 +2781,12 @@
                         <label class="field-label" for="s-lan-ip">LAN DNS IP</label>
                         <input id="s-lan-ip" class="field-input" type="text" x-model="lanTestIp" placeholder="192.168.100.111">
                     </div>
+                </div>
+            </div>
+            <div class="s-section">
+                <span class="s-label">Public Status Page</span>
+                <div><label class="field-label" for="s-status-svcs">Services to show (comma-separated keys)</label>
+                    <input id="s-status-svcs" class="field-input" type="text" x-model="statusPageServices" placeholder="scrutiny,tailscale,pihole,frigate">
                 </div>
             </div>
             <div class="s-section" x-show="userRole==='admin'">
@@ -3499,6 +3534,21 @@
                 </div>
                 <div><label class="field-label" for="s-influx-token">Token</label>
                     <div class="reveal-wrap"><input id="s-influx-token" class="field-input" type="password" x-model="influxdbToken" autocomplete="off"><button type="button" class="reveal-btn" @click="$el.previousElementSibling.type=$el.previousElementSibling.type==='password'?'text':'password'"><i class="fas fa-eye"></i></button></div>
+                </div>
+            </div>
+            <div class="s-section" x-show="intCat==='infra'">
+                <span class="s-label">Graylog</span>
+                <div class="field-2">
+                    <div><label class="field-label" for="s-graylog-url">URL</label><input id="s-graylog-url" class="field-input" type="url" x-model="graylogUrl" placeholder="http://graylog:9000"></div>
+                    <div><label class="field-label" for="s-graylog-token">API Token</label>
+                        <div class="reveal-wrap"><input id="s-graylog-token" class="field-input" type="password" x-model="graylogToken" autocomplete="off"><button type="button" class="reveal-btn" @click="$el.previousElementSibling.type=$el.previousElementSibling.type==='password'?'text':'password'"><i class="fas fa-eye"></i></button></div>
+                    </div>
+                </div>
+            </div>
+            <div class="s-section" x-show="intCat==='auth'">
+                <span class="s-label">Agent Keys</span>
+                <div><label class="field-label" for="s-agent-keys">Comma-separated API keys for agent auth</label>
+                    <div class="reveal-wrap"><input id="s-agent-keys" class="field-input" type="password" x-model="agentKeys" placeholder="key1,key2" autocomplete="off"><button type="button" class="reveal-btn" @click="$el.previousElementSibling.type=$el.previousElementSibling.type==='password'?'text':'password'"><i class="fas fa-eye"></i></button></div>
                 </div>
             </div>
             <div class="s-section" x-show="intCat==='auth'">
@@ -4999,6 +5049,120 @@
                         </table>
                     </template>
                     <div x-show="syncStatus.message" class="empty-msg" x-text="syncStatus.message"></div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<!-- ── Agents Modal ──────────────────────────────────────────────── -->
+<div class="modal-overlay" x-show="showAgentsModal" x-cloak @keydown.escape.window="showAgentsModal=false" @click.self="showAgentsModal=false">
+    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title"><i class="fas fa-satellite"></i> Remote Agents<button class="modal-close" @click="showAgentsModal=false">&times;</button></div>
+        <div style="padding:16px">
+            <template x-if="agents && agents.length > 0">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.8rem">
+                    <template x-for="a in agents" :key="a.hostname">
+                        <div style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)" :style="a.online?'border-left:3px solid var(--success)':'border-left:3px solid var(--danger)'">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
+                                <span style="font-weight:700" x-text="a.hostname"></span>
+                                <span class="badge" :class="a.online?'bs':'bd'" x-text="a.online?'online':'offline'" style="font-size:.55rem"></span>
+                            </div>
+                            <div style="font-size:.7rem;color:var(--text-muted)">
+                                <div>CPU: <span x-text="(a.cpu_percent||0)+'%'"></span> &middot; RAM: <span x-text="(a.mem_percent||0)+'%'"></span></div>
+                                <div x-text="a.platform + ' \u00b7 ' + (a.arch||'')"></div>
+                                <div x-text="'Uptime: ' + Math.floor((a.uptime_s||0)/3600) + 'h'"></div>
+                                <div x-show="a.disks" style="margin-top:.3rem">
+                                    <template x-for="d in (a.disks||[]).slice(0,3)" :key="d.mount">
+                                        <div><span x-text="d.mount"></span>: <span x-text="d.percent+'%'"></span></div>
+                                    </template>
+                                </div>
+                                <div x-show="a.top_processes" style="margin-top:.3rem">
+                                    <template x-for="p in (a.top_processes||[]).slice(0,3)" :key="p.pid">
+                                        <div style="opacity:.7"><span x-text="p.name"></span> <span x-text="p.cpu+'%'"></span></div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <div x-show="!agents || agents.length===0" class="empty-msg">No agents reporting. Deploy agents to remote nodes to see their metrics here.</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Incident Timeline Modal ──────────────────────────────────── -->
+<div class="modal-overlay" x-show="showIncidentModal" x-cloak @keydown.escape.window="showIncidentModal=false" @click.self="showIncidentModal=false">
+    <div class="modal-box" style="max-width:700px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title"><i class="fas fa-exclamation-triangle"></i> Incident Timeline<button class="modal-close" @click="showIncidentModal=false">&times;</button></div>
+        <div style="padding:16px">
+            <div x-show="incidentLoading" class="empty-msg">Loading...</div>
+            <template x-if="incidents.length > 0 && !incidentLoading">
+                <div>
+                    <template x-for="inc in incidents" :key="inc.id">
+                        <div style="display:flex;gap:.6rem;margin-bottom:.8rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0" :style="inc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':inc.severity==='warning'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'">
+                            <div style="flex:1">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <span style="font-weight:600;font-size:.85rem" x-text="inc.title"></span>
+                                    <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date(inc.timestamp*1000).toLocaleString()"></span>
+                                </div>
+                                <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem" x-text="inc.source + (inc.details ? ' \u2014 ' + inc.details : '')"></div>
+                                <div style="margin-top:.3rem" x-show="!inc.resolved_at">
+                                    <button class="btn btn-xs" @click="resolveIncident(inc.id)"><i class="fas fa-check"></i> Resolve</button>
+                                </div>
+                                <div x-show="inc.resolved_at" style="font-size:.65rem;color:var(--success);margin-top:.2rem">Resolved <span x-text="new Date(inc.resolved_at*1000).toLocaleTimeString()"></span></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <div x-show="!incidentLoading && incidents.length===0" class="empty-msg">No incidents in the last 24 hours.</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Metrics Correlation Modal ─────────────────────────────────── -->
+<div class="modal-overlay" x-show="showCorrelateModal" x-cloak @keydown.escape.window="showCorrelateModal=false" @click.self="showCorrelateModal=false">
+    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title"><i class="fas fa-chart-line"></i> Metrics Correlation<button class="modal-close" @click="showCorrelateModal=false">&times;</button></div>
+        <div style="padding:16px">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+                <input class="field-input" x-model="correlateMetrics" placeholder="cpu_percent,mem_percent,net_rx_bytes (comma-separated)" style="flex:1;font-size:.8rem">
+                <select class="field-select" x-model.number="correlateHours" style="width:80px">
+                    <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option><option value="72">3d</option><option value="168">7d</option>
+                </select>
+                <button class="btn btn-primary btn-sm" @click="fetchCorrelation()" :disabled="correlateLoading"><i class="fas fa-play"></i></button>
+            </div>
+            <canvas id="correlate-chart" height="300"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- ── Graylog Modal ─────────────────────────────────────────────── -->
+<div class="modal-overlay" x-show="showGraylogModal" x-cloak @keydown.escape.window="showGraylogModal=false" @click.self="showGraylogModal=false">
+    <div class="modal-box" style="max-width:800px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title"><i class="fas fa-scroll"></i> Graylog Search<button class="modal-close" @click="showGraylogModal=false">&times;</button></div>
+        <div style="padding:16px">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+                <input class="field-input" x-model="graylogQuery" placeholder="Search query..." @keyup.enter="searchGraylog()" style="flex:1;font-size:.8rem">
+                <button class="btn btn-primary btn-sm" @click="searchGraylog()" :disabled="graylogLoading"><i class="fas fa-search"></i></button>
+            </div>
+            <div x-show="graylogLoading" class="empty-msg">Searching...</div>
+            <template x-if="graylogResults && !graylogLoading">
+                <div>
+                    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.5rem" x-text="(graylogResults.total||0) + ' results'"></div>
+                    <div style="max-height:400px;overflow-y:auto">
+                        <template x-for="(msg,i) in (graylogResults.messages||[])" :key="i">
+                            <div style="padding:.4rem;border-bottom:1px solid var(--border);font-size:.75rem">
+                                <div style="display:flex;justify-content:space-between">
+                                    <span style="color:var(--accent)" x-text="msg.source"></span>
+                                    <span style="color:var(--text-muted);font-size:.65rem" x-text="msg.timestamp"></span>
+                                </div>
+                                <div style="margin-top:.2rem;word-break:break-word" x-text="msg.message"></div>
+                            </div>
+                        </template>
+                    </div>
                 </div>
             </template>
         </div>

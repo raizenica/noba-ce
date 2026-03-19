@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NOBA Status</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0e17; color: #c8dff0; min-height: 100vh; }
+        .container { max-width: 640px; margin: 0 auto; padding: 2rem 1rem; }
+        h1 { font-size: 1.1rem; letter-spacing: .2em; text-transform: uppercase; margin-bottom: .5rem; }
+        .subtitle { font-size: .75rem; color: #4a7a9b; margin-bottom: 2rem; }
+        .overall { padding: 1rem; border-radius: 8px; margin-bottom: 2rem; text-align: center; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; font-size: .85rem; }
+        .overall.operational { background: rgba(0,230,118,.1); border: 1px solid rgba(0,230,118,.3); color: #00e676; }
+        .overall.degraded { background: rgba(255,179,0,.1); border: 1px solid rgba(255,179,0,.3); color: #ffb300; }
+        .overall.major_outage { background: rgba(255,23,68,.1); border: 1px solid rgba(255,23,68,.3); color: #ff1744; }
+        .service { display: flex; justify-content: space-between; align-items: center; padding: .75rem 0; border-bottom: 1px solid rgba(30,58,95,.4); }
+        .service:last-child { border-bottom: none; }
+        .svc-name { font-size: .85rem; text-transform: capitalize; }
+        .svc-status { font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; padding: .2rem .6rem; border-radius: 3px; }
+        .svc-status.operational { color: #00e676; background: rgba(0,230,118,.1); }
+        .svc-status.degraded { color: #ffb300; background: rgba(255,179,0,.1); }
+        .svc-status.unknown { color: #4a7a9b; background: rgba(74,122,155,.1); }
+        .footer { margin-top: 2rem; text-align: center; font-size: .65rem; color: #4a7a9b; }
+        .updated { font-size: .7rem; color: #4a7a9b; text-align: center; margin-top: .5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>NOBA // Status</h1>
+        <p class="subtitle">System Status Page</p>
+        <div id="overall" class="overall operational">Loading...</div>
+        <div id="services"></div>
+        <div id="updated" class="updated"></div>
+        <div class="footer">Powered by NOBA Command Center</div>
+    </div>
+    <script>
+        async function refresh() {
+            try {
+                const r = await fetch('/api/status/public');
+                const d = await r.json();
+                const el = document.getElementById('overall');
+                el.className = 'overall ' + d.overall;
+                el.textContent = d.overall === 'operational' ? 'All Systems Operational' :
+                    d.overall === 'degraded' ? 'Partial System Degradation' : 'Major Outage';
+                const sEl = document.getElementById('services');
+                sEl.innerHTML = (d.services || []).map(s =>
+                    '<div class="service"><span class="svc-name">' + s.name + '</span><span class="svc-status ' + s.status + '">' + s.status + '</span></div>'
+                ).join('');
+                document.getElementById('updated').textContent = 'Updated: ' + new Date(d.timestamp * 1000).toLocaleTimeString();
+            } catch(e) { document.getElementById('overall').textContent = 'Unable to fetch status'; }
+        }
+        refresh();
+        setInterval(refresh, 30000);
+    </script>
+</body>
+</html>

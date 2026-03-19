@@ -1317,6 +1317,43 @@ def get_scrutiny_intelligence(url: str) -> list[dict] | None:
         return None
 
 
+# ── Graylog ──────────────────────────────────────────────────────────────────
+def get_graylog(url: str, token: str, query: str = "*", hours: int = 1) -> dict | None:
+    """Query Graylog for recent log messages."""
+    if not url or not token:
+        return None
+    base = url.rstrip("/")
+    try:
+        import base64 as b64
+        auth = b64.b64encode(f"{token}:token".encode()).decode()
+        r = _client.get(
+            f"{base}/api/search/universal/relative",
+            params={"query": query, "range": hours * 3600, "limit": 50, "sort": "timestamp:desc"},
+            headers={"Authorization": f"Basic {auth}", "Accept": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        messages = []
+        for msg in data.get("messages", []):
+            m = msg.get("message", {})
+            messages.append({
+                "timestamp": m.get("timestamp", ""),
+                "source": m.get("source", ""),
+                "message": m.get("message", "")[:200],
+                "level": m.get("level", 0),
+                "facility": m.get("facility", ""),
+            })
+        return {
+            "total": data.get("total_results", 0),
+            "messages": messages,
+            "query": query,
+            "status": "online",
+        }
+    except (httpx.HTTPError, KeyError, ValueError):
+        return None
+
+
 # ── InfluxDB v2 ─────────────────────────────────────────────────────────────
 def query_influxdb(url: str, token: str, org: str, query: str) -> list[dict] | None:
     """Execute a Flux query against InfluxDB v2 and return results."""

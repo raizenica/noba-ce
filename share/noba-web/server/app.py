@@ -42,6 +42,11 @@ from .yaml_config import read_yaml_settings, write_yaml_settings
 logger = logging.getLogger("noba")
 _server_start_time = time.time()
 
+# ── Agent data store ─────────────────────────────────────────────────────────
+_agent_data: dict[str, dict] = {}
+_agent_data_lock = threading.Lock()
+_AGENT_MAX_AGE = 120  # Consider agent offline after 2 minutes
+
 # ── Static files directory ────────────────────────────────────────────────────
 _WEB_DIR = Path(__file__).parent.parent   # share/noba-web/
 
@@ -3848,6 +3853,165 @@ async def ws_terminal(ws: WebSocket):
         return
     from .terminal import terminal_handler
     await terminal_handler(ws, username)
+
+
+# ── Agent endpoints ───────────────────────────────────────────────────────────
+@app.post("/api/agent/report")
+async def api_agent_report(request: Request):
+    """Receive metrics from a NOBA agent.  Auth via X-Agent-Key header."""
+    key = request.headers.get("X-Agent-Key", "")
+    if not key:
+        raise HTTPException(401, "Missing X-Agent-Key")
+    cfg = read_yaml_settings()
+    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
+    if not valid_keys or key not in valid_keys:
+        raise HTTPException(403, "Invalid agent key")
+    body = await _read_body(request)
+    hostname = body.get("hostname", "unknown")
+    body["_received"] = time.time()
+    body["_ip"] = _client_ip(request)
+    with _agent_data_lock:
+        _agent_data[hostname] = body
+    return {"status": "ok"}
+
+
+@app.get("/api/agents")
+def api_agents(auth=Depends(_get_auth)):
+    """List all reporting agents and their latest metrics."""
+    now = time.time()
+    with _agent_data_lock:
+        agents = []
+        for hostname, data in sorted(_agent_data.items()):
+            age = now - data.get("_received", 0)
+            agents.append({
+                **data,
+                "online": age < _AGENT_MAX_AGE,
+                "last_seen_s": int(age),
+            })
+    return agents
+
+
+@app.get("/api/agents/{hostname}")
+def api_agent_detail(hostname: str, auth=Depends(_get_auth)):
+    """Get detailed metrics for a specific agent."""
+    with _agent_data_lock:
+        data = _agent_data.get(hostname)
+    if not data:
+        raise HTTPException(404, "Agent not found")
+    age = time.time() - data.get("_received", 0)
+    return {**data, "online": age < _AGENT_MAX_AGE, "last_seen_s": int(age)}
+
+
+# ── Incident endpoints ───────────────────────────────────────────────────────
+@app.get("/api/incidents")
+def api_incidents(request: Request, auth=Depends(_get_auth)):
+    hours = _safe_int(request.query_params.get("hours", "24"), 24)
+    return db.get_incidents(limit=200, hours=min(hours, 168))
+
+
+@app.post("/api/incidents/{incident_id}/resolve")
+def api_resolve_incident(incident_id: int, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    db.resolve_incident(incident_id)
+    db.audit_log("incident_resolved", username, f"id={incident_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+# ── Status page endpoints ────────────────────────────────────────────────────
+@app.get("/status")
+def public_status_page():
+    """Public-facing status page -- no auth required."""
+    return FileResponse(_WEB_DIR / "status.html")
+
+
+@app.get("/api/status/public")
+def api_public_status():
+    """Public status data -- no auth required.  Only exposes configured services."""
+    cfg = read_yaml_settings()
+    status_services = [s.strip() for s in cfg.get("statusPageServices", "").split(",") if s.strip()]
+    if not status_services:
+        return {"services": [], "overall": "operational", "message": "No services configured for status page"}
+
+    data = bg_collector.get() or {}
+    services = []
+    for svc in status_services:
+        val = data.get(svc)
+        if val is None:
+            status = "unknown"
+        elif isinstance(val, dict) and val.get("status"):
+            status = "operational" if val["status"] in ("online", "enabled", "ok") else "degraded"
+        elif isinstance(val, list) and len(val) > 0:
+            status = "operational"
+        else:
+            status = "operational" if val else "unknown"
+        services.append({"name": svc, "status": status})
+
+    overall = "operational"
+    if any(s["status"] == "degraded" for s in services):
+        overall = "degraded"
+    if all(s["status"] in ("unknown", "degraded") for s in services):
+        overall = "major_outage"
+
+    return {"services": services, "overall": overall, "timestamp": int(time.time())}
+
+
+# ── Graylog endpoint ─────────────────────────────────────────────────────────
+@app.get("/api/graylog/search")
+def api_graylog_search(request: Request, auth=Depends(_get_auth)):
+    cfg = read_yaml_settings()
+    url = cfg.get("graylogUrl", "")
+    token = cfg.get("graylogToken", "")
+    query = request.query_params.get("q", "*")
+    hours = min(_safe_int(request.query_params.get("hours", "1"), 1), 168)
+    if not url:
+        raise HTTPException(404, "Graylog not configured")
+    from .integrations import get_graylog
+    result = get_graylog(url, token, query, hours)
+    return result or {"messages": [], "total": 0}
+
+
+# ── Runbook endpoints ────────────────────────────────────────────────────────
+@app.get("/api/runbooks")
+def api_runbooks(auth=Depends(_get_auth)):
+    cfg = read_yaml_settings()
+    runbooks = cfg.get("runbooks", [])
+    if isinstance(runbooks, str):
+        try:
+            runbooks = json.loads(runbooks)
+        except (json.JSONDecodeError, TypeError):
+            runbooks = []
+    return runbooks
+
+
+@app.get("/api/runbooks/{runbook_id}")
+def api_runbook_detail(runbook_id: str, auth=Depends(_get_auth)):
+    cfg = read_yaml_settings()
+    runbooks = cfg.get("runbooks", [])
+    if isinstance(runbooks, str):
+        try:
+            runbooks = json.loads(runbooks)
+        except (json.JSONDecodeError, TypeError):
+            runbooks = []
+    for rb in runbooks:
+        if rb.get("id") == runbook_id:
+            return rb
+    raise HTTPException(404, "Runbook not found")
+
+
+# ── Metrics correlation endpoint ─────────────────────────────────────────────
+@app.get("/api/metrics/correlate")
+def api_metrics_correlate(request: Request, auth=Depends(_get_auth)):
+    """Get multiple metrics aligned on the same timeline for correlation."""
+    metrics_param = request.query_params.get("metrics", "")
+    hours = min(_safe_int(request.query_params.get("hours", "6"), 6), 168)
+    if not metrics_param:
+        raise HTTPException(400, "metrics parameter required (comma-separated)")
+    metric_names = [m.strip() for m in metrics_param.split(",") if m.strip()][:8]
+    result = {}
+    for metric in metric_names:
+        history = db.get_history(metric, range_hours=hours, resolution=120)
+        result[metric] = [{"time": h["time"], "value": h["value"]} for h in history]
+    return result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

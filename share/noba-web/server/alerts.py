@@ -404,6 +404,12 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             from .db import db as _db
             _db.insert_alert_history(rule_id, severity, message)
 
+            # Auto-create incident
+            try:
+                _db.insert_incident(severity, "alert", message, condition)
+            except Exception:
+                pass
+
             # Check escalation policies
             _check_escalation(rule, rule_id, severity, message, notif_cfg, read_settings_fn)
 

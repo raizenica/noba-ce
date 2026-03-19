@@ -97,6 +97,10 @@ WEB_KEYS = frozenset([
     "frigateUrl",
     "serviceDependencies",
     "influxdbUrl", "influxdbToken", "influxdbOrg",
+    # Round 11 – Ops Center expansion
+    "agentKeys", "statusPageServices",
+    "graylogUrl", "graylogToken",
+    "runbooks",
 ])
 _NOTIF_WEB_KEYS = frozenset([
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",

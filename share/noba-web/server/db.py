@@ -144,6 +144,18 @@ class Database:
                     card_theme  TEXT,
                     updated_at  INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp INTEGER NOT NULL,
+                    severity TEXT NOT NULL DEFAULT 'info',
+                    source TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    details TEXT DEFAULT '',
+                    resolved_at INTEGER DEFAULT 0,
+                    auto_generated INTEGER DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents(timestamp DESC);
             """)
 
     # ── Metrics ───────────────────────────────────────────────────────────────
@@ -941,6 +953,49 @@ class Database:
         except Exception as e:
             logger.error("get_user_dashboard failed: %s", e)
             return None
+
+
+    # ── Incidents (Round 11) ─────────────────────────────────────────────────
+    def insert_incident(self, severity: str, source: str, title: str, details: str = "") -> int:
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                c = conn.execute(
+                    "INSERT INTO incidents (timestamp, severity, source, title, details) VALUES (?,?,?,?,?)",
+                    (int(time.time()), severity, source, title, details),
+                )
+                conn.commit()
+                return c.lastrowid or 0
+        except Exception as e:
+            logger.error("insert_incident failed: %s", e)
+            return 0
+
+    def get_incidents(self, limit: int = 100, hours: int = 24) -> list[dict]:
+        try:
+            cutoff = int(time.time()) - hours * 3600
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    "SELECT id, timestamp, severity, source, title, details, resolved_at FROM incidents "
+                    "WHERE timestamp > ? ORDER BY timestamp DESC LIMIT ?",
+                    (cutoff, limit),
+                ).fetchall()
+            return [{"id": r[0], "timestamp": r[1], "severity": r[2], "source": r[3],
+                     "title": r[4], "details": r[5], "resolved_at": r[6]} for r in rows]
+        except Exception as e:
+            logger.error("get_incidents failed: %s", e)
+            return []
+
+    def resolve_incident(self, incident_id: int) -> bool:
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                conn.execute("UPDATE incidents SET resolved_at = ? WHERE id = ?",
+                            (int(time.time()), incident_id))
+                conn.commit()
+            return True
+        except Exception:
+            return False
 
 
 # Singleton shared instance

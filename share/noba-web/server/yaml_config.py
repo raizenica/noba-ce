@@ -109,6 +109,10 @@ def read_yaml_settings() -> dict:
         "serviceDependencies": "",
         # InfluxDB
         "influxdbUrl": "", "influxdbToken": "", "influxdbOrg": "",
+        # Round 11: Ops Center expansion
+        "agentKeys": "", "statusPageServices": "",
+        "graylogUrl": "", "graylogToken": "",
+        "runbooks": [],
     }
     if not os.path.exists(NOBA_YAML):
         with _settings_cache_lock:

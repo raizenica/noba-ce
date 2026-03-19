@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -342,6 +343,29 @@ def collect_stats(qs: dict) -> dict:
 
     stats.update(collect_disk_io())
     stats.update(collect_per_interface_net())
+
+    # ── Agent data ────────────────────────────────────────────────────────────
+    try:
+        from .app import _agent_data, _agent_data_lock, _AGENT_MAX_AGE
+        now_a = time.time()
+        with _agent_data_lock:
+            agent_list = []
+            for hn, adata in _agent_data.items():
+                age = now_a - adata.get("_received", 0)
+                agent_list.append({
+                    "hostname": hn,
+                    "cpu_percent": adata.get("cpu_percent", 0),
+                    "mem_percent": adata.get("mem_percent", 0),
+                    "online": age < _AGENT_MAX_AGE,
+                    "platform": adata.get("platform", ""),
+                    "uptime_s": adata.get("uptime_s", 0),
+                    "disks": adata.get("disks", []),
+                    "top_processes": adata.get("top_processes", []),
+                    "arch": adata.get("arch", ""),
+                })
+            stats["agents"] = agent_list
+    except ImportError:
+        stats["agents"] = []
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     stats["alerts"] = build_threshold_alerts(stats, read_yaml_settings)
