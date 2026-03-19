@@ -27,6 +27,7 @@ function dashboard() {
         'backupSources', 'backupDest', 'backupRetentionDays', 'backupKeepCount',
         'backupVerifySample', 'backupMaxDelete', 'backupEmail',
         'cloudRemote', 'downloadsDir',
+        'organizeMaxDepth', 'organizeExclude', 'organizeCustomRules',
         'customActions', 'automations',
         'proxmoxUrl', 'proxmoxUser', 'proxmoxTokenName', 'proxmoxTokenValue',
         'adguardUrl', 'adguardUser', 'adguardPass',
@@ -183,6 +184,8 @@ function dashboard() {
         backupSources: [], backupDest: '', cloudRemote: '', downloadsDir: '',
         backupRetentionDays: 7, backupKeepCount: 0, backupVerifySample: 20,
         backupMaxDelete: '', backupEmail: '',
+        organizeMaxDepth: 1, organizeExclude: '', organizeCustomRules: [],
+        newOrgRule: '',
         backupStatus: null, cloudStatus: null,
         newBackupSource: '',
         cloudRemotes: [], selectedCloudRemote: '', cloudRemotesLoading: false,
@@ -721,6 +724,24 @@ function dashboard() {
         removeBackupSource(idx) {
             if (Array.isArray(this.backupSources)) {
                 this.backupSources.splice(idx, 1);
+            }
+        },
+
+        /** Add a custom organize rule (ext:Category). */
+        addOrgRule() {
+            const rule = (this.newOrgRule || '').trim();
+            if (!rule || !rule.includes(':')) return;
+            if (!Array.isArray(this.organizeCustomRules)) this.organizeCustomRules = [];
+            if (!this.organizeCustomRules.includes(rule)) {
+                this.organizeCustomRules.push(rule);
+            }
+            this.newOrgRule = '';
+        },
+
+        /** Remove a custom organize rule. */
+        removeOrgRule(idx) {
+            if (Array.isArray(this.organizeCustomRules)) {
+                this.organizeCustomRules.splice(idx, 1);
             }
         },
 

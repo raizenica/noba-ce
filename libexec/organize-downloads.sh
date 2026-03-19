@@ -15,19 +15,30 @@ DOWNLOAD_DIR="${HOME}/Downloads"
 LOG_DIR="${HOME}/.local/share"
 UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
 DRY_RUN=false
+MAX_DEPTH=1
+EXCLUDE_PATTERNS=""
 MOVED_COUNT=0
 
 declare -A CATEGORY_COUNTS=()
 
-# Extension Map
+# Extension Map (defaults)
 declare -A EXT_MAP=(
     ["jpg"]="Images" ["jpeg"]="Images" ["png"]="Images" ["gif"]="Images" ["svg"]="Images" ["webp"]="Images"
-    ["mp4"]="Video" ["mkv"]="Video" ["avi"]="Video" ["mov"]="Video" ["webm"]="Video"
-    ["mp3"]="Audio" ["wav"]="Audio" ["flac"]="Audio" ["m4a"]="Audio"
+    ["bmp"]="Images" ["tiff"]="Images" ["ico"]="Images" ["heic"]="Images" ["raw"]="Images"
+    ["mp4"]="Video" ["mkv"]="Video" ["avi"]="Video" ["mov"]="Video" ["webm"]="Video" ["flv"]="Video"
+    ["mp3"]="Audio" ["wav"]="Audio" ["flac"]="Audio" ["m4a"]="Audio" ["ogg"]="Audio" ["aac"]="Audio"
     ["pdf"]="Documents" ["doc"]="Documents" ["docx"]="Documents" ["txt"]="Documents" ["md"]="Documents"
+    ["xls"]="Documents" ["xlsx"]="Documents" ["ppt"]="Documents" ["pptx"]="Documents" ["odt"]="Documents"
+    ["csv"]="Documents" ["rtf"]="Documents" ["epub"]="Documents"
     ["zip"]="Archives" ["tar"]="Archives" ["gz"]="Archives" ["rar"]="Archives" ["7z"]="Archives"
-    ["iso"]="DiskImages"
-    ["exe"]="Executables" ["AppImage"]="Executables" ["rpm"]="Executables" ["deb"]="Executables"
+    ["bz2"]="Archives" ["xz"]="Archives" ["zst"]="Archives" ["tgz"]="Archives"
+    ["iso"]="DiskImages" ["img"]="DiskImages" ["qcow2"]="DiskImages" ["vmdk"]="DiskImages"
+    ["exe"]="Executables" ["AppImage"]="Executables" ["rpm"]="Executables" ["deb"]="Executables" ["msi"]="Executables" ["flatpak"]="Executables"
+    ["py"]="Code" ["js"]="Code" ["ts"]="Code" ["sh"]="Code" ["c"]="Code" ["cpp"]="Code" ["java"]="Code"
+    ["go"]="Code" ["rs"]="Code" ["html"]="Code" ["css"]="Code" ["json"]="Code" ["yaml"]="Code" ["yml"]="Code"
+    ["xml"]="Code" ["sql"]="Code" ["toml"]="Code"
+    ["torrent"]="Torrents"
+    ["ttf"]="Fonts" ["otf"]="Fonts" ["woff"]="Fonts" ["woff2"]="Fonts"
 )
 
 # -------------------------------------------------------------------
@@ -40,6 +51,25 @@ if command -v get_config &>/dev/null; then
     config_log_dir="$(get_config ".logs.dir" "$LOG_DIR")"
     LOG_DIR="${config_log_dir/#\~/$HOME}"
     UNDO_LOG="$LOG_DIR/download-organizer-undo.log"
+
+    _cfg_depth="$(get_config ".downloads.organize.max_depth" "")"
+    [[ -n "$_cfg_depth" ]] && MAX_DEPTH="$_cfg_depth"
+
+    _cfg_exclude="$(get_config ".downloads.organize.exclude" "")"
+    [[ -n "$_cfg_exclude" ]] && EXCLUDE_PATTERNS="$_cfg_exclude"
+
+    # Load custom extension rules (ext:Category pairs from config array)
+    _custom_rules=$(get_config_array ".downloads.organize.custom_rules" 2>/dev/null || true)
+    if [[ -n "$_custom_rules" ]]; then
+        while IFS= read -r rule; do
+            [[ -z "$rule" || "$rule" != *:* ]] && continue
+            _ext="${rule%%:*}"
+            _cat="${rule#*:}"
+            _ext=$(echo "$_ext" | tr '[:upper:]' '[:lower:]' | xargs)
+            _cat=$(echo "$_cat" | xargs)
+            [[ -n "$_ext" && -n "$_cat" ]] && EXT_MAP["$_ext"]="$_cat"
+        done <<< "$_custom_rules"
+    fi
 fi
 
 # -------------------------------------------------------------------
@@ -47,9 +77,15 @@ fi
 # -------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run) DRY_RUN=true; shift ;;
+        --dry-run)    DRY_RUN=true; shift ;;
+        --max-depth)  MAX_DEPTH="$2"; shift 2 ;;
+        --exclude)    EXCLUDE_PATTERNS="$2"; shift 2 ;;
+        -v|--verbose) export VERBOSE=true; shift ;;
         --help)
-            echo "Usage: organize-downloads.sh [--dry-run]"
+            echo "Usage: organize-downloads.sh [OPTIONS]"
+            echo "  --dry-run          Show what would happen without moving files"
+            echo "  --max-depth N      Directory depth to scan (default: 1)"
+            echo "  --exclude PATS     Comma-separated exclude patterns (e.g. '*.part,*.crdownload')"
             exit 0 ;;
         *) log_error "Unknown flag: $1"; exit 1 ;;
     esac
@@ -64,7 +100,28 @@ fi
 # Execution
 # -------------------------------------------------------------------
 log_info "Organizing downloads in: $DOWNLOAD_DIR"
+log_info "  Max depth: $MAX_DEPTH"
+[[ -n "$EXCLUDE_PATTERNS" ]] && log_info "  Exclude: $EXCLUDE_PATTERNS"
 [[ "$DRY_RUN" == true ]] && log_info "[DRY RUN MODE] No files will actually be moved."
+
+# Build find exclusions
+FIND_EXCLUDES=()
+if [[ -n "$EXCLUDE_PATTERNS" ]]; then
+    IFS=',' read -ra _pats <<< "$EXCLUDE_PATTERNS"
+    for pat in "${_pats[@]}"; do
+        pat=$(echo "$pat" | xargs)  # trim whitespace
+        [[ -n "$pat" ]] && FIND_EXCLUDES+=(-not -name "$pat")
+    done
+fi
+
+# Build list of known category folders to skip scanning into
+declare -A _seen_cats=()
+for _v in "${EXT_MAP[@]}"; do _seen_cats["$_v"]=1; done
+_seen_cats["Other"]=1
+FIND_PRUNE=()
+for _cat in "${!_seen_cats[@]}"; do
+    FIND_PRUNE+=(-not -path "$DOWNLOAD_DIR/$_cat/*")
+done
 
 mkdir -p "$LOG_DIR"
 _UNDO_TMP="${UNDO_LOG}.tmp"
@@ -112,7 +169,7 @@ while IFS= read -r -d '' file; do
     CATEGORY_COUNTS["$category"]=$(( ${CATEGORY_COUNTS["$category"]:-0} + 1 ))
     (( MOVED_COUNT++ )) || true
 
-done < <(find "$DOWNLOAD_DIR" -maxdepth 1 -type f -not -name '.*' -print0)
+done < <(find "$DOWNLOAD_DIR" -maxdepth "$MAX_DEPTH" -type f -not -name '.*' "${FIND_EXCLUDES[@]}" "${FIND_PRUNE[@]}" -print0 2>/dev/null)
 
 # -------------------------------------------------------------------
 # Wrap up

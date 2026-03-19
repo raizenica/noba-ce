@@ -463,6 +463,263 @@ def api_backup_status(auth=Depends(_get_auth)):
     return {"nas": _build_nas(nas), "cloud": _build_cloud(cloud)}
 
 
+# ── Backup explorer helpers ──────────────────────────────────────────────────
+_SNAP_RE = re.compile(r"^\d{8}-\d{6}$")
+
+
+def _get_backup_dest() -> str | None:
+    """Return the configured backup destination path, or None."""
+    cfg = read_yaml_settings()
+    dest = cfg.get("backupDest", "")
+    return dest if dest and os.path.isdir(dest) else None
+
+
+def _safe_snapshot_path(dest: str, name: str, subpath: str = "") -> str | None:
+    """Validate and resolve a path inside a snapshot. Returns None on traversal."""
+    if not _SNAP_RE.match(name):
+        return None
+    base = os.path.realpath(os.path.join(dest, name))
+    if not base.startswith(os.path.realpath(dest)):
+        return None
+    if subpath:
+        full = os.path.realpath(os.path.join(base, subpath))
+        if not full.startswith(base):
+            return None
+        return full
+    return base
+
+
+# ── /api/backup/history ──────────────────────────────────────────────────────
+@app.get("/api/backup/history")
+def api_backup_history(auth=Depends(_get_auth)):
+    dest = _get_backup_dest()
+    if not dest:
+        return {"snapshots": [], "dest": ""}
+    snapshots = []
+    try:
+        for entry in sorted(os.scandir(dest), key=lambda e: e.name, reverse=True):
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if not _SNAP_RE.match(entry.name):
+                continue
+            # Parse timestamp from dir name YYYYMMDD-HHMMSS
+            try:
+                ts = datetime.strptime(entry.name, "%Y%m%d-%H%M%S")
+                iso = ts.isoformat()
+            except ValueError:
+                iso = entry.name
+            info: dict = {"name": entry.name, "timestamp": iso}
+            # Quick stat — avoid expensive du
+            try:
+                st = entry.stat(follow_symlinks=False)
+                info["mtime"] = int(st.st_mtime)
+            except OSError:
+                info["mtime"] = 0
+            snapshots.append(info)
+    except OSError as e:
+        logger.warning("backup/history scan error: %s", e)
+    return {"snapshots": snapshots[:200], "dest": dest}
+
+
+# ── /api/backup/snapshots/{name}/browse ──────────────────────────────────────
+@app.get("/api/backup/snapshots/{name}/browse")
+def api_snapshot_browse(name: str, request: Request, auth=Depends(_get_auth)):
+    dest = _get_backup_dest()
+    if not dest:
+        raise HTTPException(404, "Backup destination not configured")
+    subpath = request.query_params.get("path", "")
+    resolved = _safe_snapshot_path(dest, name, subpath)
+    if resolved is None:
+        raise HTTPException(400, "Invalid snapshot or path")
+    if not os.path.exists(resolved):
+        raise HTTPException(404, "Path not found")
+    if os.path.isfile(resolved):
+        st = os.stat(resolved)
+        return {"type": "file", "name": os.path.basename(resolved),
+                "size": st.st_size, "mtime": int(st.st_mtime)}
+    entries = []
+    try:
+        for e in sorted(os.scandir(resolved), key=lambda x: (not x.is_dir(), x.name)):
+            try:
+                st = e.stat(follow_symlinks=False)
+                entries.append({
+                    "name": e.name,
+                    "type": "dir" if e.is_dir(follow_symlinks=False) else "file",
+                    "size": st.st_size if e.is_file(follow_symlinks=False) else 0,
+                    "mtime": int(st.st_mtime),
+                })
+            except OSError:
+                continue
+    except OSError as e:
+        raise HTTPException(500, f"Cannot read directory: {e}")
+    return {"type": "dir", "path": subpath or "/", "entries": entries[:2000]}
+
+
+# ── /api/backup/snapshots/diff ───────────────────────────────────────────────
+@app.get("/api/backup/snapshots/diff")
+def api_snapshot_diff(request: Request, auth=Depends(_get_auth)):
+    dest = _get_backup_dest()
+    if not dest:
+        raise HTTPException(404, "Backup destination not configured")
+    snap_a = request.query_params.get("a", "")
+    snap_b = request.query_params.get("b", "")
+    subpath = request.query_params.get("path", "")
+    path_a = _safe_snapshot_path(dest, snap_a, subpath)
+    path_b = _safe_snapshot_path(dest, snap_b, subpath)
+    if path_a is None or path_b is None:
+        raise HTTPException(400, "Invalid snapshot names")
+    if not os.path.isdir(path_a) or not os.path.isdir(path_b):
+        raise HTTPException(404, "Snapshot path not found")
+
+    added, removed, changed, unchanged = [], [], [], []
+    files_a: dict[str, os.stat_result] = {}
+    files_b: dict[str, os.stat_result] = {}
+    try:
+        for e in os.scandir(path_a):
+            try:
+                files_a[e.name] = e.stat(follow_symlinks=False)
+            except OSError:
+                pass
+        for e in os.scandir(path_b):
+            try:
+                files_b[e.name] = e.stat(follow_symlinks=False)
+            except OSError:
+                pass
+    except OSError as e:
+        raise HTTPException(500, f"Cannot scan snapshots: {e}")
+
+    all_names = sorted(set(files_a) | set(files_b))
+    for name in all_names[:5000]:
+        sa = files_a.get(name)
+        sb = files_b.get(name)
+        if sa and not sb:
+            removed.append(name)
+        elif sb and not sa:
+            added.append(name)
+        elif sa and sb:
+            # Same device + inode = hardlinked = unchanged
+            if sa.st_dev == sb.st_dev and sa.st_ino == sb.st_ino:
+                unchanged.append(name)
+            elif sa.st_size != sb.st_size or int(sa.st_mtime) != int(sb.st_mtime):
+                changed.append(name)
+            else:
+                unchanged.append(name)
+    return {"a": snap_a, "b": snap_b, "path": subpath or "/",
+            "added": added, "removed": removed, "changed": changed,
+            "unchanged_count": len(unchanged)}
+
+
+# ── /api/backup/restore ──────────────────────────────────────────────────────
+@app.post("/api/backup/restore")
+async def api_backup_restore(request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    snapshot = body.get("snapshot", "")
+    file_path = body.get("path", "")
+    dest_override = body.get("dest", "")
+
+    backup_dest = _get_backup_dest()
+    if not backup_dest:
+        raise HTTPException(404, "Backup destination not configured")
+
+    resolved = _safe_snapshot_path(backup_dest, snapshot, file_path)
+    if resolved is None or not os.path.exists(resolved):
+        raise HTTPException(400, "Invalid snapshot or file path")
+    if not os.path.isfile(resolved):
+        raise HTTPException(400, "Can only restore individual files")
+
+    # Determine original path from the backup structure
+    cfg = read_yaml_settings()
+    sources = cfg.get("backupSources", [])
+    rel = os.path.relpath(resolved, os.path.join(backup_dest, snapshot))
+    top_dir = rel.split(os.sep)[0]
+
+    original = ""
+    for src in sources:
+        base = os.path.basename(src).lstrip(".")
+        if base == top_dir:
+            rest = os.sep.join(rel.split(os.sep)[1:])
+            original = os.path.join(os.path.dirname(src), os.path.basename(src), rest)
+            break
+
+    restore_to = dest_override or original
+    if not restore_to:
+        raise HTTPException(400, "Cannot determine original path — provide 'dest' in request body")
+
+    # Safety: don't overwrite protected paths
+    restore_real = os.path.realpath(restore_to)
+    for forbidden in ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys"):
+        if restore_real.startswith(forbidden):
+            raise HTTPException(403, f"Cannot restore to {forbidden}")
+
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(restore_to), exist_ok=True)
+        shutil.copy2(resolved, restore_to)
+    except Exception as e:
+        raise HTTPException(500, f"Restore failed: {e}")
+
+    db.audit_log("backup_restore", username,
+                 f"Restored {file_path} from {snapshot} to {restore_to}", ip)
+    return {"status": "ok", "restored_to": restore_to}
+
+
+# ── /api/backup/config-history ───────────────────────────────────────────────
+@app.get("/api/backup/config-history")
+def api_config_history(auth=Depends(_require_admin)):
+    import glob as glob_mod
+    versions = []
+    pattern = f"{NOBA_YAML}.bak.*"
+    for path in sorted(glob_mod.glob(pattern), reverse=True):
+        try:
+            ts_str = path.rsplit(".bak.", 1)[-1]
+            ts = int(ts_str)
+            st = os.stat(path)
+            versions.append({
+                "timestamp": ts,
+                "iso": datetime.fromtimestamp(ts).isoformat(),
+                "size": st.st_size,
+                "filename": os.path.basename(path),
+            })
+        except (ValueError, OSError):
+            continue
+    # Also include the current config
+    if os.path.exists(NOBA_YAML):
+        try:
+            st = os.stat(NOBA_YAML)
+            versions.insert(0, {
+                "timestamp": int(st.st_mtime),
+                "iso": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                "size": st.st_size,
+                "filename": "config.yaml",
+                "current": True,
+            })
+        except OSError:
+            pass
+    return {"versions": versions[:50]}
+
+
+@app.get("/api/backup/config-history/{filename}")
+def api_config_history_download(filename: str, auth=Depends(_require_admin)):
+    # Only allow config.yaml or config.yaml.bak.<digits>
+    if filename == "config.yaml":
+        path = NOBA_YAML
+    elif re.match(r"^config\.yaml\.bak\.\d+$", filename):
+        path = os.path.join(os.path.dirname(NOBA_YAML), filename)
+    else:
+        raise HTTPException(400, "Invalid filename")
+    if not os.path.exists(path):
+        raise HTTPException(404, "File not found")
+    with open(path, "rb") as f:
+        content = f.read()
+    return Response(
+        content=content,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── /api/log-viewer ───────────────────────────────────────────────────────────
 @app.get("/api/log-viewer")
 def api_log_viewer(request: Request, auth=Depends(_get_auth)):
@@ -1233,6 +1490,7 @@ def _build_command(script: str, safe_args: list[str], args_in) -> list[str] | No
     if script in SCRIPT_MAP:
         sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
         if os.path.isfile(sfile):
+            # All noba scripts accept --verbose
             return [sfile, "--verbose"] + safe_args
     return None
 

@@ -40,7 +40,9 @@ def read_yaml_settings() -> dict:
         "plexUrl": "", "plexToken": "", "kumaUrl": "", "bmcMap": "", "backupSources": [], "backupDest": "",
         "backupRetentionDays": 7, "backupKeepCount": 0, "backupVerifySample": 20,
         "backupMaxDelete": "", "backupEmail": "",
-        "cloudRemote": "", "downloadsDir": "", "truenasUrl": "", "truenasKey": "",
+        "cloudRemote": "", "downloadsDir": "",
+        "organizeMaxDepth": 1, "organizeExclude": "", "organizeCustomRules": [],
+        "truenasUrl": "", "truenasKey": "",
         "radarrUrl": "", "radarrKey": "", "sonarrUrl": "", "sonarrKey": "",
         "qbitUrl": "", "qbitUser": "", "qbitPass": "",
         "customActions": [], "automations": [], "wanTestIp": "8.8.8.8", "lanTestIp": "",
@@ -85,6 +87,13 @@ def read_yaml_settings() -> dict:
             dl = full.get("downloads") or {}
             if "dir" in dl:
                 defaults["downloadsDir"] = dl["dir"]
+            organize = dl.get("organize") or {}
+            if "max_depth" in organize:
+                defaults["organizeMaxDepth"] = int(organize["max_depth"])
+            if "exclude" in organize:
+                defaults["organizeExclude"] = str(organize["exclude"])
+            if "custom_rules" in organize:
+                defaults["organizeCustomRules"] = organize["custom_rules"]
             # ── Notifications ─────────────────────────────────────────────
             notif = full.get("notifications") or {}
             if notif:
@@ -154,10 +163,19 @@ def write_yaml_settings(settings: dict) -> bool:
                 cloud = config.get("cloud") or {}
                 cloud["remote"] = settings["cloudRemote"]
                 config["cloud"] = cloud
-            # Downloads dir
-            if "downloadsDir" in settings:
+            # Downloads dir + organize settings
+            if any(k in settings for k in ("downloadsDir", "organizeMaxDepth", "organizeExclude", "organizeCustomRules")):
                 dl = config.get("downloads") or {}
-                dl["dir"] = settings["downloadsDir"]
+                if "downloadsDir" in settings:
+                    dl["dir"] = settings["downloadsDir"]
+                organize = dl.get("organize") or {}
+                if "organizeMaxDepth" in settings:
+                    organize["max_depth"] = int(settings["organizeMaxDepth"])
+                if "organizeExclude" in settings:
+                    organize["exclude"] = settings["organizeExclude"]
+                if "organizeCustomRules" in settings:
+                    organize["custom_rules"] = settings["organizeCustomRules"]
+                dl["organize"] = organize
                 config["downloads"] = dl
 
         # Build notifications section

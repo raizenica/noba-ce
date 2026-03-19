@@ -1161,19 +1161,35 @@
                         <i class="fas fa-chevron-down" style="margin-left:auto;font-size:.7rem;transition:transform .2s" :style="opt?'transform:rotate(180deg)':''" aria-hidden="true"></i>
                     </button>
                     <div class="action-opts" x-show="opt" style="display:none">
-                        <div style="margin-bottom:.75rem">
-                            <label class="field-label">Target Directory</label>
-                            <div class="badge bn" style="text-transform:none;font-family:var(--font-data)" x-text="downloadsDir || 'Not configured'"></div>
+                        <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--text-muted)">
+                            <i class="fas fa-folder" style="margin-right:.3rem" aria-hidden="true"></i>
+                            <span x-text="downloadsDir || 'Not configured'" style="font-family:var(--font-data)"></span>
+                            <span x-show="organizeCustomRules && organizeCustomRules.length > 0" class="badge bn" style="margin-left:.4rem;font-size:.6rem" x-text="organizeCustomRules.length + ' custom rule' + (organizeCustomRules.length !== 1 ? 's' : '')"></span>
                         </div>
                         <div style="display:flex;gap:1rem;margin-bottom:.75rem">
                             <label class="toggle-item"><input type="checkbox" x-model="dryRun"> Dry Run</label>
                         </div>
-                        <button class="btn btn-sm btn-primary" style="width:100%" :disabled="runningScript" @click="runScript('organize', dryRun ? '--dry-run' : ''); opt = false;">
-                            <i class="fas fa-play" aria-hidden="true"></i> Execute Job
-                        </button>
+                        <div style="display:flex;gap:.4rem">
+                            <button class="btn btn-sm btn-primary" style="flex:1" :disabled="runningScript" @click="
+                                let args = [];
+                                if (dryRun) args.push('--dry-run');
+                                if (organizeMaxDepth > 1) args.push('--max-depth', organizeMaxDepth);
+                                if (organizeExclude) args.push('--exclude', organizeExclude);
+                                runScript('organize', args.join(' '));
+                                opt = false;
+                            ">
+                                <i class="fas fa-play" aria-hidden="true"></i> Execute Job
+                            </button>
+                            <button class="btn btn-sm" @click="showSettings=true; settingsTab='backup'" title="Configure in Settings">
+                                <i class="fas fa-cog" aria-hidden="true"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
+                <button class="btn" @click="openBackupExplorer()">
+                    <i class="fas fa-history" aria-hidden="true"></i> Browse Backups
+                </button>
                 <button class="btn" :disabled="runningScript" @click="runScript('verify')">
                     <i class="fas fa-check-double" aria-hidden="true"></i> Verify Backups
                 </button>
@@ -1440,7 +1456,7 @@
         <pre id="console-out" class="console-out" x-text="modalOutput" aria-live="polite" aria-label="Script output"></pre>
         <div class="modal-footer">
             <button x-show="runningScript && activeRunId" class="btn btn-sm btn-danger" @click="cancelActiveRun()">Cancel</button>
-            <button class="btn btn-sm" @click="showModal=false" :disabled="runningScript">Close</button>
+            <button class="btn btn-sm" @click="showModal=false">Close</button>
         </div>
     </div>
 </div>
@@ -1834,6 +1850,9 @@
                         <i class="fas fa-upload" aria-hidden="true"></i> Restore config.yaml
                         <input type="file" accept=".yaml,.yml" style="display:none" @change="uploadConfigRestore($event)">
                     </label>
+                    <button class="btn btn-sm" @click="openConfigHistory()">
+                        <i class="fas fa-history" aria-hidden="true"></i> Version History
+                    </button>
                 </div>
             </div>
             <div class="s-section">
@@ -2180,11 +2199,96 @@
                 <p class="help-text" style="margin-bottom:.6rem">Email address for backup completion reports.</p>
                 <input class="field-input" type="email" x-model="backupEmail" placeholder="admin@example.com">
             </div>
-            <!-- Downloads Directory -->
+            <!-- Organize Downloads -->
             <div class="s-section">
-                <span class="s-label">Downloads Directory</span>
-                <p class="help-text" style="margin-bottom:.6rem">Target directory for the Organize Downloads job.</p>
-                <input class="field-input" type="text" x-model="downloadsDir" placeholder="/downloads">
+                <span class="s-label">Organize Downloads</span>
+                <p class="help-text" style="margin-bottom:.6rem">Configure how the Organize Downloads job sorts files into category folders.</p>
+                <div style="display:flex;flex-direction:column;gap:.7rem">
+                    <div>
+                        <label class="field-label">Target Directory</label>
+                        <input class="field-input" type="text" x-model="downloadsDir" placeholder="/home/user/Downloads">
+                    </div>
+                    <div class="field-2">
+                        <div>
+                            <label class="field-label">Scan Depth</label>
+                            <select class="theme-select" style="width:100%" x-model.number="organizeMaxDepth">
+                                <option value="1">1 — Top level only</option>
+                                <option value="2">2 — One subfolder deep</option>
+                                <option value="3">3 — Two subfolders deep</option>
+                                <option value="5">5 — Deep scan</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="field-label">Exclude Patterns</label>
+                            <input class="field-input" type="text" x-model="organizeExclude" placeholder="*.part, *.crdownload">
+                            <p class="help-text">Comma-separated globs to skip.</p>
+                        </div>
+                    </div>
+                    <!-- Default categories reference -->
+                    <div>
+                        <label class="field-label">Default Categories</label>
+                        <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.3rem">
+                            <span class="badge bn" style="font-size:.6rem">Images</span>
+                            <span class="badge bn" style="font-size:.6rem">Video</span>
+                            <span class="badge bn" style="font-size:.6rem">Audio</span>
+                            <span class="badge bn" style="font-size:.6rem">Documents</span>
+                            <span class="badge bn" style="font-size:.6rem">Archives</span>
+                            <span class="badge bn" style="font-size:.6rem">DiskImages</span>
+                            <span class="badge bn" style="font-size:.6rem">Executables</span>
+                            <span class="badge bn" style="font-size:.6rem">Code</span>
+                            <span class="badge bn" style="font-size:.6rem">Fonts</span>
+                            <span class="badge bn" style="font-size:.6rem">Torrents</span>
+                            <span class="badge bn" style="font-size:.6rem">Other</span>
+                        </div>
+                        <p class="help-text">Files not matching any rule go to "Other".</p>
+                    </div>
+                    <!-- Custom rules -->
+                    <div>
+                        <label class="field-label">Custom Rules</label>
+                        <p class="help-text" style="margin-bottom:.4rem">Override or extend the default category mappings. Add new file extensions or create your own categories.</p>
+                        <div x-show="organizeCustomRules && organizeCustomRules.length > 0" style="margin-bottom:.5rem">
+                            <table style="width:100%;font-size:.78rem;border-collapse:collapse">
+                                <thead>
+                                    <tr style="border-bottom:1px solid var(--border);text-align:left">
+                                        <th style="padding:.25rem .4rem">Extension</th>
+                                        <th style="padding:.25rem .4rem">Category</th>
+                                        <th style="padding:.25rem .4rem;width:2rem"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(rule, idx) in organizeCustomRules" :key="idx">
+                                        <tr style="border-bottom:1px solid var(--border)">
+                                            <td style="padding:.25rem .4rem;font-family:var(--font-data)" x-text="rule.split(':')[0] || ''"></td>
+                                            <td style="padding:.25rem .4rem" x-text="rule.split(':')[1] || ''"></td>
+                                            <td style="padding:.25rem .4rem;text-align:center">
+                                                <button style="background:none;border:none;color:var(--danger);cursor:pointer;padding:.1rem;font-size:.75rem" @click="removeOrgRule(idx)" title="Remove rule">&times;</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div x-data="{ newExt: '', newCat: '' }" style="display:flex;gap:.4rem;align-items:flex-end">
+                            <div style="flex:1">
+                                <label class="field-label" style="font-size:.65rem">Extension</label>
+                                <input class="field-input" type="text" x-model="newExt" placeholder="blend" style="font-size:.78rem" @keydown.enter.prevent="if(newExt && newCat){newOrgRule=newExt.replace(/^\./,'') + ':' + newCat; addOrgRule(); newExt=''; newCat=''}">
+                            </div>
+                            <div style="flex:1">
+                                <label class="field-label" style="font-size:.65rem">Category</label>
+                                <input class="field-input" type="text" x-model="newCat" placeholder="3DModels" style="font-size:.78rem" list="org-cat-list" @keydown.enter.prevent="if(newExt && newCat){newOrgRule=newExt.replace(/^\./,'') + ':' + newCat; addOrgRule(); newExt=''; newCat=''}">
+                                <datalist id="org-cat-list">
+                                    <option value="Images"><option value="Video"><option value="Audio">
+                                    <option value="Documents"><option value="Archives"><option value="DiskImages">
+                                    <option value="Executables"><option value="Code"><option value="Fonts">
+                                    <option value="Torrents"><option value="Other">
+                                </datalist>
+                            </div>
+                            <button class="btn btn-sm" style="margin-bottom:1px" @click="if(newExt && newCat){newOrgRule=newExt.replace(/^\./,'') + ':' + newCat; addOrgRule(); newExt=''; newCat=''}">
+                                <i class="fas fa-plus" aria-hidden="true"></i> Add
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <!-- Cloud Remotes -->
             <div class="s-section">
@@ -2611,6 +2715,196 @@
         </div>
         <div class="modal-footer">
             <button class="btn btn-sm" @click="showSessionsModal=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Backup Explorer Modal -->
+<div class="modal-overlay" x-show="showBackupExplorer" x-cloak @click.self="showBackupExplorer=false" @keydown.escape.window="showBackupExplorer=false" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width:750px">
+        <div class="modal-title">
+            <i class="fas fa-history" style="color:var(--accent)" aria-hidden="true"></i> Backup History
+            <span x-show="snapshotDest" class="badge bn" style="margin-left:.5rem;font-size:.6rem;text-transform:none;font-family:var(--font-data)" x-text="snapshotDest"></span>
+        </div>
+        <div style="padding:1rem;max-height:60vh;overflow-y:auto">
+            <div x-show="snapshotLoading" class="empty-msg"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading...</div>
+            <div x-show="!snapshotLoading && snapshotList.length === 0" class="empty-msg">No snapshots found. Check backup destination in Settings &rarr; Backup.</div>
+            <div x-show="!snapshotLoading && snapshotList.length > 0" x-data="{ selA: '', selB: '' }">
+                <div style="display:flex;gap:.4rem;margin-bottom:.75rem;flex-wrap:wrap">
+                    <button class="btn btn-sm" @click="fetchSnapshotHistory()"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+                    <button class="btn btn-sm" :disabled="!selA || !selB || selA === selB" @click="openSnapshotDiff(selA, selB)">
+                        <i class="fas fa-code-branch" aria-hidden="true"></i> Diff Selected
+                    </button>
+                    <span x-show="selA || selB" style="font-size:.7rem;color:var(--text-muted);align-self:center" x-text="'Compare: ' + (selA || '?') + ' vs ' + (selB || '?')"></span>
+                </div>
+                <table style="width:100%;font-size:.78rem;border-collapse:collapse">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--border);text-align:left">
+                            <th style="padding:.3rem;width:2rem">A</th>
+                            <th style="padding:.3rem;width:2rem">B</th>
+                            <th style="padding:.3rem">Snapshot</th>
+                            <th style="padding:.3rem">Date</th>
+                            <th style="padding:.3rem;text-align:right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="snap in snapshotList" :key="snap.name">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:.3rem"><input type="radio" :value="snap.name" x-model="selA"></td>
+                                <td style="padding:.3rem"><input type="radio" :value="snap.name" x-model="selB"></td>
+                                <td style="padding:.3rem;font-family:var(--font-data)" x-text="snap.name"></td>
+                                <td style="padding:.3rem" x-text="new Date(snap.timestamp).toLocaleString()"></td>
+                                <td style="padding:.3rem;text-align:right">
+                                    <button class="btn btn-sm" style="padding:.15rem .4rem;font-size:.7rem" @click="openFileBrowser(snap.name, '')" title="Browse files">
+                                        <i class="fas fa-folder-open" aria-hidden="true"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showBackupExplorer=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- File Browser Modal -->
+<div class="modal-overlay" x-show="showFileBrowser" x-cloak @click.self="showFileBrowser=false" @keydown.escape.window="if(showFileBrowser){showFileBrowser=false;$event.stopPropagation()}" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width:750px">
+        <div class="modal-title">
+            <i class="fas fa-folder-open" style="color:var(--accent)" aria-hidden="true"></i>
+            <span x-text="browseSnapshot"></span>
+        </div>
+        <div style="padding:.5rem 1rem">
+            <!-- Breadcrumb -->
+            <div style="display:flex;align-items:center;gap:.3rem;font-size:.78rem;margin-bottom:.5rem;flex-wrap:wrap">
+                <button class="btn btn-sm" style="padding:.15rem .4rem;font-size:.7rem" @click="openFileBrowser(browseSnapshot, '')">
+                    <i class="fas fa-home" aria-hidden="true"></i>
+                </button>
+                <template x-for="bc in browseBreadcrumbs" :key="bc.idx">
+                    <span style="display:flex;align-items:center;gap:.3rem">
+                        <span style="color:var(--text-muted)">/</span>
+                        <button class="btn btn-sm" style="padding:.1rem .35rem;font-size:.7rem" @click="browseTo(bc.idx)" x-text="bc.name"></button>
+                    </span>
+                </template>
+            </div>
+            <!-- File list -->
+            <div style="max-height:55vh;overflow-y:auto">
+                <div x-show="browseLoading" class="empty-msg"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading...</div>
+                <div x-show="!browseLoading && browsePath" style="padding:.35rem .5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:.78rem" @click="browseUp()">
+                    <i class="fas fa-level-up-alt" style="color:var(--accent);width:1.2rem;text-align:center" aria-hidden="true"></i>
+                    <span style="color:var(--text-muted)">..</span>
+                </div>
+                <template x-for="entry in browseEntries" :key="entry.name">
+                    <div style="display:flex;align-items:center;padding:.35rem .5rem;border-bottom:1px solid var(--border);font-size:.78rem;gap:.5rem"
+                         :style="entry.type === 'dir' ? 'cursor:pointer' : ''"
+                         @click="entry.type === 'dir' && browseInto(entry)">
+                        <i class="fas" :class="entry.type === 'dir' ? 'fa-folder' : 'fa-file'" :style="entry.type === 'dir' ? 'color:var(--accent)' : 'color:var(--text-muted)'" style="width:1.2rem;text-align:center" aria-hidden="true"></i>
+                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="entry.name"></span>
+                        <span x-show="entry.type === 'file'" style="color:var(--text-muted);font-size:.7rem;white-space:nowrap" x-text="fmtFileSize(entry.size)"></span>
+                        <span style="color:var(--text-muted);font-size:.65rem;white-space:nowrap" x-text="entry.mtime ? new Date(entry.mtime * 1000).toLocaleDateString() : ''"></span>
+                        <button x-show="entry.type === 'file' && userRole === 'admin'" class="btn btn-sm" style="padding:.1rem .35rem;font-size:.65rem;flex-shrink:0" @click.stop="restoreFile(entry.name)" :disabled="restoreLoading" title="Restore this file">
+                            <i class="fas fa-undo" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </template>
+                <div x-show="!browseLoading && browseEntries.length === 0 && !browsePath" class="empty-msg">Empty snapshot.</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showFileBrowser=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Snapshot Diff Modal -->
+<div class="modal-overlay" x-show="showDiffModal" x-cloak @click.self="showDiffModal=false" @keydown.escape.window="if(showDiffModal){showDiffModal=false;$event.stopPropagation()}" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width:700px">
+        <div class="modal-title">
+            <i class="fas fa-code-branch" style="color:var(--accent)" aria-hidden="true"></i> Snapshot Diff
+            <span style="font-size:.7rem;color:var(--text-muted);margin-left:.4rem" x-text="diffA + ' vs ' + diffB"></span>
+        </div>
+        <div style="padding:1rem;max-height:60vh;overflow-y:auto">
+            <div x-show="diffLoading" class="empty-msg"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Comparing...</div>
+            <template x-if="diffResult && !diffLoading">
+                <div>
+                    <!-- Path navigation -->
+                    <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.6rem;font-size:.78rem">
+                        <span style="color:var(--text-muted)">Path:</span>
+                        <button class="btn btn-sm" style="padding:.1rem .35rem;font-size:.7rem" @click="diffPath=''; fetchDiff()"><i class="fas fa-home" aria-hidden="true"></i></button>
+                        <span x-show="diffPath" style="color:var(--text-muted)" x-text="'/ ' + diffPath"></span>
+                        <button x-show="diffPath" class="btn btn-sm" style="padding:.1rem .35rem;font-size:.7rem" @click="diffUp()"><i class="fas fa-level-up-alt" aria-hidden="true"></i> Up</button>
+                    </div>
+                    <!-- Stats bar -->
+                    <div style="display:flex;gap:.6rem;margin-bottom:.6rem;font-size:.75rem">
+                        <span class="badge bs" x-text="(diffResult.added || []).length + ' added'"></span>
+                        <span class="badge bd" x-text="(diffResult.removed || []).length + ' removed'"></span>
+                        <span class="badge bw" x-text="(diffResult.changed || []).length + ' changed'"></span>
+                        <span class="badge bn" x-text="(diffResult.unchanged_count || 0) + ' unchanged'"></span>
+                    </div>
+                    <!-- Added -->
+                    <template x-for="f in (diffResult.added || [])" :key="'a-'+f">
+                        <div style="display:flex;align-items:center;gap:.4rem;padding:.25rem .5rem;font-size:.78rem;border-bottom:1px solid var(--border);cursor:pointer" @click="diffInto(f)">
+                            <i class="fas fa-plus-circle" style="color:var(--success);width:1rem;text-align:center" aria-hidden="true"></i>
+                            <span x-text="f" style="color:var(--success)"></span>
+                        </div>
+                    </template>
+                    <!-- Removed -->
+                    <template x-for="f in (diffResult.removed || [])" :key="'r-'+f">
+                        <div style="display:flex;align-items:center;gap:.4rem;padding:.25rem .5rem;font-size:.78rem;border-bottom:1px solid var(--border)">
+                            <i class="fas fa-minus-circle" style="color:var(--danger);width:1rem;text-align:center" aria-hidden="true"></i>
+                            <span x-text="f" style="color:var(--danger)"></span>
+                        </div>
+                    </template>
+                    <!-- Changed -->
+                    <template x-for="f in (diffResult.changed || [])" :key="'c-'+f">
+                        <div style="display:flex;align-items:center;gap:.4rem;padding:.25rem .5rem;font-size:.78rem;border-bottom:1px solid var(--border);cursor:pointer" @click="diffInto(f)">
+                            <i class="fas fa-exchange-alt" style="color:var(--warning);width:1rem;text-align:center" aria-hidden="true"></i>
+                            <span x-text="f" style="color:var(--warning)"></span>
+                        </div>
+                    </template>
+                    <div x-show="(diffResult.added||[]).length === 0 && (diffResult.removed||[]).length === 0 && (diffResult.changed||[]).length === 0" class="empty-msg">
+                        No differences at this level.
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showDiffModal=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Config Version History Modal -->
+<div class="modal-overlay" x-show="showConfigHistory" x-cloak @click.self="showConfigHistory=false" @keydown.escape.window="if(showConfigHistory){showConfigHistory=false;$event.stopPropagation()}" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width:600px">
+        <div class="modal-title">
+            <i class="fas fa-history" style="color:var(--accent)" aria-hidden="true"></i> Config Version History
+        </div>
+        <div style="padding:1rem;max-height:55vh;overflow-y:auto">
+            <div x-show="configHistoryLoading" class="empty-msg"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading...</div>
+            <div x-show="!configHistoryLoading && configVersions.length === 0" class="empty-msg">No config versions found.</div>
+            <template x-for="v in configVersions" :key="v.timestamp">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:.45rem .5rem;border-bottom:1px solid var(--border);font-size:.78rem">
+                    <div style="display:flex;align-items:center;gap:.5rem">
+                        <i class="fas" :class="v.current ? 'fa-check-circle' : 'fa-file-alt'" :style="v.current ? 'color:var(--success)' : 'color:var(--text-muted)'" aria-hidden="true"></i>
+                        <span x-text="new Date(v.timestamp * 1000).toLocaleString()"></span>
+                        <span x-show="v.current" class="badge bs" style="font-size:.6rem">Current</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:.4rem">
+                        <span style="color:var(--text-muted);font-size:.7rem" x-text="fmtFileSize(v.size)"></span>
+                        <button class="btn btn-sm" style="padding:.15rem .4rem;font-size:.7rem" @click="downloadConfigVersion(v.filename)" title="Download this version">
+                            <i class="fas fa-download" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showConfigHistory=false">Close</button>
         </div>
     </div>
 </div>
