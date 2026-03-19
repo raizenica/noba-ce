@@ -1618,6 +1618,16 @@ async def api_login(request: Request):
         db.audit_log("login", username, "success", ip)
         return {"token": token}
 
+    # LDAP fallback
+    if not user_data:
+        from .auth import authenticate_ldap
+        ldap_user, ldap_role = authenticate_ldap(username, password, read_yaml_settings)
+        if ldap_user:
+            rate_limiter.reset(ip)
+            token = token_store.generate(ldap_user, ldap_role)
+            db.audit_log("login", ldap_user, "success (LDAP)", ip)
+            return {"token": token}
+
     # Legacy auth.conf fallback (only when user not in DB)
     if not user_data:
         legacy = load_legacy_user()
@@ -1678,6 +1688,75 @@ async def api_totp_disable(request: Request, auth=Depends(_require_admin)):
     users.set_totp_secret(target, None)
     db.audit_log("totp_disable", username, f"Disabled 2FA for {target}", _client_ip(request))
     return {"status": "ok"}
+
+
+# ── Round 6: OIDC routes ─────────────────────────────────────────────────────
+@app.get("/api/auth/oidc/login")
+async def api_oidc_login(request: Request):
+    """Redirect to OIDC provider for authentication."""
+    cfg = read_yaml_settings()
+    provider = cfg.get("oidcProviderUrl", "")
+    client_id = cfg.get("oidcClientId", "")
+    if not provider or not client_id:
+        raise HTTPException(400, "OIDC not configured")
+    import urllib.parse
+    redirect_uri = str(request.url_for("api_oidc_callback"))
+    params = urllib.parse.urlencode({
+        "client_id": client_id,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "redirect_uri": redirect_uri,
+    })
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"{provider.rstrip('/')}/authorize?{params}")
+
+
+@app.get("/api/auth/oidc/callback")
+async def api_oidc_callback(request: Request):
+    """Handle OIDC callback -- exchange code for token, create session."""
+    cfg = read_yaml_settings()
+    provider = cfg.get("oidcProviderUrl", "")
+    client_id = cfg.get("oidcClientId", "")
+    client_secret = cfg.get("oidcClientSecret", "")
+    code = request.query_params.get("code", "")
+    if not code:
+        raise HTTPException(400, "Missing authorization code")
+    redirect_uri = str(request.url_for("api_oidc_callback"))
+    # Exchange code for token
+    import httpx as _httpx
+    try:
+        r = _httpx.post(f"{provider.rstrip('/')}/token", data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }, timeout=10)
+        r.raise_for_status()
+        token_data = r.json()
+        # Get user info
+        access_token = token_data.get("access_token", "")
+        userinfo = _httpx.get(
+            f"{provider.rstrip('/')}/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=5,
+        ).json()
+        email = userinfo.get("email", userinfo.get("preferred_username", ""))
+        if not email:
+            raise HTTPException(400, "Could not determine user identity from OIDC")
+        # Create or find user, issue NOBA token
+        if not users.exists(email):
+            users.add(email, "oidc:external", "viewer")
+        noba_token = token_store.generate(email, "viewer")
+        db.audit_log("oidc_login", email, "OIDC login", _client_ip(request))
+        # Redirect to frontend with token
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(f"/?token={noba_token}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("OIDC callback error: %s", e)
+        raise HTTPException(502, "OIDC authentication failed")
 
 
 # ── /api/container-control ────────────────────────────────────────────────────

@@ -375,10 +375,23 @@ function actionsMixin() {
             }
         },
 
+        /** Reset zoom on the history chart. */
+        resetChartZoom() {
+            if (this.historyChart) this.historyChart.resetZoom();
+        },
+
         /** Render or re-render the Chart.js history chart. */
         renderHistoryChart() {
             const canvas = document.getElementById('historyChart');
             if (!canvas) return;
+
+            // Load zoom plugin if needed
+            if (typeof window.ChartZoom === 'undefined' && !window._chartZoomLoading) {
+                window._chartZoomLoading = true;
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js';
+                document.head.appendChild(script);
+            }
 
             if (this.historyChart instanceof Chart) {
                 this.historyChart.destroy();
@@ -445,7 +458,18 @@ function actionsMixin() {
                                     return d && d.anomaly ? '\u26a0 Anomaly detected' : '';
                                 }
                             }
-                        }
+                        },
+                        zoom: {
+                            zoom: {
+                                wheel: { enabled: true },
+                                pinch: { enabled: true },
+                                mode: 'x',
+                            },
+                            pan: {
+                                enabled: true,
+                                mode: 'x',
+                            },
+                        },
                     },
                     animation: { duration: 0 }
                 }

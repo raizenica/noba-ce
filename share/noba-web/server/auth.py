@@ -428,6 +428,41 @@ token_store  = TokenStore()
 rate_limiter = RateLimiter()
 
 
+def authenticate_ldap(username: str, password: str, read_settings_fn) -> tuple[str | None, str | None]:
+    """Attempt LDAP authentication. Returns (username, role) or (None, None)."""
+    cfg = read_settings_fn()
+    ldap_url = cfg.get("ldapUrl", "")
+    base_dn = cfg.get("ldapBaseDn", "")
+    bind_dn = cfg.get("ldapBindDn", "")
+    bind_pw = cfg.get("ldapBindPassword", "")
+    if not ldap_url or not base_dn:
+        return None, None
+    try:
+        import ldap3
+        server = ldap3.Server(ldap_url, get_info=ldap3.NONE, connect_timeout=5)
+        # First bind with service account to search for user
+        conn = ldap3.Connection(server, user=bind_dn, password=bind_pw, auto_bind=True)
+        conn.search(base_dn, f"(|(uid={username})(sAMAccountName={username})(mail={username}))",
+                    attributes=["memberOf", "cn"])
+        if not conn.entries:
+            conn.unbind()
+            return None, None
+        user_dn = conn.entries[0].entry_dn
+        conn.unbind()
+        # Bind as the user to verify password
+        user_conn = ldap3.Connection(server, user=user_dn, password=password, auto_bind=True)
+        user_conn.unbind()
+        # Map role -- default to viewer, could check memberOf for admin/operator groups
+        role = "viewer"
+        return username, role
+    except ImportError:
+        logger.debug("ldap3 not installed -- LDAP auth unavailable")
+        return None, None
+    except Exception as e:
+        logger.debug("LDAP auth failed for %s: %s", username, e)
+        return None, None
+
+
 def authenticate(authorization: str = "") -> tuple[str | None, str | None]:
     """Extract and validate token from Authorization header or API key."""
     if authorization.startswith("Bearer "):
