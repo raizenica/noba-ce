@@ -477,6 +477,33 @@ class Database:
             logger.error("get_job_run failed: %s", e)
             return None
 
+    def get_automation_stats(self) -> dict:
+        """Return per-automation success/failure counts and avg duration."""
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute("""
+                    SELECT automation_id,
+                           COUNT(*) AS total,
+                           SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS ok,
+                           SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS fail,
+                           AVG(CASE WHEN finished_at IS NOT NULL AND started_at IS NOT NULL
+                               THEN finished_at - started_at END) AS avg_dur,
+                           MAX(started_at) AS last_run
+                    FROM job_runs
+                    WHERE automation_id IS NOT NULL
+                    GROUP BY automation_id
+                """).fetchall()
+            return {
+                r[0]: {"total": r[1], "ok": r[2], "fail": r[3],
+                       "avg_duration": round(r[4], 1) if r[4] else None,
+                       "last_run": r[5]}
+                for r in rows
+            }
+        except Exception as e:
+            logger.error("get_automation_stats failed: %s", e)
+            return {}
+
     def prune_job_runs(self) -> None:
         cutoff = int(time.time()) - JOB_RETENTION_DAYS * 86400
         try:

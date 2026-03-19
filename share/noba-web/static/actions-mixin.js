@@ -712,6 +712,8 @@ function actionsMixin() {
         autoListLoading: false,
         autoFilter: 'all',
         autoSearch: '',
+        autoTemplates: [],
+        autoStats: {},
 
         // ── Run detail ──────────────────────────────────────────────────────
         showRunDetailModal: false,
@@ -909,6 +911,105 @@ function actionsMixin() {
                     this._lastSeenRunId = Math.max(this._lastSeenRunId, ...runs.map(r => r.id));
                 }
             } catch { /* silent */ }
+        },
+
+        /** Fetch automation templates from the backend. */
+        async fetchAutoTemplates() {
+            try {
+                const res = await fetch('/api/automations/templates', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.autoTemplates = await res.json();
+            } catch { /* silent */ }
+        },
+
+        /** Fetch per-automation run statistics. */
+        async fetchAutoStats() {
+            try {
+                const res = await fetch('/api/automations/stats', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.autoStats = await res.json();
+            } catch { /* silent */ }
+        },
+
+        /** Apply a template to the create automation form. */
+        applyTemplate(tpl) {
+            this.autoForm.name = tpl.name;
+            this.autoForm.type = tpl.type;
+            this.autoForm.config = JSON.parse(JSON.stringify(tpl.config || {}));
+            this.autoForm.schedule = tpl.schedule || '';
+            this.autoForm.enabled = true;
+        },
+
+        /** Export all automations as a YAML file download. */
+        async exportAutomations() {
+            try {
+                const res = await fetch('/api/automations/export', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const blob = await res.blob();
+                const objUrl = URL.createObjectURL(blob);
+                try {
+                    const a = document.createElement('a');
+                    a.href = objUrl;
+                    a.download = 'noba-automations.yaml';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                } finally {
+                    URL.revokeObjectURL(objUrl);
+                }
+                this.addToast('Automations exported', 'success');
+            } catch (e) {
+                this.addToast('Export failed: ' + e.message, 'error');
+            }
+        },
+
+        /** Import automations from a YAML file. */
+        async importAutomations(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            if (!file.name.match(/\.(yaml|yml)$/i)) {
+                this.addToast('Please select a .yaml or .yml file', 'error');
+                return;
+            }
+            try {
+                const body = await file.arrayBuffer();
+                const res = await fetch('/api/automations/import?mode=skip', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-yaml',
+                        'Authorization': 'Bearer ' + this._token(),
+                    },
+                    body,
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    this.addToast(`Imported ${data.imported}, skipped ${data.skipped}`, 'success');
+                    await this.fetchAutomations();
+                    await this.fetchAutoStats();
+                } else {
+                    this.addToast(data.detail || 'Import failed', 'error');
+                }
+            } catch (e) {
+                this.addToast('Import error: ' + e.message, 'error');
+            } finally {
+                event.target.value = '';
+            }
+        },
+
+        /** Return stat summary for an automation (from autoStats). */
+        getAutoStat(autoId) {
+            return this.autoStats[autoId] || null;
+        },
+
+        /** Format average duration in seconds to human-readable. */
+        fmtDuration(secs) {
+            if (!secs && secs !== 0) return '\u2014';
+            if (secs < 60) return Math.round(secs) + 's';
+            return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
         },
 
         /** Manually run an automation and show live output. */

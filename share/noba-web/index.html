@@ -935,6 +935,18 @@
                         aria-label="Toggle Automation Deck"></button>
                 <button class="icon-btn" style="width:auto;padding:0 .3rem;margin-right:.3rem"
                         x-show="userRole !== 'viewer'"
+                        @click="exportAutomations()"
+                        title="Export Automations" aria-label="Export Automations">
+                    <i class="fas fa-download"></i>
+                </button>
+                <label class="icon-btn" style="width:auto;padding:0 .3rem;margin-right:.3rem;cursor:pointer"
+                       x-show="userRole === 'admin'"
+                       title="Import Automations" aria-label="Import Automations">
+                    <i class="fas fa-upload"></i>
+                    <input type="file" accept=".yaml,.yml" style="display:none" @change="importAutomations($event)">
+                </label>
+                <button class="icon-btn" style="width:auto;padding:0 .3rem;margin-right:.3rem"
+                        x-show="userRole !== 'viewer'"
                         @click="openCreateAuto()"
                         title="New Automation" aria-label="Create Automation">
                     <i class="fas fa-plus"></i>
@@ -963,28 +975,35 @@
                 <div x-show="!autoListLoading && autoList.length === 0" class="empty-msg">No automations defined. Click + to create one.</div>
                 <div x-show="!autoListLoading && autoList.length > 0 && filteredAutoList.length === 0" class="empty-msg">No matching automations.</div>
                 <template x-for="auto in filteredAutoList" :key="auto.id">
-                    <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.4rem">
-                        <button class="btn btn-primary" style="flex:1;text-align:left"
-                                :disabled="runningScript || !auto.enabled"
-                                :style="!auto.enabled ? 'opacity:.5' : ''"
-                                @click="runAutomation(auto)"
-                                x-show="userRole !== 'viewer'">
-                            <i class="fas" :class="auto.type==='webhook'?'fa-globe':auto.type==='service'?'fa-cog':auto.type==='workflow'?'fa-project-diagram':'fa-terminal'" aria-hidden="true"></i>
-                            <span x-text="auto.name"></span>
-                            <span x-show="auto.schedule" class="badge bi" style="font-size:.55rem;margin-left:.3rem" :title="'Schedule: ' + auto.schedule"><i class="fas fa-clock" aria-hidden="true"></i></span>
-                            <span class="badge" :class="auto.enabled ? 'bs' : 'bw'" x-text="auto.type" style="margin-left:auto;font-size:.6rem"></span>
-                        </button>
-                        <span x-show="userRole === 'viewer'" x-text="auto.name" style="flex:1"></span>
-                        <button class="icon-btn" style="width:26px;height:26px"
-                                x-show="userRole !== 'viewer'"
-                                @click="openEditAuto(auto)" title="Edit">
-                            <i class="fas fa-pen" style="font-size:.65rem"></i>
-                        </button>
-                        <button class="icon-btn" style="width:26px;height:26px;color:var(--danger)"
-                                x-show="userRole === 'admin'"
-                                @click="confirmDeleteAuto(auto)" title="Delete">
-                            <i class="fas fa-trash" style="font-size:.65rem"></i>
-                        </button>
+                    <div style="margin-bottom:.5rem">
+                        <div style="display:flex;align-items:center;gap:.4rem">
+                            <button class="btn btn-primary" style="flex:1;text-align:left"
+                                    :disabled="runningScript || !auto.enabled"
+                                    :style="!auto.enabled ? 'opacity:.5' : ''"
+                                    @click="runAutomation(auto)"
+                                    x-show="userRole !== 'viewer'">
+                                <i class="fas" :class="auto.type==='webhook'?'fa-globe':auto.type==='service'?'fa-cog':auto.type==='workflow'?'fa-project-diagram':'fa-terminal'" aria-hidden="true"></i>
+                                <span x-text="auto.name"></span>
+                                <span x-show="auto.schedule" class="badge bi" style="font-size:.55rem;margin-left:.3rem" :title="'Schedule: ' + auto.schedule"><i class="fas fa-clock" aria-hidden="true"></i></span>
+                                <span class="badge" :class="auto.enabled ? 'bs' : 'bw'" x-text="auto.type" style="margin-left:auto;font-size:.6rem"></span>
+                            </button>
+                            <span x-show="userRole === 'viewer'" x-text="auto.name" style="flex:1"></span>
+                            <button class="icon-btn" style="width:26px;height:26px"
+                                    x-show="userRole !== 'viewer'"
+                                    @click="openEditAuto(auto)" title="Edit">
+                                <i class="fas fa-pen" style="font-size:.65rem"></i>
+                            </button>
+                            <button class="icon-btn" style="width:26px;height:26px;color:var(--danger)"
+                                    x-show="userRole === 'admin'"
+                                    @click="confirmDeleteAuto(auto)" title="Delete">
+                                <i class="fas fa-trash" style="font-size:.65rem"></i>
+                            </button>
+                        </div>
+                        <div x-show="getAutoStat(auto.id)" style="display:flex;gap:.6rem;font-size:.6rem;opacity:.6;padding-left:.3rem;margin-top:.15rem">
+                            <span x-show="getAutoStat(auto.id)?.total" x-text="(getAutoStat(auto.id)?.ok||0) + '/' + (getAutoStat(auto.id)?.total||0) + ' ok'"></span>
+                            <span x-show="getAutoStat(auto.id)?.avg_duration" x-text="'avg ' + fmtDuration(getAutoStat(auto.id)?.avg_duration||0)"></span>
+                            <span x-show="getAutoStat(auto.id)?.last_run" x-text="'last ' + fmtRunTime(getAutoStat(auto.id)?.last_run)"></span>
+                        </div>
                     </div>
                 </template>
             </div>
@@ -1458,6 +1477,16 @@
             <span x-text="autoModalMode === 'create' ? 'New Automation' : 'Edit Automation'"></span>
         </div>
 
+        <div x-show="autoModalMode === 'create' && autoTemplates.length" style="margin-bottom:.75rem">
+            <label class="field-label">Start from template</label>
+            <select class="field-select" @change="let tpl=autoTemplates.find(t=>t.id===$event.target.value);if(tpl){applyTemplate(tpl)}$event.target.value=''">
+                <option value="">Choose a template...</option>
+                <template x-for="tpl in autoTemplates" :key="tpl.id">
+                    <option :value="tpl.id" x-text="tpl.name + ' — ' + tpl.description"></option>
+                </template>
+            </select>
+        </div>
+
         <div style="margin-bottom:.75rem">
             <label class="field-label">Name</label>
             <input class="field-input" type="text" x-model="autoForm.name" placeholder="My Backup Job">
@@ -1571,13 +1600,32 @@
                         </template>
                     </div>
                 </div>
-                <div style="margin-bottom:.75rem">
-                    <label class="field-label">Retries per step (0 = no retry)</label>
-                    <input class="field-input" type="number" min="0" max="5"
-                           x-model.number="autoForm.config.retries" placeholder="0">
+                <div class="field-2" style="margin-bottom:.75rem">
+                    <div>
+                        <label class="field-label">Execution Mode</label>
+                        <select class="field-select" x-model="autoForm.config.mode">
+                            <option value="sequential">Sequential</option>
+                            <option value="parallel">Parallel (fan-out)</option>
+                        </select>
+                    </div>
+                    <div x-show="(autoForm.config.mode||'sequential')==='sequential'">
+                        <label class="field-label">Retries per step</label>
+                        <input class="field-input" type="number" min="0" max="5"
+                               x-model.number="autoForm.config.retries" placeholder="0">
+                    </div>
                 </div>
             </div>
         </template>
+
+        <!-- Trigger key (all types) -->
+        <div style="margin-bottom:.75rem">
+            <label class="field-label">API Trigger Key (optional)</label>
+            <input class="field-input" type="text" x-model="autoForm.config.trigger_key"
+                   placeholder="Leave empty to disable external triggers">
+            <div style="font-size:.6rem;opacity:.5;margin-top:.2rem">
+                Set a key to allow triggering via POST /api/automations/{id}/trigger with X-Trigger-Key header
+            </div>
+        </div>
 
         <label class="toggle-item" style="margin-top:.75rem;margin-bottom:.5rem">
             <input type="checkbox" x-model="autoForm.enabled"> Enabled

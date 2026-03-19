@@ -286,3 +286,52 @@ class TestJobRunsTriggerFilter:
             assert runs[0]["status"] == "done"
         finally:
             _cleanup(path)
+
+
+class TestAutomationStats:
+    def test_empty_stats(self):
+        db, path = _make_db()
+        try:
+            stats = db.get_automation_stats()
+            assert stats == {}
+        finally:
+            _cleanup(path)
+
+    def test_stats_with_runs(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("s1", "Script1", "script", {"command": "echo 1"})
+            # Insert some completed runs
+            r1 = db.insert_job_run("s1", "auto:script:Script1", "user1")
+            db.update_job_run(r1, "done", exit_code=0)
+            r2 = db.insert_job_run("s1", "auto:script:Script1", "user1")
+            db.update_job_run(r2, "failed", exit_code=1)
+            r3 = db.insert_job_run("s1", "auto:script:Script1", "user1")
+            db.update_job_run(r3, "done", exit_code=0)
+
+            stats = db.get_automation_stats()
+            assert "s1" in stats
+            s = stats["s1"]
+            assert s["total"] == 3
+            assert s["ok"] == 2
+            assert s["fail"] == 1
+            assert s["last_run"] is not None
+        finally:
+            _cleanup(path)
+
+    def test_stats_multiple_automations(self):
+        db, path = _make_db()
+        try:
+            db.insert_automation("a1", "Auto1", "script", {})
+            db.insert_automation("a2", "Auto2", "webhook", {"url": "http://x"})
+            r1 = db.insert_job_run("a1", "auto:script:Auto1", "user1")
+            db.update_job_run(r1, "done", exit_code=0)
+            r2 = db.insert_job_run("a2", "auto:webhook:Auto2", "user1")
+            db.update_job_run(r2, "done", exit_code=0)
+
+            stats = db.get_automation_stats()
+            assert len(stats) == 2
+            assert stats["a1"]["total"] == 1
+            assert stats["a2"]["total"] == 1
+        finally:
+            _cleanup(path)

@@ -302,6 +302,8 @@ function dashboard() {
                 this.fetchCloudRemotes(),
                 this.fetchLog(),
                 this.fetchAutomations(),
+                this.fetchAutoTemplates(),
+                this.fetchAutoStats(),
             ]);
 
             this.startJobNotifPoller();
