@@ -22,6 +22,7 @@ from .integrations import (
     get_nextcloud, get_traefik, get_npm, get_authentik, get_cloudflare, get_omv, get_xcpng,
     get_homebridge, get_z2m, get_esphome, get_unifi_protect, get_pikvm, get_k8s,
     get_gitea, get_gitlab, get_github, get_paperless, get_vaultwarden, get_weather,
+    get_energy_shelly,
 )
 from .cache import cache as _cache
 from .alerts import build_threshold_alerts, check_anomalies, evaluate_alert_rules
@@ -149,6 +150,7 @@ def collect_stats(qs: dict) -> dict:
     cert_hosts   = [h.strip() for h in cfg.get("certHosts", "").split(",") if h.strip()]
     domain_list  = [d.strip() for d in cfg.get("domainList", "").split(",") if d.strip()]
     presence_ips = [x.strip() for x in cfg.get("devicePresenceIps", "").split(",") if x.strip()]
+    energy_urls  = [x.strip() for x in cfg.get("energySensors", "").split(",") if x.strip()]
 
     bmc_list = []
     for entry in bmc_map:
@@ -213,6 +215,7 @@ def collect_stats(qs: dict) -> dict:
     domain_fut  = _pool.submit(check_domain_expiry, domain_list) if domain_list else None
     vpn_fut     = _pool.submit(get_vpn_status)
     presence_fut = _pool.submit(check_device_presence, presence_ips) if presence_ips else None
+    energy_fut   = _pool.submit(get_energy_shelly, energy_urls) if energy_urls else None
 
     # Docker image update check — only every 5th cycle to avoid registry spam
     global _docker_update_cycle
@@ -326,6 +329,7 @@ def collect_stats(qs: dict) -> dict:
     stats["vpn"]            = _get(vpn_fut)
     stats["dockerUpdates"]  = _get(docker_upd_fut, default=[])
     stats["devicePresence"] = _get(presence_fut, default=[])
+    stats["energy"]         = _get(energy_fut, default=[])
 
     stats.update(collect_disk_io())
     stats.update(collect_per_interface_net())

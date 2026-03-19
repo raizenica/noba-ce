@@ -403,6 +403,17 @@
                             </div>
                         </div>
                         <div x-show="plex.activities > 0" class="empty-msg" style="color:var(--warning)">High activity: Metadata scanning in progress.</div>
+                        <template x-if="plex && plex.now_playing && plex.now_playing.length > 0">
+                            <div style="margin-top:.75rem;border-top:1px solid var(--border);padding-top:.5rem">
+                                <div style="font-size:.7rem;color:var(--text-dim);margin-bottom:.3rem">Now Playing</div>
+                                <template x-for="np in plex.now_playing" :key="np.title">
+                                    <div class="row" style="font-size:.8rem">
+                                        <span class="row-label" x-text="np.user" style="color:var(--accent)"></span>
+                                        <span class="row-val" x-text="np.title" style="flex:1;text-align:right"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
                     </div>
                 </template>
                 <template x-if="!plex">
@@ -737,6 +748,17 @@
                         <div class="row"><span class="row-label">Movies</span><span class="row-val" x-text="(jellyfin.movies||0).toLocaleString()"></span></div>
                         <div class="row"><span class="row-label">Series</span><span class="row-val" x-text="jellyfin.series||0"></span></div>
                         <div class="row"><span class="row-label">Episodes</span><span class="row-val" x-text="(jellyfin.episodes||0).toLocaleString()"></span></div>
+                        <template x-if="jellyfin && jellyfin.now_playing && jellyfin.now_playing.length > 0">
+                            <div style="margin-top:.75rem;border-top:1px solid var(--border);padding-top:.5rem">
+                                <div style="font-size:.7rem;color:var(--text-dim);margin-bottom:.3rem">Now Playing</div>
+                                <template x-for="np in jellyfin.now_playing" :key="np.title">
+                                    <div class="row" style="font-size:.8rem">
+                                        <span class="row-label" x-text="np.user" style="color:var(--accent)"></span>
+                                        <span class="row-val" x-text="np.title" style="flex:1;text-align:right"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
                     </div>
                 </template>
                 <div x-show="!jellyfin" class="empty-msg">Jellyfin data unavailable.</div>
@@ -855,6 +877,25 @@
                     <div class="row"><span class="row-label">Available</span><span class="row-val" x-text="overseerr.available||0"></span></div>
                 </div></template>
                 <template x-if="!overseerr"><div class="empty-msg">Overseerr unreachable — configure in Settings.</div></template>
+            </div>
+        </div>
+
+        <!-- ── Media Calendar (Upcoming) ───────────────────────────────────── -->
+        <div class="card" data-id="card-media-calendar" x-show="(radarrCalendar||[]).length > 0 || (sonarrCalendar||[]).length > 0" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr"><i class="fas fa-calendar-alt card-icon" style="color:#e88c30"></i><span class="card-title">Upcoming Media</span>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.mediaCalendar?'is-collapsed':''" @click="toggleCollapse('mediaCalendar')"></button>
+                <i class="fas fa-grip-lines drag-handle"></i></div>
+            <div class="card-body" x-show="!collapsed.mediaCalendar">
+                <template x-for="item in [...(radarrCalendar||[]), ...(sonarrCalendar||[])].sort((a,b) => (a.date||'').localeCompare(b.date||'')).slice(0,10)" :key="item.title+item.date">
+                    <div class="row">
+                        <span class="row-label" style="flex:1">
+                            <i class="fas" :class="item.type==='movie' ? 'fa-film' : 'fa-tv'" style="width:16px;color:var(--text-dim)"></i>
+                            <span x-text="item.title"></span>
+                        </span>
+                        <span class="row-val" style="font-size:.75rem;color:var(--text-muted)" x-text="item.date ? new Date(item.date).toLocaleDateString() : ''"></span>
+                    </div>
+                </template>
+                <div class="empty-msg" x-show="(radarrCalendar||[]).length===0 && (sonarrCalendar||[]).length===0">No upcoming releases</div>
             </div>
         </div>
 
@@ -1220,6 +1261,28 @@
                         </div>
                     </template>
                 </div>
+            </div>
+        </div>
+
+        <!-- ── Energy Monitoring ────────────────────────────────────────────── -->
+        <div class="card" data-id="card-energy" x-show="(energy||[]).length > 0" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+            <div class="card-hdr"><i class="fas fa-bolt card-icon" style="color:#f0c040"></i><span class="card-title">Energy</span>
+                <button class="collapse-btn fas fa-chevron-down" :class="collapsed.energy?'is-collapsed':''" @click="toggleCollapse('energy')"></button>
+                <i class="fas fa-grip-lines drag-handle"></i></div>
+            <div class="card-body" x-show="!collapsed.energy">
+                <template x-for="e in energy" :key="e.name">
+                    <div class="row" style="flex-wrap:wrap">
+                        <span class="row-label" x-text="e.name" style="min-width:80px"></span>
+                        <template x-if="e.status==='online'">
+                            <span style="display:flex;gap:12px;font-size:.8rem">
+                                <span><strong x-text="e.power_w"></strong> W</span>
+                                <span x-show="e.voltage_v > 0" x-text="e.voltage_v + ' V'" style="color:var(--text-muted)"></span>
+                                <span class="badge" :class="e.on ? 'bs' : 'bn'" x-text="e.on ? 'ON' : 'OFF'" style="font-size:.65rem"></span>
+                            </span>
+                        </template>
+                        <template x-if="e.status!=='online'"><span class="badge bd">offline</span></template>
+                    </div>
+                </template>
             </div>
         </div>
 

@@ -160,7 +160,7 @@ function dashboard() {
         'homebridge', 'z2m', 'esphome', 'unifiProtect', 'pikvm',
         'k8s', 'gitea', 'gitlab', 'github', 'paperless', 'vaultwarden',
         'weather', 'certExpiry', 'domainExpiry', 'vpn',
-        'dockerUpdates', 'devicePresence',
+        'dockerUpdates', 'devicePresence', 'energy',
     ]);
 
     const DEF_VIS = {
@@ -366,7 +366,7 @@ function dashboard() {
         k8s: null, gitea: null, gitlab: null, github: null,
         paperless: null, vaultwarden: null,
         weather: null, certExpiry: [], domainExpiry: [], vpn: null,
-        dockerUpdates: [], devicePresence: [],
+        dockerUpdates: [], devicePresence: [], energy: [],
 
         // ── App state ──────────────────────────────────────────────────────────
         showSettings: false, showTerminal: false, refreshing: false,

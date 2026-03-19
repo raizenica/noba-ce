@@ -963,6 +963,49 @@ def get_vaultwarden(url: str, admin_token: str) -> dict | None:
         return None
 
 
+# ── Energy Monitoring (Shelly) ───────────────────────────────────────────
+def get_energy_shelly(urls: list[str]) -> list[dict]:
+    """Query Shelly smart plugs/meters for power data."""
+    results = []
+    for entry in urls:
+        parts = entry.split("|")
+        url = parts[0].strip()
+        name = parts[1].strip() if len(parts) > 1 else url
+        if not url:
+            continue
+        base = (url if url.startswith("http") else "http://" + url).rstrip("/")
+        try:
+            # Shelly Gen2 API
+            data = _http_get(f"{base}/rpc/Switch.GetStatus?id=0", timeout=3)
+            results.append({
+                "name": name,
+                "power_w": round(data.get("apower", 0), 1),
+                "voltage_v": round(data.get("voltage", 0), 1),
+                "current_a": round(data.get("current", 0), 3),
+                "energy_wh": round(data.get("aenergy", {}).get("total", 0), 1),
+                "on": data.get("output", False),
+                "status": "online",
+            })
+        except (httpx.HTTPError, KeyError, ValueError):
+            try:
+                # Shelly Gen1 API fallback
+                data = _http_get(f"{base}/status", timeout=3)
+                meter = data.get("meters", [{}])[0] if data.get("meters") else {}
+                relay = data.get("relays", [{}])[0] if data.get("relays") else {}
+                results.append({
+                    "name": name,
+                    "power_w": round(meter.get("power", 0), 1),
+                    "voltage_v": 0,
+                    "current_a": 0,
+                    "energy_wh": round(meter.get("total", 0) / 60, 1),  # Watt-minutes to Wh
+                    "on": relay.get("ison", False),
+                    "status": "online",
+                })
+            except (httpx.HTTPError, KeyError, ValueError):
+                results.append({"name": name, "status": "offline"})
+    return results
+
+
 # ── Weather (OpenWeatherMap) ─────────────────────────────────────────────────
 def get_weather(api_key: str, city: str) -> dict | None:
     if not api_key or not city:
