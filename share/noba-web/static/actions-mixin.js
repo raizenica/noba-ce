@@ -36,6 +36,16 @@ function actionsMixin() {
         // ── SMART disk health ──────────────────────────────────────────────────
         smartData: [], smartLoading: false, showSmartModal: false,
 
+        // ── Backup explorer state ────────────────────────────────────────────
+        showBackupExplorer: false,
+        snapshotList: [], snapshotLoading: false, snapshotDest: '',
+        showFileBrowser: false, browseSnapshot: '', browsePath: '',
+        browseEntries: [], browseLoading: false, browseBreadcrumbs: [],
+        showDiffModal: false, diffA: '', diffB: '', diffPath: '',
+        diffResult: null, diffLoading: false,
+        showConfigHistory: false, configVersions: [], configHistoryLoading: false,
+        restoreLoading: false,
+
 
         // ── Log viewer ─────────────────────────────────────────────────────────
 
@@ -647,6 +657,208 @@ function actionsMixin() {
                 }
             };
             reader.readAsText(file);
+        },
+
+
+        // ── Backup Explorer ──────────────────────────────────────────────────
+
+        /** Open the backup explorer modal and fetch snapshot history. */
+        async openBackupExplorer() {
+            this.showBackupExplorer = true;
+            await this.fetchSnapshotHistory();
+        },
+
+        /** Fetch list of backup snapshots. */
+        async fetchSnapshotHistory() {
+            this.snapshotLoading = true;
+            try {
+                const res = await fetch('/api/backup/history', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                this.snapshotList = d.snapshots || [];
+                this.snapshotDest = d.dest || '';
+            } catch (e) {
+                this.addToast('Failed to load backup history: ' + e.message, 'error');
+            } finally {
+                this.snapshotLoading = false;
+            }
+        },
+
+        /** Open the file browser for a specific snapshot. */
+        async openFileBrowser(name, path) {
+            this.browseSnapshot = name;
+            this.browsePath = path || '';
+            this.showFileBrowser = true;
+            this.browseLoading = true;
+            this._updateBreadcrumbs();
+            try {
+                const qs = this.browsePath ? '?path=' + encodeURIComponent(this.browsePath) : '';
+                const res = await fetch(`/api/backup/snapshots/${encodeURIComponent(name)}/browse${qs}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                this.browseEntries = d.entries || [];
+            } catch (e) {
+                this.addToast('Failed to browse snapshot: ' + e.message, 'error');
+                this.browseEntries = [];
+            } finally {
+                this.browseLoading = false;
+            }
+        },
+
+        /** Navigate into a subdirectory in the file browser. */
+        browseInto(entry) {
+            if (entry.type === 'dir') {
+                const newPath = this.browsePath ? this.browsePath + '/' + entry.name : entry.name;
+                this.openFileBrowser(this.browseSnapshot, newPath);
+            }
+        },
+
+        /** Navigate up in the file browser. */
+        browseUp() {
+            const parts = this.browsePath.split('/').filter(Boolean);
+            parts.pop();
+            this.openFileBrowser(this.browseSnapshot, parts.join('/'));
+        },
+
+        /** Navigate to a specific breadcrumb level. */
+        browseTo(idx) {
+            const parts = this.browsePath.split('/').filter(Boolean);
+            this.openFileBrowser(this.browseSnapshot, parts.slice(0, idx + 1).join('/'));
+        },
+
+        /** Update breadcrumb array from current path. */
+        _updateBreadcrumbs() {
+            const parts = this.browsePath.split('/').filter(Boolean);
+            this.browseBreadcrumbs = parts.map((p, i) => ({ name: p, idx: i }));
+        },
+
+        /** Restore a file from the current snapshot. */
+        async restoreFile(filePath) {
+            const fullPath = this.browsePath ? this.browsePath + '/' + filePath : filePath;
+            this.requestConfirm(
+                `Restore "${filePath}" from snapshot ${this.browseSnapshot}?`,
+                async () => {
+                    this.restoreLoading = true;
+                    try {
+                        const res = await fetch('/api/backup/restore', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                            body: JSON.stringify({ snapshot: this.browseSnapshot, path: fullPath }),
+                        });
+                        const d = await res.json();
+                        if (res.ok) {
+                            this.addToast(`Restored to ${d.restored_to}`, 'success');
+                        } else {
+                            this.addToast(d.detail || 'Restore failed', 'error');
+                        }
+                    } catch (e) {
+                        this.addToast('Restore error: ' + e.message, 'error');
+                    } finally {
+                        this.restoreLoading = false;
+                    }
+                }
+            );
+        },
+
+        /** Open the diff modal for two snapshots. */
+        async openSnapshotDiff(a, b) {
+            if (!a || !b || a === b) {
+                this.addToast('Select two different snapshots to compare', 'error');
+                return;
+            }
+            this.diffA = a;
+            this.diffB = b;
+            this.diffPath = '';
+            this.showDiffModal = true;
+            await this.fetchDiff();
+        },
+
+        /** Fetch the diff between two snapshots. */
+        async fetchDiff() {
+            this.diffLoading = true;
+            try {
+                const params = new URLSearchParams({ a: this.diffA, b: this.diffB });
+                if (this.diffPath) params.set('path', this.diffPath);
+                const res = await fetch('/api/backup/snapshots/diff?' + params, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                this.diffResult = await res.json();
+            } catch (e) {
+                this.addToast('Diff failed: ' + e.message, 'error');
+                this.diffResult = null;
+            } finally {
+                this.diffLoading = false;
+            }
+        },
+
+        /** Navigate into a subdirectory in the diff view. */
+        diffInto(name) {
+            this.diffPath = this.diffPath ? this.diffPath + '/' + name : name;
+            this.fetchDiff();
+        },
+
+        /** Navigate up in the diff view. */
+        diffUp() {
+            const parts = this.diffPath.split('/').filter(Boolean);
+            parts.pop();
+            this.diffPath = parts.join('/');
+            this.fetchDiff();
+        },
+
+        /** Open config version history. */
+        async openConfigHistory() {
+            this.showConfigHistory = true;
+            this.configHistoryLoading = true;
+            try {
+                const res = await fetch('/api/backup/config-history', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                this.configVersions = d.versions || [];
+            } catch (e) {
+                this.addToast('Failed to load config history: ' + e.message, 'error');
+            } finally {
+                this.configHistoryLoading = false;
+            }
+        },
+
+        /** Download a specific config version. */
+        async downloadConfigVersion(filename) {
+            try {
+                const res = await fetch(`/api/backup/config-history/${encodeURIComponent(filename)}`, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                try {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                } finally {
+                    URL.revokeObjectURL(url);
+                }
+            } catch (e) {
+                this.addToast('Download failed: ' + e.message, 'error');
+            }
+        },
+
+        /** Format file size for display. */
+        fmtFileSize(bytes) {
+            if (bytes == null) return '\u2014';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
         },
 
 
