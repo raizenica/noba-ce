@@ -290,15 +290,14 @@
         border-top: 2px solid var(--accent);
         border-radius: 6px;
         isolation: isolate;
-        transition: box-shadow .2s, transform .15s, border-color .2s;
+        transition: box-shadow .2s, border-color .2s;
         box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
         align-self: start; width: 100%;
         animation: cardIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
         will-change: box-shadow;
     }
-    .card:hover {
+    .card:hover:not(:active) {
         box-shadow: 0 8px 30px rgba(0, 0, 0, .4), 0 0 15px var(--accent-glow);
-        transform: translateY(-1px);
     }
 
     .card-hdr {
