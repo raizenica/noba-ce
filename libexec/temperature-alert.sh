@@ -78,3 +78,5 @@ check_and_notify() {
 
 check_and_notify "$CPU_LABEL" "$CPU_TEMP"
 check_and_notify "$GPU_LABEL" "$GPU_TEMP"
+
+exit 0
