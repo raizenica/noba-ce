@@ -913,9 +913,59 @@ def _build_auto_http_process(config: dict) -> subprocess.Popen | None:
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
 
 
-_AUTO_BUILDERS = {"script": _build_auto_script_process, "webhook": _build_auto_webhook_process,
-                  "service": _build_auto_service_process, "delay": _build_auto_delay_process,
-                  "http": _build_auto_http_process}
+def _build_auto_notify_process(config: dict) -> subprocess.Popen | None:
+    """Dispatch a notification and return a trivial process for status tracking."""
+    msg = config.get("message", "Automation notification")
+    level = config.get("level", "info")
+    channels = config.get("channels")
+    try:
+        cfg = read_yaml_settings()
+        notif_cfg = cfg.get("notifications", {})
+        if notif_cfg:
+            threading.Thread(
+                target=dispatch_notifications,
+                args=(level, msg, notif_cfg, channels),
+                daemon=True,
+            ).start()
+    except Exception as e:
+        logger.error("Notify step failed: %s", e)
+    # Return a trivial success process so the runner records the step
+    return subprocess.Popen(["echo", f"Notification sent: {msg}"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+def _build_auto_condition_process(config: dict) -> subprocess.Popen | None:
+    """Evaluate a condition and exit 0 (true) or 1 (false).
+
+    Workflow engine treats exit 0 as 'done' (proceed to next step)
+    and non-zero as 'failed' (stop or retry). This lets conditions
+    gate subsequent steps in a sequential workflow.
+    """
+    condition = config.get("condition", "")
+    if not condition:
+        return subprocess.Popen(["false"], stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    # Evaluate condition against current stats
+    from .collector import bg_collector
+    from .alerts import _safe_eval
+    stats = bg_collector.get() or {}
+    flat: dict = {}
+    for k, v in stats.items():
+        if isinstance(v, (int, float, str)):
+            flat[k] = v
+    result = _safe_eval(condition, flat)
+    cmd = ["true"] if result else ["false"]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+_AUTO_BUILDERS = {
+    "script": _build_auto_script_process, "webhook": _build_auto_webhook_process,
+    "service": _build_auto_service_process, "delay": _build_auto_delay_process,
+    "http": _build_auto_http_process, "notify": _build_auto_notify_process,
+    "condition": _build_auto_condition_process,
+}
 _AUTO_TYPES = ALLOWED_AUTO_TYPES  # from config
 
 

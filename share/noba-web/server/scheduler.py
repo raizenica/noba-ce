@@ -176,15 +176,12 @@ class Scheduler:
 
     def _tick(self) -> None:
         now = datetime.now()
-        # Check maintenance windows
+        # Check maintenance windows (reuse alerts.py logic)
         from .yaml_config import read_yaml_settings
-        cfg = read_yaml_settings()
-        windows = cfg.get("maintenanceWindows", [])
-        for window in windows:
-            start_cron = window.get("start", "")
-            if start_cron and _match_cron(start_cron, now):
-                logger.info("Maintenance window active, skipping scheduled automations")
-                return
+        from .alerts import in_maintenance_window
+        if in_maintenance_window(read_yaml_settings):
+            logger.info("Maintenance window active, skipping scheduled automations")
+            return
         autos = db.list_automations()
         for auto in autos:
             if not auto["enabled"]:

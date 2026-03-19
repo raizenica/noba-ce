@@ -97,6 +97,12 @@ def collect_stats(qs: dict) -> dict:
     ovs_key   = cfg.get("overseerrKey", "")
     prowl_url = cfg.get("prowlarrUrl", "")
     prowl_key = cfg.get("prowlarrKey", "")
+    lidarr_url = cfg.get("lidarrUrl", "")
+    lidarr_key = cfg.get("lidarrKey", "")
+    readarr_url = cfg.get("readarrUrl", "")
+    readarr_key = cfg.get("readarrKey", "")
+    bazarr_url = cfg.get("bazarrUrl", "")
+    bazarr_key = cfg.get("bazarrKey", "")
     nc_url    = cfg.get("nextcloudUrl", "")
     nc_user   = cfg.get("nextcloudUser", "")
     nc_pass   = cfg.get("nextcloudPass", "")
@@ -173,6 +179,9 @@ def collect_stats(qs: dict) -> dict:
     tau_fut     = _pool.submit(get_tautulli, tau_url, tau_key) if tau_url else None
     ovs_fut     = _pool.submit(get_overseerr, ovs_url, ovs_key) if ovs_url else None
     prowl_fut   = _pool.submit(get_prowlarr, prowl_url, prowl_key) if prowl_url else None
+    lidarr_fut  = _pool.submit(get_servarr, lidarr_url, lidarr_key) if lidarr_url else None
+    readarr_fut = _pool.submit(get_servarr, readarr_url, readarr_key) if readarr_url else None
+    bazarr_fut  = _pool.submit(get_servarr, bazarr_url, bazarr_key) if bazarr_url else None
     rad_ext_fut = _pool.submit(get_servarr_extended, rad_url, rad_key, "radarr") if rad_url else None
     son_ext_fut = _pool.submit(get_servarr_extended, son_url, son_key, "sonarr") if son_url else None
     rad_cal_fut = _pool.submit(get_servarr_calendar, rad_url, rad_key) if rad_url else None
@@ -272,6 +281,9 @@ def collect_stats(qs: dict) -> dict:
     stats["tautulli"]       = _get(tau_fut)
     stats["overseerr"]      = _get(ovs_fut)
     stats["prowlarr"]       = _get(prowl_fut)
+    stats["lidarr"]         = _get(lidarr_fut)
+    stats["readarr"]        = _get(readarr_fut)
+    stats["bazarr"]         = _get(bazarr_fut)
     stats["radarrExtended"] = _get(rad_ext_fut)
     stats["sonarrExtended"] = _get(son_ext_fut)
     stats["radarrCalendar"] = _get(rad_cal_fut, default=[])
