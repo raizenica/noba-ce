@@ -1,4 +1,4 @@
-"""Noba Command Center – FastAPI application v1.12.0"""
+"""Noba Command Center – FastAPI application v1.14.0"""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import shlex
-import signal
 import subprocess
 import threading
 import time
@@ -34,14 +33,11 @@ from .metrics import (
 )
 from .alerts import dispatch_notifications
 from .plugins import plugin_manager
+from .runner import job_runner
 from .yaml_config import read_yaml_settings, write_yaml_settings
 
 logger = logging.getLogger("noba")
 _server_start_time = time.time()
-
-# ── Job state (thread-safe) ───────────────────────────────────────────────────
-_active_job: dict | None = None
-_job_lock = threading.Lock()
 
 # ── Static files directory ────────────────────────────────────────────────────
 _WEB_DIR = Path(__file__).parent.parent   # share/noba-web/
@@ -61,11 +57,13 @@ def _cleanup_loop() -> None:
             _prune_counter = 0
             db.prune_history()
             db.prune_audit()
+            db.prune_job_runs()
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db.mark_stale_jobs()
     db.audit_log("system_start", "system", f"Noba v{VERSION} starting (FastAPI)")
     bg_collector.start()
     threading.Thread(target=_cleanup_loop, daemon=True, name="token-cleanup").start()
@@ -74,8 +72,12 @@ async def lifespan(app: FastAPI):
     psutil.cpu_percent(interval=None)
     plugin_manager.discover()
     plugin_manager.start()
+    from .scheduler import scheduler
+    scheduler.start()
     logger.info("Noba v%s started (%d plugins)", VERSION, plugin_manager.count)
     yield
+    scheduler.stop()
+    job_runner.shutdown()
     plugin_manager.stop()
     get_shutdown_flag().set()
     db.audit_log("system_stop", "system", "Server stopping")
@@ -100,7 +102,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins or [],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -428,11 +430,282 @@ def api_action_log(auth=Depends(_get_auth)):
     return PlainTextResponse(strip_ansi(_read_file(ACTION_LOG, "Waiting for output…")))
 
 
-# ── /api/run-status ───────────────────────────────────────────────────────────
+# ── /api/run-status (legacy compat) ──────────────────────────────────────────
 @app.get("/api/run-status")
 def api_run_status(auth=Depends(_get_auth)):
-    with _job_lock:
-        return dict(_active_job) if _active_job else {"status": "idle"}
+    active = job_runner.get_active_ids()
+    if not active:
+        return {"status": "idle"}
+    run = db.get_job_run(active[0])
+    if run:
+        return {"status": run["status"], "run_id": run["id"],
+                "trigger": run["trigger"], "started": run["started_at"]}
+    return {"status": "running", "run_ids": active}
+
+
+# ── /api/runs — job run history & details ────────────────────────────────────
+@app.get("/api/runs")
+def api_runs(request: Request, auth=Depends(_get_auth)):
+    limit = int(request.query_params.get("limit", "50"))
+    status = request.query_params.get("status")
+    auto_id = request.query_params.get("automation_id")
+    trigger_prefix = request.query_params.get("trigger_prefix")
+    return db.get_job_runs(automation_id=auto_id, limit=limit, status=status,
+                           trigger_prefix=trigger_prefix)
+
+
+@app.get("/api/runs/{run_id}")
+def api_run_detail(run_id: int, auth=Depends(_get_auth)):
+    run = db.get_job_run(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    return run
+
+
+@app.post("/api/runs/{run_id}/cancel")
+def api_run_cancel(run_id: int, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    if not job_runner.cancel(run_id):
+        raise HTTPException(404, "Run not active")
+    db.audit_log("job_cancel", username, f"Cancelled run {run_id}", _client_ip(request))
+    return {"success": True}
+
+
+# ── /api/automations — CRUD + manual trigger ─────────────────────────────────
+def _validate_auto_config(atype: str, config: dict) -> None:
+    if atype == "script":
+        if not config.get("command") and not config.get("script"):
+            raise HTTPException(400, "Script automation requires 'command' or 'script' in config")
+    elif atype == "webhook":
+        url = config.get("url", "")
+        if not url or not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "Webhook requires a valid 'url' in config")
+    elif atype == "service":
+        if not config.get("service"):
+            raise HTTPException(400, "Service automation requires 'service' in config")
+        if config.get("action", "restart") not in ("start", "stop", "restart"):
+            raise HTTPException(400, "Service action must be start, stop, or restart")
+    elif atype == "workflow":
+        steps = config.get("steps", [])
+        if not isinstance(steps, list) or len(steps) < 1:
+            raise HTTPException(400, "Workflow requires 'steps' list with at least one automation ID")
+
+
+def _build_auto_script_process(config: dict) -> subprocess.Popen | None:
+    script_key = config.get("script", "")
+    command = config.get("command", "")
+    args = config.get("args", "")
+    if script_key and script_key in SCRIPT_MAP:
+        sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script_key])
+        if not os.path.isfile(sfile):
+            return None
+        cmd = [sfile, "--verbose"]
+        if args:
+            cmd += shlex.split(args) if isinstance(args, str) else [str(a) for a in args]
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True, cwd=SCRIPT_DIR)
+    if command:
+        return subprocess.Popen(["bash", "-c", command],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    return None
+
+
+def _build_auto_webhook_process(config: dict) -> subprocess.Popen | None:
+    url = config.get("url", "")
+    method = config.get("method", "POST").upper()
+    body = config.get("body")
+    cmd = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "-X", method]
+    for k, v in config.get("headers", {}).items():
+        cmd += ["-H", f"{k}: {v}"]
+    if body:
+        if isinstance(body, (dict, list)):
+            cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
+        elif isinstance(body, str):
+            cmd += ["-d", body]
+    cmd.append(url)
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+def _build_auto_service_process(config: dict) -> subprocess.Popen | None:
+    svc = config.get("service", "")
+    action = config.get("action", "restart")
+    if not svc or not validate_service_name(svc) or action not in ("start", "stop", "restart"):
+        return None
+    if config.get("is_user"):
+        cmd = ["systemctl", "--user", action, svc]
+    else:
+        cmd = ["sudo", "-n", "systemctl", action, svc]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+_AUTO_BUILDERS = {"script": _build_auto_script_process, "webhook": _build_auto_webhook_process,
+                  "service": _build_auto_service_process}
+_AUTO_TYPES = frozenset(list(_AUTO_BUILDERS) + ["workflow"])
+
+
+def _run_workflow(auto_id: str, steps: list[str], triggered_by: str,
+                  step_idx: int = 0, retries: int = 0, attempt: int = 0) -> None:
+    """Chain-execute workflow steps sequentially via on_complete callbacks.
+
+    ``retries`` is the max retry count per step (0 = no retries).
+    ``attempt`` tracks the current attempt for the active step.
+    """
+    if step_idx >= len(steps):
+        return
+    step_auto_id = steps[step_idx]
+    step_auto = db.get_automation(step_auto_id)
+    if not step_auto:
+        logger.warning("Workflow %s: step %d auto '%s' not found, skipping", auto_id, step_idx, step_auto_id)
+        _run_workflow(auto_id, steps, triggered_by, step_idx + 1, retries)
+        return
+
+    builder = _AUTO_BUILDERS.get(step_auto["type"])
+    if not builder:
+        logger.warning("Workflow %s: step %d has unsupported type '%s'", auto_id, step_idx, step_auto["type"])
+        _run_workflow(auto_id, steps, triggered_by, step_idx + 1, retries)
+        return
+
+    config = step_auto["config"]
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(config)
+
+    def on_step_complete(_run_id: int, status: str) -> None:
+        if status == "done":
+            _run_workflow(auto_id, steps, triggered_by, step_idx + 1, retries)
+        elif retries > 0 and attempt < retries:
+            logger.info("Workflow %s: step %d ('%s') %s — retry %d/%d",
+                        auto_id, step_idx, step_auto["name"], status, attempt + 1, retries)
+            _run_workflow(auto_id, steps, triggered_by, step_idx, retries, attempt + 1)
+        else:
+            logger.info("Workflow %s: step %d ('%s') %s — stopping chain",
+                        auto_id, step_idx, step_auto["name"], status)
+
+    trigger_suffix = f":step{step_idx}" if attempt == 0 else f":step{step_idx}:retry{attempt}"
+    try:
+        job_runner.submit(
+            make_process,
+            automation_id=step_auto_id,
+            trigger=f"workflow:{auto_id}{trigger_suffix}",
+            triggered_by=triggered_by,
+            on_complete=on_step_complete,
+        )
+    except RuntimeError as exc:
+        logger.warning("Workflow %s: step %d submit failed: %s", auto_id, step_idx, exc)
+
+
+@app.get("/api/automations")
+def api_automations_list(request: Request, auth=Depends(_get_auth)):
+    type_filter = request.query_params.get("type")
+    return db.list_automations(type_filter=type_filter)
+
+
+@app.post("/api/automations")
+async def api_automations_create(request: Request, auth=Depends(_require_operator)):
+    import uuid
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    atype = (body.get("type") or "").strip()
+    config = body.get("config", {})
+    schedule = body.get("schedule") or None
+    enabled = body.get("enabled", True)
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if atype not in _AUTO_TYPES:
+        raise HTTPException(400, f"Type must be one of: {', '.join(sorted(_AUTO_TYPES))}")
+    if not isinstance(config, dict):
+        raise HTTPException(400, "Config must be a JSON object")
+    _validate_auto_config(atype, config)
+    auto_id = uuid.uuid4().hex[:12]
+    if not db.insert_automation(auto_id, name, atype, config, schedule, enabled):
+        raise HTTPException(500, "Failed to create automation")
+    db.audit_log("automation_create", username, f"Created '{name}' ({atype})", ip)
+    return {"id": auto_id, "status": "ok"}
+
+
+@app.put("/api/automations/{auto_id}")
+async def api_automations_update(auto_id: str, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    ip = _client_ip(request)
+    existing = db.get_automation(auto_id)
+    if not existing:
+        raise HTTPException(404, "Automation not found")
+    body = await _read_body(request)
+    updates: dict = {}
+    if "name" in body:
+        updates["name"] = (body["name"] or "").strip()
+    if "type" in body:
+        if body["type"] not in _AUTO_TYPES:
+            raise HTTPException(400, "Invalid type")
+        updates["type"] = body["type"]
+    if "config" in body:
+        atype = body.get("type", existing["type"])
+        _validate_auto_config(atype, body["config"])
+        updates["config"] = body["config"]
+    if "schedule" in body:
+        updates["schedule"] = body["schedule"] or None
+    if "enabled" in body:
+        updates["enabled"] = body["enabled"]
+    if not db.update_automation(auto_id, **updates):
+        raise HTTPException(500, "Failed to update automation")
+    db.audit_log("automation_update", username, f"Updated '{auto_id}'", ip)
+    return {"status": "ok"}
+
+
+@app.delete("/api/automations/{auto_id}")
+def api_automations_delete(auto_id: str, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    ip = _client_ip(request)
+    existing = db.get_automation(auto_id)
+    if not existing:
+        raise HTTPException(404, "Automation not found")
+    if not db.delete_automation(auto_id):
+        raise HTTPException(500, "Failed to delete automation")
+    db.audit_log("automation_delete", username, f"Deleted '{existing['name']}'", ip)
+    return {"status": "ok"}
+
+
+@app.post("/api/automations/{auto_id}/run")
+def api_automations_run(auto_id: str, request: Request, auth=Depends(_require_operator)):
+    username, _ = auth
+    ip = _client_ip(request)
+    auto = db.get_automation(auto_id)
+    if not auto:
+        raise HTTPException(404, "Automation not found")
+    config = auto["config"]
+
+    # Workflow: chain execution of steps
+    if auto["type"] == "workflow":
+        steps = config.get("steps", [])
+        if not steps:
+            raise HTTPException(400, "Workflow has no steps")
+        wf_retries = int(config.get("retries", 0))
+        _run_workflow(auto_id, steps, username, retries=wf_retries)
+        db.audit_log("automation_run", username, f"Workflow '{auto['name']}' started ({len(steps)} steps)", ip)
+        return {"success": True, "run_id": None, "workflow": True, "steps": len(steps)}
+
+    builder = _AUTO_BUILDERS.get(auto["type"])
+    if not builder:
+        raise HTTPException(400, f"Unsupported type: {auto['type']}")
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(config)
+
+    try:
+        run_id = job_runner.submit(
+            make_process, automation_id=auto_id,
+            trigger=f"auto:{auto['type']}:{auto['name']}",
+            triggered_by=username,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    db.audit_log("automation_run", username, f"Run '{auto['name']}' -> run_id={run_id}", ip)
+    return {"success": True, "run_id": run_id}
 
 
 # ── /api/admin/users ──────────────────────────────────────────────────────────
@@ -654,6 +927,24 @@ async def api_webhook(request: Request, auth=Depends(_require_operator)):
 
 
 # ── /api/run ──────────────────────────────────────────────────────────────────
+def _build_command(script: str, safe_args: list[str], args_in) -> list[str] | None:
+    """Resolve a script name to a command list.  Returns None on failure."""
+    if script == "custom":
+        cfg = read_yaml_settings()
+        custom_id = args_in if isinstance(args_in, str) else (safe_args[0] if safe_args else "")
+        act = next((a for a in cfg.get("customActions", []) if a.get("id") == custom_id), None)
+        if act and act.get("command"):
+            return ["bash", "-c", act["command"]]
+        return None
+    if script == "speedtest":
+        return ["speedtest-cli", "--simple"] + safe_args
+    if script in SCRIPT_MAP:
+        sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
+        if os.path.isfile(sfile):
+            return [sfile, "--verbose"] + safe_args
+    return None
+
+
 @app.post("/api/run")
 async def api_run(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
@@ -662,7 +953,7 @@ async def api_run(request: Request, auth=Depends(_require_operator)):
     script   = body.get("script", "")
     args_in  = body.get("args",   "")
 
-    safe_args = []
+    safe_args: list[str] = []
     if isinstance(args_in, str) and args_in.strip():
         try:
             safe_args = shlex.split(args_in)
@@ -671,84 +962,28 @@ async def api_run(request: Request, auth=Depends(_require_operator)):
     elif isinstance(args_in, list):
         safe_args = [str(a) for a in args_in if str(a).strip()]
 
-    global _active_job
-    with _job_lock:
-        if _active_job and _active_job.get("status") == "running":
-            raise HTTPException(409, "A script is already running")
-        _active_job = {"script": script, "status": "running", "started": datetime.now().isoformat()}
+    cmd = _build_command(script, safe_args, args_in)
+    if cmd is None:
+        raise HTTPException(400, f"Unknown or invalid script: {script}")
 
-    def _run_script():
-        global _active_job
-        status = "error"
-        p = None
-        try:
-            ts = datetime.now().strftime("%H:%M:%S")
-            with open(ACTION_LOG, "w") as f:
-                f.write(f">> [{ts}] Initiating: {script} {' '.join(safe_args)}\n\n")
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        """Called by the runner inside the job thread."""
+        return subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            start_new_session=True, cwd=SCRIPT_DIR if script in SCRIPT_MAP else None,
+        )
 
-            if script == "custom":
-                cfg = read_yaml_settings()
-                custom_id = args_in if isinstance(args_in, str) else (safe_args[0] if safe_args else "")
-                act = next((a for a in cfg.get("customActions", []) if a.get("id") == custom_id), None)
-                if act and act.get("command"):
-                    with open(ACTION_LOG, "a") as f:
-                        p = subprocess.Popen(["bash", "-c", act["command"]], stdout=f, stderr=subprocess.STDOUT,
-                                             start_new_session=True)
-                else:
-                    with open(ACTION_LOG, "a") as f:
-                        f.write(f"[ERROR] Custom action not found: {args_in}\n")
-                    db.audit_log("script_run", username, f"custom action not found: {args_in}", ip)
-                    status = "failed"
-            elif script == "speedtest":
-                with open(ACTION_LOG, "a") as f:
-                    p = subprocess.Popen(["speedtest-cli", "--simple"] + safe_args, stdout=f, stderr=subprocess.STDOUT,
-                                         start_new_session=True)
-            elif script in SCRIPT_MAP:
-                sfile = os.path.join(SCRIPT_DIR, SCRIPT_MAP[script])
-                if os.path.isfile(sfile):
-                    with open(ACTION_LOG, "a") as f:
-                        p = subprocess.Popen([sfile, "--verbose"] + safe_args, stdout=f,
-                                             stderr=subprocess.STDOUT, cwd=SCRIPT_DIR,
-                                             start_new_session=True)
-                else:
-                    with open(ACTION_LOG, "a") as f:
-                        f.write(f"[ERROR] Script not found: {sfile}\n")
-                    status = "failed"
-            else:
-                with open(ACTION_LOG, "a") as f:
-                    f.write(f"[ERROR] Unknown script: {script}\n")
-                status = "failed"
+    try:
+        run_id = job_runner.submit(
+            make_process,
+            trigger=f"script:{script}",
+            triggered_by=username,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
 
-            if p:
-                try:
-                    p.wait(timeout=300)
-                    status = "done" if p.returncode == 0 else "failed"
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-                        p.wait(timeout=5)
-                    except (ProcessLookupError, subprocess.TimeoutExpired):
-                        try:
-                            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        p.wait()
-                    with open(ACTION_LOG, "a") as f:
-                        f.write("\n[ERROR] Script timed out after 300s.\n")
-                    status = "timeout"
-        except Exception as e:
-            logger.exception("Script runner error: %s", e)
-        finally:
-            with open(ACTION_LOG, "a") as f:
-                f.write(f"\n>> [{datetime.now().strftime('%H:%M:%S')}] {status.upper()}\n")
-            with _job_lock:
-                if _active_job and _active_job.get("script") == script:
-                    _active_job["status"]   = status
-                    _active_job["finished"] = datetime.now().isoformat()
-            db.audit_log("script_run", username, f"{script} {args_in} -> {status}", ip)
-
-    threading.Thread(target=_run_script, daemon=True, name=f"run-{script}").start()
-    return {"success": True, "status": "running", "script": script}
+    db.audit_log("script_run", username, f"{script} {args_in} -> run_id={run_id}", ip)
+    return {"success": True, "status": "running", "script": script, "run_id": run_id}
 
 
 # ── /api/cloud-test ───────────────────────────────────────────────────────────

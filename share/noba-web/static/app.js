@@ -301,7 +301,10 @@ function dashboard() {
                 this.fetchSettings(),
                 this.fetchCloudRemotes(),
                 this.fetchLog(),
+                this.fetchAutomations(),
             ]);
+
+            this.startJobNotifPoller();
 
             if (this.userRole === 'admin') await this.fetchUsers();
 
@@ -397,6 +400,9 @@ function dashboard() {
                     this.showAuditModal = false;
                     this.showShortcutsModal = false;
                     this.showSessionsModal = false;
+                    this.showAutoModal = false;
+                    this.showRunHistoryModal = false;
+                    this.showRunDetailModal = false;
                 }
             };
             document.addEventListener('keydown', this._keydownHandler);
