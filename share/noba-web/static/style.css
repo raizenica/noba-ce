@@ -242,6 +242,7 @@
         font-size: .85rem;
     }
     .icon-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+    .icon-btn .fa-sync { display: inline-block; width: 1em; height: 1em; text-align: center; }
     .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); color: var(--accent); }
 
     /* ── Live status pill ── */
@@ -250,7 +251,9 @@
         background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
         padding: .4rem .8rem; font-family: var(--font-data); font-size: .75rem; color: var(--text-muted);
         transition: border-color .3s;
+        min-width: 12rem;
     }
+    .live-pill > span { flex: 1; text-align: right; }
     .live-pill.conn-sse {
         border-color: color-mix(in srgb, var(--success) 35%, transparent);
         box-shadow: 0 0 8px color-mix(in srgb, var(--success) 10%, transparent);
