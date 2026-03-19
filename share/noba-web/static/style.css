@@ -624,3 +624,30 @@
         .settings-tabs .stab { padding: .5rem .7rem; }
     }
 }
+
+/* ── Password reveal toggle ────────────────────────────────────────────────── */
+.reveal-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.reveal-wrap .field-input {
+    flex: 1;
+    padding-right: 2.2rem;
+}
+.reveal-btn {
+    position: absolute;
+    right: .4rem;
+    background: none;
+    border: none;
+    color: var(--fg2);
+    cursor: pointer;
+    padding: .25rem;
+    font-size: .85rem;
+    opacity: .5;
+    transition: opacity .15s;
+}
+.reveal-btn:hover,
+.reveal-btn:focus-visible {
+    opacity: 1;
+}

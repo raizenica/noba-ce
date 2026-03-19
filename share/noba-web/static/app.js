@@ -1,25 +1,14 @@
 /**
  * dashboard() — Alpine.js component
  *
- * Improvements over original:
- * [BUG]  SSE merge uses a safe allowlist instead of Object.assign(this, payload)
- * [BUG]  _dismissedAlerts changed from Set → plain object so Alpine tracks it
- * [BUG]  connectSSE() onerror clears previous _poll before creating a new one
- * [BUG]  applySettings() awaits saveSettings() before showing "saved" toast
- * [BUG]  fetchSettings() no longer calls saveSettings() (needless round-trip)
- * [BUG]  loginPassword zeroed after successful login
- * [BUG]  countdown timer stays at 0 instead of immediately resetting to interval
- * [SEC]  Token centralised in _token() helper — one place to swap storage
- * [SEC]  qbitPass storage flagged with a comment
- * [QOL]  SETTINGS_KEYS array drives both fetchSettings and saveSettings
- * [QOL]  init() parallel-fetches independent resources with Promise.all
- * [QOL]  Toast IDs use a monotonic counter instead of Date.now()+random
- * [QOL]  _buildQueryParams comment explains SSE-vs-REST auth difference
- * [QOL]  initKeyboard listener stored so it can be removed if needed
- * [QOL]  ResizeObserver disconnect available via _masonryObserver
- * [QOL]  connectSSE() guarded against concurrent reconnect attempts
- * [NEW]  History Modal state and fetch logic with Chart.js integration
- * [NEW]  Audit Log fetch logic and admin-only state handling
+ * Split into mixins for maintainability:
+ *   - auth-mixin.js    → login/logout, token management, admin user CRUD
+ *   - actions-mixin.js → service/VM/container controls, scripts, history,
+ *                         audit, SMART, config backup/restore, confirmations
+ *   - app.js (this)    → constants, settings, live data, SSE, UI/layout
+ *
+ * All mixin objects are spread into the returned component, so `this`
+ * resolves identically across all files.
  */
 
 function dashboard() {
@@ -94,6 +83,10 @@ function dashboard() {
     // ── 1. Alpine component object ─────────────────────────────────────────────
     return {
 
+        // ── Spread mixins ────────────────────────────────────────────────────
+        ...authMixin(),
+        ...actionsMixin(),
+
         // ── UI & Visibility ────────────────────────────────────────────────────
         theme: autoTheme,
         vis:   { ...DEF_VIS, ...JSON.parse(localStorage.getItem('noba-vis') || '{}') },
@@ -155,27 +148,10 @@ function dashboard() {
         proxmox: null,
 
         // ── App state ──────────────────────────────────────────────────────────
-        selectedLog: 'syserr', logContent: 'Loading...', logLoading: false,
-        showModal: false, showSettings: false,
-        modalTitle: '', modalOutput: '', runningScript: false, refreshing: false,
+        showSettings: false, refreshing: false,
         toasts: [],
         notifTesting: false,
-
-        // History and Audit State
-        showHistoryModal: false,
-        historyMetric: '',
-        historyData: [],
-        historyRange: 24,
-        historyResolution: 60,
-        historyChart: null,
-        showAuditModal: false,
-        auditLog: [],
-
-        // History anomaly overlay
-        historyAnomalyEnabled: false,
-
-        // SMART disk health
-        smartData: [], smartLoading: false, showSmartModal: false,
+        countdown: 5,
 
         // Voice alerts
         voiceAlertsEnabled: localStorage.getItem('noba-voice-alerts') === 'true',
@@ -186,20 +162,8 @@ function dashboard() {
         _masonryObserver: null, _keydownHandler: null,
         _spokenAlerts: new Set(),
 
-        // ── Auth ───────────────────────────────────────────────────────────────
-        authenticated: !!localStorage.getItem('noba-token'),
-        loginUsername: '', loginPassword: '', loginLoading: false, loginError: '',
-        connStatus: 'offline', countdown: 5,
-
         // FIXED: plain object instead of Set so Alpine reactivity works correctly
         _dismissedAlerts: {},
-
-        // ── Admin ──────────────────────────────────────────────────────────────
-        userRole: 'viewer', username: '', userList: [], usersLoading: false,
-        showAddUserForm: false, newUsername: '', newPassword: '', newRole: 'viewer',
-        showPassModal: false, passModalUser: '', passModalValue: '',
-        showRemoveModal: false, removeModalUser: '',
-        showConfirmModal: false, confirmMessage: '', _pendingAction: null,
 
 
         // ── 2. Computed Properties ─────────────────────────────────────────────
@@ -219,12 +183,12 @@ function dashboard() {
 
         get livePillText() {
             let state;
-            if      (this.refreshing)             state = 'Syncing…';
+            if      (this.refreshing)             state = 'Syncing\u2026';
             else if (this.connStatus === 'sse')   state = 'Live';
             else if (this.connStatus === 'polling') state = this.countdown + 's';
             else                                  state = 'Offline';
             return (this.timestamp && this.timestamp !== '--:--')
-            ? `${state} • ${this.timestamp}`
+            ? `${state} \u2022 ${this.timestamp}`
             : state;
         },
 
@@ -233,8 +197,8 @@ function dashboard() {
                 const p = b.split('|');
                 return {
                     name: (p[0] || 'Link').trim(),
-                                                                                  url:  (p[1] || '#').trim(),
-                                                                                  icon: (p[2] || 'fa-link').trim(),
+                    url:  (p[1] || '#').trim(),
+                    icon: (p[2] || 'fa-link').trim(),
                 };
             });
         },
@@ -280,8 +244,8 @@ function dashboard() {
             // Token confirmed good — fetch remaining data in parallel
             await Promise.all([
                 this.fetchSettings(),
-                              this.fetchCloudRemotes(),
-                              this.fetchLog(),
+                this.fetchCloudRemotes(),
+                this.fetchLog(),
             ]);
 
             if (this.userRole === 'admin') await this.fetchUsers();
@@ -292,25 +256,24 @@ function dashboard() {
                 if (this.vis.logs && !this.showSettings) this.fetchLog();
             }, 12000);
 
-                setInterval(() => {
-                    this.fetchCloudRemotes();
-                }, 300_000);
+            setInterval(() => {
+                this.fetchCloudRemotes();
+            }, 300_000);
 
-                // Heartbeat watchdog — reconnects SSE if server goes silent for >15 s
-                setInterval(() => {
-                    if (this.connStatus === 'sse' && this._lastHeartbeat &&
-                        Date.now() - this._lastHeartbeat > 15_000 &&
-                        !this._reconnecting) {
-                        this.connectSSE();
-                        }
-                }, 5000);
+            // Heartbeat watchdog — reconnects SSE if server goes silent for >15 s
+            setInterval(() => {
+                if (this.connStatus === 'sse' && this._lastHeartbeat &&
+                    Date.now() - this._lastHeartbeat > 15_000 &&
+                    !this._reconnecting) {
+                    this.connectSSE();
+                }
+            }, 5000);
         },
 
 
         // ── 4. Layout & UI Logic ───────────────────────────────────────────────
 
         initMasonry() {
-            // Store observer reference so cards can be unobserved when hidden
             this._masonryObserver = new ResizeObserver(entries => {
                 for (const entry of entries) {
                     const card = entry.target;
@@ -320,10 +283,6 @@ function dashboard() {
                     card.style.gridRowEnd = `span ${rowSpan}`;
                 }
             });
-            // Use rAF (not $nextTick) so the browser has finished painting the
-            // layout after x-cloak is removed from the grid — otherwise
-            // getBoundingClientRect() returns 0 for all cards and every card
-            // collapses to a 20px strip that gets covered by later cards.
             requestAnimationFrame(() => requestAnimationFrame(() => {
                 document.querySelectorAll('.card').forEach(c => this._masonryObserver.observe(c));
             }));
@@ -340,17 +299,16 @@ function dashboard() {
                 ghostClass: 'sortable-ghost',
                 dragClass: 'sortable-drag',
                 forceFallback: true,
-                    fallbackOnBody: true,
-                    group: 'noba-v9',
-                    store: {
-                        get: s => (localStorage.getItem(s.options.group.name) || '').split('|'),
-                            set: s => localStorage.setItem(s.options.group.name, s.toArray().join('|')),
-                    },
+                fallbackOnBody: true,
+                group: 'noba-v9',
+                store: {
+                    get: s => (localStorage.getItem(s.options.group.name) || '').split('|'),
+                    set: s => localStorage.setItem(s.options.group.name, s.toArray().join('|')),
+                },
             });
         },
 
         initKeyboard() {
-            // Store handler reference so it can be removed on destroy if needed
             this._keydownHandler = (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
                 if (e.key === 's' && !this.showSettings && !this.showModal) {
@@ -394,6 +352,7 @@ function dashboard() {
             setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3500);
         },
 
+        /** Format bytes-per-second as human-readable string. */
         humanBps(bps) {
             if (!bps || bps <= 0) return '0 B/s';
             const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
@@ -402,8 +361,9 @@ function dashboard() {
             return v.toFixed(1) + ' ' + units[i];
         },
 
+        /** Format byte count as human-readable string. */
         humanBytes(bytes) {
-            if (!bytes || bytes <= 0) return '—';
+            if (!bytes || bytes <= 0) return '\u2014';
             const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
             let v = bytes, i = 0;
             while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
@@ -413,6 +373,7 @@ function dashboard() {
 
         // ── 5. Server Communication ────────────────────────────────────────────
 
+        /** Return the current bearer token from localStorage. */
         _token() {
             return localStorage.getItem('noba-token') || '';
         },
@@ -477,13 +438,13 @@ function dashboard() {
             this.voiceAlertsEnabled = !this.voiceAlertsEnabled;
             localStorage.setItem('noba-voice-alerts', this.voiceAlertsEnabled);
             if (this.voiceAlertsEnabled && window.speechSynthesis) {
-                // Prime the browser's permission — must be from a user gesture
                 const utt = new SpeechSynthesisUtterance('Voice alerts enabled');
                 utt.volume = 0.5;
                 window.speechSynthesis.speak(utt);
             }
         },
 
+        /** Connect to SSE stream with automatic polling fallback. */
         connectSSE() {
             if (!this.authenticated) return;
             if (this._reconnecting) return;
@@ -527,6 +488,7 @@ function dashboard() {
             };
         },
 
+        /** Fetch stats via REST (polling fallback). */
         async refreshStats() {
             if (!this.authenticated || this.refreshing) return;
             this.refreshing = true;
@@ -550,6 +512,7 @@ function dashboard() {
             }
         },
 
+        /** Load all settings from the backend. */
         async fetchSettings() {
             try {
                 const res = await fetch('/api/settings', {
@@ -567,6 +530,7 @@ function dashboard() {
             }
         },
 
+        /** Fetch available rclone cloud remotes. */
         async fetchCloudRemotes() {
             if (!this.authenticated) return;
             this.cloudRemotesLoading = true;
@@ -591,6 +555,7 @@ function dashboard() {
             }
         },
 
+        /** Persist settings to localStorage and backend. */
         async saveSettings() {
             for (const key of LS_SCALAR_KEYS) {
                 localStorage.setItem(`noba-${key.replace(/([A-Z])/g, c => '-' + c.toLowerCase())}`, this[key] ?? '');
@@ -620,6 +585,7 @@ function dashboard() {
             }
         },
 
+        /** Save settings and reconnect SSE. */
         async applySettings() {
             try {
                 await this.saveSettings();
@@ -631,6 +597,7 @@ function dashboard() {
             }
         },
 
+        /** Send a test notification (admin only). */
         async testNotifications() {
             if (!this.authenticated || this.userRole !== 'admin') return;
             this.notifTesting = true;
@@ -645,581 +612,6 @@ function dashboard() {
                 this.addToast('Network error', 'error');
             } finally {
                 this.notifTesting = false;
-            }
-        },
-
-
-        // ── 6. Actions & Controls ──────────────────────────────────────────────
-
-        async fetchLog() {
-            if (!this.authenticated) return;
-            this.logLoading = true;
-            try {
-                const res = await fetch('/api/log-viewer?type=' + this.selectedLog, {
-                    headers: { 'Authorization': 'Bearer ' + this._token() },
-                });
-                if (res.ok) {
-                    this.logContent = await res.text();
-                    this.$nextTick(() => {
-                        const el = document.querySelector('.log-pre');
-                        if (el) el.scrollTop = el.scrollHeight;
-                    });
-                } else if (res.status === 401) {
-                    this.authenticated = false;
-                } else {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-            } catch (e) {
-                this.logContent = 'Failed to fetch log: ' + e.message;
-            } finally {
-                this.logLoading = false;
-            }
-        },
-
-        /** Show a confirmation modal before running a destructive action. */
-        requestConfirm(message, fn) {
-            this.confirmMessage    = message;
-            this._pendingAction    = fn;
-            this.showConfirmModal  = true;
-        },
-        async runConfirmedAction() {
-            this.showConfirmModal = false;
-            if (this._pendingAction) {
-                await this._pendingAction();
-                this._pendingAction = null;
-            }
-        },
-
-        async svcAction(svc, action) {
-            if (!this.authenticated) return;
-            const label = svc.name.replace('.service', '');
-            const run = async () => {
-                try {
-                    const res = await fetch('/api/service-control', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                        body: JSON.stringify({ service: svc.name, action, is_user: svc.is_user }),
-                    });
-                    const d = await res.json();
-                    this.addToast(
-                        d.success ? `${action}: ${label}` : `Failed: ${label}`,
-                        d.success ? 'success' : 'error'
-                    );
-                    setTimeout(() => this.refreshStats(), 1200);
-                } catch {
-                    this.addToast('Service control error', 'error');
-                }
-            };
-            if (action === 'start') return run();
-            this.requestConfirm(`${action} service "${label}"?`, run);
-        },
-
-        async vmAction(vmId, vmName, action) {
-            if (!this.authenticated) return;
-            const run = async () => {
-                this.addToast(`Triggering ${action} on ${vmName}...`, 'info');
-                try {
-                    const res = await fetch('/api/truenas/vm', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                        body: JSON.stringify({ id: vmId, action }),
-                    });
-                    const d = await res.json();
-                    this.addToast(
-                        d.success ? `VM ${vmName}: ${action} successful` : `VM ${vmName}: ${action} failed`,
-                        d.success ? 'success' : 'error'
-                    );
-                    setTimeout(() => this.refreshStats(), 1500);
-                } catch {
-                    this.addToast('VM control error', 'error');
-                }
-            };
-            if (action === 'start') return run();
-            this.requestConfirm(`${action} VM "${vmName}"?`, run);
-        },
-
-        async triggerWebhook(actId, actName) {
-            if (!this.authenticated) return;
-            this.addToast(`Firing Webhook: ${actName}...`, 'info');
-            try {
-                const res = await fetch('/api/webhook', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body: JSON.stringify({ id: actId }),
-                });
-                const d = await res.json();
-                this.addToast(d.success ? 'Webhook successful' : 'Webhook failed',
-                              d.success ? 'success' : 'error');
-            } catch {
-                this.addToast('Webhook error', 'error');
-            }
-        },
-
-        async runScript(script, argStr = '') {
-            if (!this.authenticated || this.runningScript) return;
-            this.runningScript = true;
-            this.modalTitle    = `Running: ${script}`;
-            this.modalOutput   = `>> [${new Date().toLocaleTimeString()}] Starting action...\n`;
-            this.showModal     = true;
-
-            const token = this._token();
-
-            const poll = setInterval(async () => {
-                try {
-                    const r = await fetch('/api/action-log', { headers: { 'Authorization': 'Bearer ' + token } });
-                    if (r.ok) {
-                        this.modalOutput = await r.text();
-                        const el = document.getElementById('console-out');
-                        if (el) el.scrollTop = el.scrollHeight;
-                    }
-                } catch { /* non-fatal */ }
-            }, 800);
-
-            try {
-                const res = await fetch('/api/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-                    body: JSON.stringify({ script, args: argStr }),
-                });
-                const result = await res.json();
-                this.modalTitle = result.success ? '✓ Completed' : '✗ Failed';
-                this.addToast(`${script} ${result.success ? 'completed' : 'failed'}`,
-                              result.success ? 'success' : 'error');
-            } catch {
-                this.modalTitle = '✗ Connection Error';
-                this.addToast('Connection error', 'error');
-            } finally {
-                clearInterval(poll);
-                try {
-                    const r = await fetch('/api/action-log', { headers: { 'Authorization': 'Bearer ' + token } });
-                    if (r.ok) {
-                        this.modalOutput = await r.text();
-                        const el = document.getElementById('console-out');
-                        if (el) el.scrollTop = el.scrollHeight;
-                    }
-                } catch { /* non-fatal */ }
-                this.runningScript = false;
-                await this.refreshStats();
-            }
-        },
-
-
-        // ── 7. Auth & Users ────────────────────────────────────────────────────
-
-        async fetchUserInfo() {
-            try {
-                const res  = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + this._token() } });
-                if (res.status === 401) {
-                    localStorage.removeItem('noba-token');
-                    this.authenticated = false;
-                    this.connStatus    = 'offline';
-                    return;
-                }
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                this.username = data.username;
-                this.userRole = data.role;
-            } catch (e) {
-                this.addToast('Failed to fetch user info: ' + e.message, 'error');
-            }
-        },
-
-        async doLogin() {
-            this.loginLoading = true;
-            this.loginError   = '';
-            try {
-                const res  = await fetch('/api/login', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body:    JSON.stringify({ username: this.loginUsername, password: this.loginPassword }),
-                });
-                const data = await res.json();
-                if (res.ok && data.token) {
-                    localStorage.setItem('noba-token', data.token);
-                    this.authenticated = true;
-                    this.loginPassword = '';
-
-                    await Promise.all([
-                        this.fetchUserInfo(),
-                                      this.fetchSettings(),
-                                      this.fetchCloudRemotes(),
-                                      this.fetchLog(),
-                    ]);
-                    if (this.userRole === 'admin') await this.fetchUsers();
-                    this.connectSSE();
-                } else {
-                    this.loginError = data.detail || data.error || 'Login failed';
-                }
-            } catch {
-                this.loginError = 'Network error';
-            } finally {
-                this.loginLoading = false;
-            }
-        },
-
-        async logout() {
-            const token = this._token();
-            if (token) {
-                try {
-                    await fetch('/api/logout?token=' + encodeURIComponent(token), { method: 'POST' });
-                } catch { /* best-effort */ }
-            }
-            localStorage.removeItem('noba-token');
-            this.authenticated = false;
-            this.connStatus    = 'offline';
-            this._stopCountdown();
-            if (this._es)   { this._es.close();           this._es   = null; }
-            if (this._poll) { clearInterval(this._poll);  this._poll = null; }
-            if (this._keydownHandler) {
-                document.removeEventListener('keydown', this._keydownHandler);
-                this._keydownHandler = null;
-            }
-        },
-
-        async fetchUsers() {
-            this.usersLoading = true;
-            try {
-                const res = await fetch('/api/admin/users', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body:    JSON.stringify({ action: 'list' }),
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                this.userList = await res.json();
-            } catch (e) {
-                this.addToast('Failed to fetch users: ' + e.message, 'error');
-            } finally {
-                this.usersLoading = false;
-            }
-        },
-
-        async addUser() {
-            if (!this.newUsername || !this.newPassword) {
-                this.addToast('Username and password required', 'error');
-                return;
-            }
-            try {
-                const res = await fetch('/api/admin/users', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body:    JSON.stringify({ action: 'add', username: this.newUsername, password: this.newPassword, role: this.newRole }),
-                });
-                if (res.ok) {
-                    this.addToast(`User ${this.newUsername} added`, 'success');
-                    this.newUsername     = '';
-                    this.newPassword     = '';
-                    this.newRole         = 'viewer';
-                    this.showAddUserForm = false;
-                    await this.fetchUsers();
-                } else {
-                    const err = await res.json();
-                    this.addToast(err.detail || err.error || 'Failed to add user', 'error');
-                }
-            } catch (e) {
-                this.addToast('Error adding user: ' + e.message, 'error');
-            }
-        },
-
-        openPassModal(username) {
-            this.passModalUser  = username;
-            this.passModalValue = '';
-            this.showPassModal  = true;
-            this.$nextTick(() => { if (this.$refs.passInput) this.$refs.passInput.focus(); });
-        },
-
-        async confirmChangePassword() {
-            if (!this.passModalValue) return;
-            const username = this.passModalUser;
-            try {
-                const res = await fetch('/api/admin/users', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body:    JSON.stringify({ action: 'change_password', username, password: this.passModalValue }),
-                });
-                if (res.ok) {
-                    this.addToast(`Password changed for ${username}`, 'success');
-                } else {
-                    const err = await res.json();
-                    this.addToast(err.detail || err.error || 'Failed to change password', 'error');
-                }
-            } catch (e) {
-                this.addToast('Error changing password: ' + e.message, 'error');
-            } finally {
-                this.showPassModal   = false;
-                this.passModalValue  = '';
-            }
-        },
-
-        confirmRemoveUser(username) {
-            this.removeModalUser = username;
-            this.showRemoveModal = true;
-        },
-
-        async confirmRemove() {
-            const username       = this.removeModalUser;
-            this.showRemoveModal = false;
-            try {
-                const res = await fetch('/api/admin/users', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body:    JSON.stringify({ action: 'remove', username }),
-                });
-                if (res.ok) {
-                    this.addToast(`User ${username} removed`, 'success');
-                    await this.fetchUsers();
-                } else {
-                    const err = await res.json();
-                    this.addToast(err.detail || err.error || 'Failed to remove user', 'error');
-                }
-            } catch (e) {
-                this.addToast('Error removing user: ' + e.message, 'error');
-            }
-        },
-
-        // ── 8. History & Audit ─────────────────────────────────────────────────
-
-        async fetchHistory() {
-            if (!this.historyMetric) return;
-            try {
-                const anomalyParam = this.historyAnomalyEnabled ? '&anomaly=1' : '';
-                const res = await fetch(
-                    `/api/history/${this.historyMetric}?range=${this.historyRange}&resolution=${this.historyResolution}${anomalyParam}`,
-                    { headers: { 'Authorization': 'Bearer ' + this._token() } }
-                );
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                this.historyData = await res.json();
-                this.$nextTick(() => this.renderHistoryChart());
-            } catch (e) {
-                this.addToast('Failed to load history: ' + e.message, 'error');
-            }
-        },
-
-        renderHistoryChart() {
-            const canvas = document.getElementById('historyChart');
-            if (!canvas) return;
-
-            if (this.historyChart instanceof Chart) {
-                this.historyChart.destroy();
-            }
-
-            const ctx    = canvas.getContext('2d');
-            const times  = this.historyData.map(d => new Date(d.time * 1000).toLocaleTimeString());
-            const values = this.historyData.map(d => d.value);
-            const hasAnomaly = this.historyAnomalyEnabled && this.historyData.length > 0 && 'upper_band' in this.historyData[0];
-
-            const datasets = [{
-                label: this.historyMetric,
-                data: values,
-                borderColor: 'var(--accent)',
-                backgroundColor: 'color-mix(in srgb, var(--accent) 10%, transparent)',
-                tension: 0.2,
-                fill: true,
-                pointRadius: hasAnomaly
-                    ? this.historyData.map(d => d.anomaly ? 5 : 0)
-                    : 0,
-                pointBackgroundColor: 'rgba(255,80,80,0.9)',
-            }];
-
-            if (hasAnomaly) {
-                datasets.push({
-                    label: 'Upper band',
-                    data: this.historyData.map(d => d.upper_band),
-                    borderColor: 'rgba(255,160,50,0.45)',
-                    borderDash: [4, 4],
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0.2,
-                });
-                datasets.push({
-                    label: 'Lower band',
-                    data: this.historyData.map(d => d.lower_band),
-                    borderColor: 'rgba(255,160,50,0.45)',
-                    borderDash: [4, 4],
-                    borderWidth: 1,
-                    pointRadius: 0,
-                    fill: '-1',  // fill between upper and lower band
-                    backgroundColor: 'rgba(255,160,50,0.06)',
-                    tension: 0.2,
-                });
-            }
-
-            let newChart = new Chart(ctx, {
-                type: 'line',
-                data: { labels: times, datasets },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.1)' } },
-                        x: { grid: { display: false } }
-                    },
-                    plugins: {
-                        legend: { display: hasAnomaly },
-                        tooltip: {
-                            callbacks: {
-                                afterLabel: (ctx) => {
-                                    const d = this.historyData[ctx.dataIndex];
-                                    return d && d.anomaly ? '⚠ Anomaly detected' : '';
-                                }
-                            }
-                        }
-                    },
-                    animation: { duration: 0 }
-                }
-            });
-
-            this.historyChart = newChart;
-        },
-
-        showHistory(metric) {
-            this.historyMetric = metric;
-            this.showHistoryModal = true;
-            this.fetchHistory();
-        },
-
-        async fetchAuditLog() {
-            try {
-                const res = await fetch('/api/audit?limit=100', {
-                    headers: { 'Authorization': 'Bearer ' + this._token() }
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                this.auditLog = await res.json();
-            } catch (e) {
-                this.addToast('Failed to load audit log: ' + e.message, 'error');
-            }
-        },
-
-        openAuditModal() {
-            if (this.userRole !== 'admin') return;
-            this.showAuditModal = true;
-            this.fetchAuditLog();
-        },
-
-
-        // ── 9. Container Controls ──────────────────────────────────────────────
-
-        async containerAction(name, action) {
-            if (!name) return;
-            const label = `${action} ${name}`;
-            const run = async () => {
-                try {
-                    const res = await fetch('/api/container-control', {
-                        method:  'POST',
-                        headers: {
-                            'Content-Type':  'application/json',
-                            'Authorization': 'Bearer ' + this._token(),
-                        },
-                        body: JSON.stringify({ name, action }),
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        this.addToast(`${label} — OK`, 'success');
-                        setTimeout(() => this.refreshStats(), 1500);
-                    } else {
-                        this.addToast(data.error || `${label} failed`, 'error');
-                    }
-                } catch (e) {
-                    this.addToast(`${label}: ${e.message}`, 'error');
-                }
-            };
-            if (action === 'start') return run();
-            this.requestConfirm(`${action} container "${name}"?`, run);
-        },
-
-
-        // ── 10. History Export ─────────────────────────────────────────────────
-
-        downloadHistoryCSV() {
-            if (!this.historyMetric) return;
-            const url = `/api/history/${encodeURIComponent(this.historyMetric)}/export`
-                + `?range=${this.historyRange}&resolution=${this.historyResolution}`;
-            // Use a temporary <a> tag so the browser triggers a file download
-            const a = document.createElement('a');
-            a.href = url + '&token=' + encodeURIComponent(this._token());
-            a.download = `noba-${this.historyMetric}-${this.historyRange}h.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        },
-
-
-        // ── 11. Config Backup / Restore ────────────────────────────────────────
-
-        downloadConfigBackup() {
-            const a = document.createElement('a');
-            a.href = '/api/config/backup?token=' + encodeURIComponent(this._token());
-            a.download = 'noba-config-backup.yaml';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        },
-
-        async fetchSmartData() {
-            this.smartLoading = true;
-            try {
-                const res = await fetch('/api/smart', {
-                    headers: { 'Authorization': 'Bearer ' + this._token() }
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                this.smartData = await res.json();
-                this.showSmartModal = true;
-            } catch (e) {
-                this.addToast('Failed to load SMART data: ' + e.message, 'error');
-            } finally {
-                this.smartLoading = false;
-            }
-        },
-
-        smartRiskClass(score) {
-            if (score >= 75) return 'bd';
-            if (score >= 40) return 'bw';
-            return 'bs';
-        },
-
-        smartRiskLabel(score) {
-            if (score >= 75) return 'Critical';
-            if (score >= 40) return 'Warning';
-            return 'Healthy';
-        },
-
-        formatPoh(hours) {
-            if (!hours) return '—';
-            const d = Math.floor(hours / 24);
-            const h = hours % 24;
-            return d > 0 ? `${d}d ${h}h` : `${h}h`;
-        },
-
-        async uploadConfigRestore(event) {
-            const file = event.target.files && event.target.files[0];
-            if (!file) return;
-            if (!file.name.match(/\.(yaml|yml)$/i)) {
-                this.addToast('Please select a .yaml or .yml file', 'error');
-                return;
-            }
-            try {
-                const body = await file.arrayBuffer();
-                const res  = await fetch('/api/config/restore', {
-                    method:  'POST',
-                    headers: {
-                        'Content-Type':   'application/x-yaml',
-                        'Content-Length': String(body.byteLength),
-                        'Authorization':  'Bearer ' + this._token(),
-                    },
-                    body,
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    this.addToast('Config restored — reloading settings…', 'success');
-                    await this.fetchSettings();
-                } else {
-                    this.addToast(data.detail || data.error || 'Restore failed', 'error');
-                }
-            } catch (e) {
-                this.addToast('Restore error: ' + e.message, 'error');
-            } finally {
-                // Reset the file input so the same file can be re-selected
-                event.target.value = '';
             }
         },
 
