@@ -742,6 +742,7 @@
 .ctx-menu-item i { width: 16px; text-align: center; color: var(--text-muted); }
 
 /* ── Mobile bottom nav ──────────────────────────────────────────────────── */
+.mobile-nav { display: none; }
 @media (max-width: 640px) {
     .mobile-nav {
         position: fixed;
