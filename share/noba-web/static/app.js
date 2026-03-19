@@ -199,6 +199,7 @@ function dashboard() {
         showAddUserForm: false, newUsername: '', newPassword: '', newRole: 'viewer',
         showPassModal: false, passModalUser: '', passModalValue: '',
         showRemoveModal: false, removeModalUser: '',
+        showConfirmModal: false, confirmMessage: '', _pendingAction: null,
 
 
         // ── 2. Computed Properties ─────────────────────────────────────────────
@@ -675,44 +676,66 @@ function dashboard() {
             }
         },
 
+        /** Show a confirmation modal before running a destructive action. */
+        requestConfirm(message, fn) {
+            this.confirmMessage    = message;
+            this._pendingAction    = fn;
+            this.showConfirmModal  = true;
+        },
+        async runConfirmedAction() {
+            this.showConfirmModal = false;
+            if (this._pendingAction) {
+                await this._pendingAction();
+                this._pendingAction = null;
+            }
+        },
+
         async svcAction(svc, action) {
             if (!this.authenticated) return;
-            try {
-                const res = await fetch('/api/service-control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body: JSON.stringify({ service: svc.name, action, is_user: svc.is_user }),
-                });
-                const d = await res.json();
-                const label = svc.name.replace('.service', '');
-                this.addToast(
-                    d.success ? `${action}: ${label}` : `Failed: ${label}`,
-                    d.success ? 'success' : 'error'
-                );
-                setTimeout(() => this.refreshStats(), 1200);
-            } catch {
-                this.addToast('Service control error', 'error');
-            }
+            const label = svc.name.replace('.service', '');
+            const run = async () => {
+                try {
+                    const res = await fetch('/api/service-control', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                        body: JSON.stringify({ service: svc.name, action, is_user: svc.is_user }),
+                    });
+                    const d = await res.json();
+                    this.addToast(
+                        d.success ? `${action}: ${label}` : `Failed: ${label}`,
+                        d.success ? 'success' : 'error'
+                    );
+                    setTimeout(() => this.refreshStats(), 1200);
+                } catch {
+                    this.addToast('Service control error', 'error');
+                }
+            };
+            if (action === 'start') return run();
+            this.requestConfirm(`${action} service "${label}"?`, run);
         },
 
         async vmAction(vmId, vmName, action) {
             if (!this.authenticated) return;
-            this.addToast(`Triggering ${action} on ${vmName}...`, 'info');
-            try {
-                const res = await fetch('/api/truenas/vm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
-                                        body: JSON.stringify({ id: vmId, action }),
-                });
-                const d = await res.json();
-                this.addToast(
-                    d.success ? `VM ${vmName}: ${action} successful` : `VM ${vmName}: ${action} failed`,
-                    d.success ? 'success' : 'error'
-                );
-                setTimeout(() => this.refreshStats(), 1500);
-            } catch {
-                this.addToast('VM control error', 'error');
-            }
+            const run = async () => {
+                this.addToast(`Triggering ${action} on ${vmName}...`, 'info');
+                try {
+                    const res = await fetch('/api/truenas/vm', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                        body: JSON.stringify({ id: vmId, action }),
+                    });
+                    const d = await res.json();
+                    this.addToast(
+                        d.success ? `VM ${vmName}: ${action} successful` : `VM ${vmName}: ${action} failed`,
+                        d.success ? 'success' : 'error'
+                    );
+                    setTimeout(() => this.refreshStats(), 1500);
+                } catch {
+                    this.addToast('VM control error', 'error');
+                }
+            };
+            if (action === 'start') return run();
+            this.requestConfirm(`${action} VM "${vmName}"?`, run);
         },
 
         async triggerWebhook(actId, actName) {
@@ -1079,26 +1102,29 @@ function dashboard() {
         async containerAction(name, action) {
             if (!name) return;
             const label = `${action} ${name}`;
-            try {
-                const res = await fetch('/api/container-control', {
-                    method:  'POST',
-                    headers: {
-                        'Content-Type':  'application/json',
-                        'Authorization': 'Bearer ' + this._token(),
-                    },
-                    body: JSON.stringify({ name, action }),
-                });
-                const data = await res.json();
-                if (data.success) {
-                    this.addToast(`${label} — OK`, 'success');
-                    // Refresh containers after a short delay for state to settle
-                    setTimeout(() => this.refreshStats(), 1500);
-                } else {
-                    this.addToast(data.error || `${label} failed`, 'error');
+            const run = async () => {
+                try {
+                    const res = await fetch('/api/container-control', {
+                        method:  'POST',
+                        headers: {
+                            'Content-Type':  'application/json',
+                            'Authorization': 'Bearer ' + this._token(),
+                        },
+                        body: JSON.stringify({ name, action }),
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        this.addToast(`${label} — OK`, 'success');
+                        setTimeout(() => this.refreshStats(), 1500);
+                    } else {
+                        this.addToast(data.error || `${label} failed`, 'error');
+                    }
+                } catch (e) {
+                    this.addToast(`${label}: ${e.message}`, 'error');
                 }
-            } catch (e) {
-                this.addToast(`${label}: ${e.message}`, 'error');
-            }
+            };
+            if (action === 'start') return run();
+            this.requestConfirm(`${action} container "${name}"?`, run);
         },
 
 

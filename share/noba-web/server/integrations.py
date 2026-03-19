@@ -4,19 +4,21 @@ from __future__ import annotations
 import json
 import logging
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
+
+import httpx
 
 from .config import VERSION
 
 logger = logging.getLogger("noba")
 
+# Shared client with connection pooling and sensible defaults.
+_client = httpx.Client(timeout=4, follow_redirects=True)
+
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = 4) -> dict | list:
-    req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    r = _client.get(url, headers=headers or {}, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
 
 # ── Pi-hole ───────────────────────────────────────────────────────────────────
@@ -77,9 +79,9 @@ def get_kuma(url: str) -> list:
     if not url:
         return []
     try:
-        req = urllib.request.Request(f"{url.rstrip('/')}/metrics")
-        with urllib.request.urlopen(req, timeout=3) as r:
-            lines = r.read().decode().splitlines()
+        r = _client.get(f"{url.rstrip('/')}/metrics", timeout=3)
+        r.raise_for_status()
+        lines = r.text.splitlines()
         monitors = []
         for line in lines:
             if line.startswith("monitor_status{"):
@@ -145,16 +147,20 @@ def get_qbit(url: str, user: str, password: str) -> dict | None:
     base   = url.rstrip("/")
     result = {"dl_speed": 0, "up_speed": 0, "active_torrents": 0, "status": "offline"}
     try:
-        data   = urllib.parse.urlencode({"username": user, "password": password}).encode()
-        req1   = urllib.request.Request(f"{base}/api/v2/auth/login", data=data)
-        with urllib.request.urlopen(req1, timeout=4) as r1:
-            cookie = r1.headers.get("Set-Cookie")
+        r1 = _client.post(
+            f"{base}/api/v2/auth/login",
+            data={"username": user, "password": password},
+            timeout=4,
+        )
+        cookie = r1.headers.get("set-cookie")
         if not cookie:
             return result
-        req2 = urllib.request.Request(f"{base}/api/v2/sync/maindata")
-        req2.add_header("Cookie", cookie)
-        with urllib.request.urlopen(req2, timeout=4) as r2:
-            d = json.loads(r2.read().decode())
+        r2 = _client.get(
+            f"{base}/api/v2/sync/maindata",
+            headers={"Cookie": cookie},
+            timeout=4,
+        )
+        d = r2.json()
         state = d.get("server_state", {})
         result.update({
             "dl_speed":       state.get("dl_info_speed", 0),

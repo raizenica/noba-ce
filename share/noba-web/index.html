@@ -1613,6 +1613,29 @@
     </div>
 </div>
 
+<!-- Generic confirmation modal for destructive actions -->
+<div x-show="showConfirmModal"
+     class="modal-overlay"
+     style="display:none"
+     @click.self="showConfirmModal=false"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="confirm-modal-title"
+     x-cloak>
+    <div class="modal-box" style="max-width:380px">
+        <div class="modal-title" id="confirm-modal-title">
+            <i class="fas fa-exclamation-triangle" style="color:var(--danger)" aria-hidden="true"></i> Confirm Action
+        </div>
+        <p style="font-size:.84rem;margin-bottom:1.5rem;text-transform:capitalize" x-text="confirmMessage"></p>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="showConfirmModal=false">Cancel</button>
+            <button class="btn btn-sm btn-danger" @click="runConfirmedAction()">
+                <i class="fas fa-check" aria-hidden="true"></i> Confirm
+            </button>
+        </div>
+    </div>
+</div>
+
 
 <div class="toasts" role="log" aria-live="polite" aria-atomic="false">
     <template x-for="t in toasts" :key="t.id">

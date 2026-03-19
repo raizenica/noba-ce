@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 import re
 import subprocess
 import threading
@@ -161,12 +162,16 @@ def collect_system() -> dict:
     except Exception:
         s["osName"] = "Linux"
 
-    s["kernel"]   = _run(["uname", "-r"], cache_key="uname-r", cache_ttl=3600)
-    s["hostname"]  = _run(["hostname"],    cache_key="hostname",  cache_ttl=3600)
-    s["defaultIp"] = _run(
-        ["bash", "-c", "ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[\\d.]+'"],
-        timeout=1,
-    )
+    s["kernel"]   = os.uname().release
+    s["hostname"]  = socket.gethostname()
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1)
+        sock.connect(("1.1.1.1", 80))
+        s["defaultIp"] = sock.getsockname()[0]
+        sock.close()
+    except Exception:
+        s["defaultIp"] = ""
 
     try:
         up = psutil.boot_time()
@@ -198,10 +203,15 @@ def collect_system() -> dict:
 # ── Hardware ──────────────────────────────────────────────────────────────────
 def collect_hardware() -> dict:
     s: dict = {}
-    s["hwCpu"] = _run(
-        ["bash", "-c", "lscpu | grep 'Model name' | head -1 | cut -d: -f2 | xargs"],
-        cache_key="lscpu", cache_ttl=3600,
-    )
+    cpu_model = ""
+    try:
+        for line in _read_file("/proc/cpuinfo").splitlines():
+            if line.startswith("model name"):
+                cpu_model = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    s["hwCpu"] = cpu_model or "Unknown CPU"
     raw_gpu = _run(
         ["bash", "-c", "lspci | grep -i 'vga\\|3d' | cut -d: -f3"],
         cache_key="lspci", cache_ttl=3600,
