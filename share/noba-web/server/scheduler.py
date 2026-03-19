@@ -115,15 +115,19 @@ class Scheduler:
 
     def _trigger(self, auto: dict) -> None:
         """Submit an automation to the job runner."""
-        from .app import _AUTO_BUILDERS, _run_workflow
+        from .app import _AUTO_BUILDERS, _run_workflow, _run_parallel_workflow
 
         # Workflow: chain steps
         if auto["type"] == "workflow":
             steps = auto["config"].get("steps", [])
             if steps:
                 wf_retries = int(auto["config"].get("retries", 0))
-                _run_workflow(auto["id"], steps, "scheduler", retries=wf_retries)
-                logger.info("Scheduler triggered workflow '%s' (%d steps)", auto["name"], len(steps))
+                mode = auto["config"].get("mode", "sequential")
+                if mode == "parallel":
+                    _run_parallel_workflow(auto["id"], steps, "scheduler")
+                else:
+                    _run_workflow(auto["id"], steps, "scheduler", retries=wf_retries)
+                logger.info("Scheduler triggered workflow '%s' (%d steps, %s)", auto["name"], len(steps), mode)
             return
 
         builder = _AUTO_BUILDERS.get(auto["type"])

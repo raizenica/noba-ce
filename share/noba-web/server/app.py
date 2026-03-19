@@ -1,4 +1,4 @@
-"""Noba Command Center – FastAPI application v1.14.0"""
+"""Noba Command Center – FastAPI application v1.15.0"""
 from __future__ import annotations
 
 import asyncio
@@ -515,7 +515,7 @@ def _build_auto_webhook_process(config: dict) -> subprocess.Popen | None:
     url = config.get("url", "")
     method = config.get("method", "POST").upper()
     body = config.get("body")
-    cmd = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "-X", method]
+    cmd = ["curl", "-sS", "-w", "\n--- HTTP %{http_code} (%{time_total}s) ---", "-X", method]
     for k, v in config.get("headers", {}).items():
         cmd += ["-H", f"{k}: {v}"]
     if body:
@@ -685,9 +685,13 @@ def api_automations_run(auto_id: str, request: Request, auth=Depends(_require_op
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
         wf_retries = int(config.get("retries", 0))
-        _run_workflow(auto_id, steps, username, retries=wf_retries)
-        db.audit_log("automation_run", username, f"Workflow '{auto['name']}' started ({len(steps)} steps)", ip)
-        return {"success": True, "run_id": None, "workflow": True, "steps": len(steps)}
+        mode = config.get("mode", "sequential")
+        if mode == "parallel":
+            _run_parallel_workflow(auto_id, steps, username)
+        else:
+            _run_workflow(auto_id, steps, username, retries=wf_retries)
+        db.audit_log("automation_run", username, f"Workflow '{auto['name']}' started ({len(steps)} steps, {mode})", ip)
+        return {"success": True, "run_id": None, "workflow": True, "steps": len(steps), "mode": mode}
 
     builder = _AUTO_BUILDERS.get(auto["type"])
     if not builder:
@@ -706,6 +710,238 @@ def api_automations_run(auto_id: str, request: Request, auth=Depends(_require_op
         raise HTTPException(409, str(exc))
     db.audit_log("automation_run", username, f"Run '{auto['name']}' -> run_id={run_id}", ip)
     return {"success": True, "run_id": run_id}
+
+
+# ── /api/automations/templates — built-in presets ─────────────────────────────
+_AUTOMATION_TEMPLATES = [
+    {
+        "id": "daily-backup",
+        "name": "Daily NAS Backup",
+        "description": "Run the backup-to-nas script every night at 3 AM",
+        "type": "script",
+        "config": {"script": "backup", "args": "--verbose"},
+        "schedule": "0 3 * * *",
+    },
+    {
+        "id": "weekly-verify",
+        "name": "Weekly Backup Verify",
+        "description": "Verify backup integrity every Sunday at 6 AM",
+        "type": "script",
+        "config": {"script": "verify"},
+        "schedule": "0 6 * * 0",
+    },
+    {
+        "id": "disk-cleanup",
+        "name": "Disk Sentinel Check",
+        "description": "Run disk health check daily at 7 AM",
+        "type": "script",
+        "config": {"script": "diskcheck"},
+        "schedule": "0 7 * * *",
+    },
+    {
+        "id": "cloud-sync",
+        "name": "Cloud Backup Sync",
+        "description": "Sync backups to cloud storage every 6 hours",
+        "type": "script",
+        "config": {"script": "cloud"},
+        "schedule": "0 */6 * * *",
+    },
+    {
+        "id": "organize-downloads",
+        "name": "Organize Downloads",
+        "description": "Sort and organize the downloads folder hourly",
+        "type": "script",
+        "config": {"script": "organize"},
+        "schedule": "0 * * * *",
+    },
+    {
+        "id": "health-webhook",
+        "name": "Health Check Webhook",
+        "description": "POST a health ping to an external monitoring service",
+        "type": "webhook",
+        "config": {"url": "https://example.com/health", "method": "POST"},
+        "schedule": "*/5 * * * *",
+    },
+    {
+        "id": "restart-service",
+        "name": "Restart Service on Failure",
+        "description": "Restart a systemd service (configure service name)",
+        "type": "service",
+        "config": {"service": "your-service.service", "action": "restart"},
+        "schedule": None,
+    },
+    {
+        "id": "backup-workflow",
+        "name": "Full Backup Pipeline",
+        "description": "Backup → Verify → Cloud sync as a sequential workflow",
+        "type": "workflow",
+        "config": {"steps": [], "retries": 1},
+        "schedule": "0 2 * * *",
+    },
+]
+
+
+@app.get("/api/automations/templates")
+def api_automation_templates(auth=Depends(_get_auth)):
+    return _AUTOMATION_TEMPLATES
+
+
+# ── /api/automations/stats — aggregated run statistics ────────────────────────
+@app.get("/api/automations/stats")
+def api_automation_stats(auth=Depends(_get_auth)):
+    return db.get_automation_stats()
+
+
+# ── /api/automations/export — YAML export ────────────────────────────────────
+@app.get("/api/automations/export")
+def api_automations_export(auth=Depends(_require_operator)):
+    import yaml
+    autos = db.list_automations()
+    body = yaml.dump({"automations": autos}, default_flow_style=False, sort_keys=False)
+    return Response(
+        content=body,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": 'attachment; filename="noba-automations.yaml"'},
+    )
+
+
+# ── /api/automations/import — YAML import ────────────────────────────────────
+@app.post("/api/automations/import")
+async def api_automations_import(request: Request, auth=Depends(_require_admin)):
+    import uuid
+    import yaml
+    username, _ = auth
+    ip = _client_ip(request)
+    raw = await request.body()
+    if len(raw) > 512 * 1024:
+        raise HTTPException(413, "Upload too large (max 512 KB)")
+    try:
+        text = raw.decode("utf-8")
+        parsed = yaml.safe_load(text)
+    except Exception:
+        raise HTTPException(400, "Invalid YAML")
+    if not isinstance(parsed, dict):
+        raise HTTPException(400, "Expected a YAML mapping with 'automations' key")
+    items = parsed.get("automations", [])
+    if not isinstance(items, list):
+        raise HTTPException(400, "'automations' must be a list")
+    mode = request.query_params.get("mode", "skip")  # skip or overwrite
+    imported = 0
+    skipped = 0
+    for item in items:
+        if not isinstance(item, dict) or not item.get("name") or not item.get("type"):
+            skipped += 1
+            continue
+        atype = item["type"]
+        if atype not in _AUTO_TYPES:
+            skipped += 1
+            continue
+        existing_id = item.get("id", "")
+        existing = db.get_automation(existing_id) if existing_id else None
+        if existing:
+            if mode == "overwrite":
+                db.update_automation(existing_id, name=item["name"], type=atype,
+                                     config=item.get("config", {}),
+                                     schedule=item.get("schedule"),
+                                     enabled=item.get("enabled", True))
+                imported += 1
+            else:
+                skipped += 1
+        else:
+            auto_id = existing_id if existing_id and len(existing_id) == 12 else uuid.uuid4().hex[:12]
+            db.insert_automation(auto_id, item["name"], atype,
+                                item.get("config", {}), item.get("schedule"),
+                                item.get("enabled", True))
+            imported += 1
+    db.audit_log("automation_import", username,
+                 f"Imported {imported}, skipped {skipped} (mode={mode})", ip)
+    return {"imported": imported, "skipped": skipped}
+
+
+# ── /api/automations/{auto_id}/trigger — external API trigger ────────────────
+@app.post("/api/automations/{auto_id}/trigger")
+async def api_automations_trigger(auto_id: str, request: Request):
+    """Trigger an automation via API key (no login required).
+
+    Accepts either a Bearer token or ``X-Trigger-Key`` header matching
+    the automation's ``trigger_key`` config field.
+    """
+    auto = db.get_automation(auto_id)
+    if not auto:
+        raise HTTPException(404, "Automation not found")
+    config = auto["config"]
+    trigger_key = config.get("trigger_key", "")
+    if not trigger_key:
+        raise HTTPException(403, "No trigger key configured for this automation")
+    # Check key from header or query param
+    provided = (request.headers.get("X-Trigger-Key", "")
+                or request.query_params.get("key", ""))
+    if not provided or provided != trigger_key:
+        # Fall back to Bearer auth
+        auth_header = request.headers.get("Authorization", "")
+        username, role = authenticate(auth_header)
+        if not username or role not in ("admin", "operator"):
+            raise HTTPException(401, "Invalid trigger key or credentials")
+        triggered_by = username
+    else:
+        triggered_by = "api-trigger"
+
+    if auto["type"] == "workflow":
+        steps = config.get("steps", [])
+        if not steps:
+            raise HTTPException(400, "Workflow has no steps")
+        wf_retries = int(config.get("retries", 0))
+        mode = config.get("mode", "sequential")
+        if mode == "parallel":
+            _run_parallel_workflow(auto_id, steps, triggered_by)
+        else:
+            _run_workflow(auto_id, steps, triggered_by, retries=wf_retries)
+        return {"success": True, "workflow": True, "steps": len(steps)}
+
+    builder = _AUTO_BUILDERS.get(auto["type"])
+    if not builder:
+        raise HTTPException(400, f"Unsupported type: {auto['type']}")
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(config)
+
+    try:
+        run_id = job_runner.submit(
+            make_process, automation_id=auto_id,
+            trigger=f"api-trigger:{auto['name']}",
+            triggered_by=triggered_by,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    return {"success": True, "run_id": run_id}
+
+
+# ── Parallel workflow execution ───────────────────────────────────────────────
+def _run_parallel_workflow(auto_id: str, steps: list[str], triggered_by: str) -> None:
+    """Submit all workflow steps concurrently (fan-out)."""
+    for idx, step_auto_id in enumerate(steps):
+        step_auto = db.get_automation(step_auto_id)
+        if not step_auto:
+            logger.warning("Parallel workflow %s: step %d auto '%s' not found", auto_id, idx, step_auto_id)
+            continue
+        builder = _AUTO_BUILDERS.get(step_auto["type"])
+        if not builder:
+            logger.warning("Parallel workflow %s: step %d unsupported type '%s'", auto_id, idx, step_auto["type"])
+            continue
+        config = step_auto["config"]
+
+        def make_process(_run_id: int, _b=builder, _c=config) -> subprocess.Popen | None:
+            return _b(_c)
+
+        try:
+            job_runner.submit(
+                make_process,
+                automation_id=step_auto_id,
+                trigger=f"workflow:{auto_id}:parallel{idx}",
+                triggered_by=triggered_by,
+            )
+        except RuntimeError as exc:
+            logger.warning("Parallel workflow %s: step %d submit failed: %s", auto_id, idx, exc)
 
 
 # ── /api/admin/users ──────────────────────────────────────────────────────────
