@@ -20,11 +20,12 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 
 from .auth import authenticate, load_legacy_user, pbkdf2_hash, rate_limiter, token_store, \
-    users, valid_username, verify_password, check_password_strength, VALID_ROLES
+    users, valid_username, verify_password, check_password_strength
 from .collector import bg_collector, collect_stats, get_shutdown_flag
 from .config import (
     ACTION_LOG, ALLOWED_ACTIONS, HISTORY_METRICS, LOG_DIR, MAX_BODY_BYTES,
-    NOBA_YAML, PID_FILE, SCRIPT_DIR, SCRIPT_MAP, SECURITY_HEADERS, TRUST_PROXY, VERSION,
+    NOBA_YAML, PID_FILE, SCRIPT_DIR, SCRIPT_MAP, SECURITY_HEADERS, TRUST_PROXY,
+    VALID_ROLES, VERSION,
 )
 from .db import db
 from .metrics import (

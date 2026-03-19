@@ -1,4 +1,4 @@
-const CACHE_NAME = 'noba-v2';
+const CACHE_NAME = 'noba-v3';
 const STATS_CACHE = 'noba-stats';
 
 const STATIC_ASSETS = [
