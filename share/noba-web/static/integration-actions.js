@@ -701,7 +701,7 @@ function integrationActionsMixin() {
         async openAgentDetail(hostname) {
             this.agentDetailHost = hostname;
             this.agentDetailTab = 'overview';
-            this.agentDetailData = null;
+            this.agentDetailData = {};
             this.agentDetailServices = [];
             try {
                 var res = await fetch('/api/agents/' + encodeURIComponent(hostname), {
