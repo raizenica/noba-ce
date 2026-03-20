@@ -79,6 +79,9 @@
             <div class="sidebar-nav-item" :class="{ active: currentPage === 'logs' }" @click="navigateTo('logs')">
                 <i class="fas fa-scroll nav-icon"></i><span class="nav-label">Logs</span>
             </div>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'security' }" @click="navigateTo('security')">
+                <i class="fas fa-shield-alt nav-icon"></i><span class="nav-label">Security</span>
+            </div>
             <a class="sidebar-nav-item" href="/api/docs" target="_blank" title="API Documentation" x-show="userRole==='admin'">
                 <i class="fas fa-book nav-icon"></i><span class="nav-label">API Docs</span>
                 <i class="fas fa-external-link-alt nav-label" style="font-size:9px;opacity:.3;margin-left:auto"></i>
@@ -97,6 +100,7 @@
                 <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/alerts' }" @click="navigateTo('settings/alerts')">Alerts</span>
                 <span class="sidebar-sub-item" x-show="userRole==='admin'" :class="{ active: currentPage === 'settings/statuspage' }" @click="navigateTo('settings/statuspage')">Status Page</span>
                 <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/shortcuts' }" @click="navigateTo('settings/shortcuts')">Shortcuts</span>
+                <span class="sidebar-sub-item" x-show="userRole==='admin'" :class="{ active: currentPage === 'settings/plugins' }" @click="navigateTo('settings/plugins')">Plugins</span>
             </div>
         </nav>
         <div class="sidebar-user">
@@ -143,8 +147,17 @@
             <i class="fas fa-bell"></i>
             <span x-show="unreadCount>0" class="notif-badge" x-text="unreadCount" x-cloak></span>
         </button>
+        <span class="offline-badge" x-show="offlineMode" x-cloak><i class="fas fa-wifi-slash" style="font-size:.6rem"></i> Offline</span>
         <span class="live-pill" :class="'conn-' + connStatus"><span class="live-dot" :class="refreshing ? 'syncing' : connStatus"></span> <span x-text="livePillText"></span></span>
     </header>
+
+    <!-- Pull-to-refresh indicator -->
+    <div class="pull-refresh-indicator"
+         :class="{ visible: pullRefreshY > 10, ready: pullRefreshActive }"
+         :style="'opacity:' + Math.min(pullRefreshY / 80, 1)">
+        <i class="fas fa-arrow-down"></i>
+        <span x-text="pullRefreshActive ? 'Release to refresh' : 'Pull to refresh'"></span>
+    </div>
 
     <!-- ── Content Area ────────────────────────────────────────────── -->
     <main class="app-content">
@@ -225,6 +238,44 @@
                 x-show="userRole==='admin'" style="margin-left:auto">
             <i class="fas fa-cog"></i> Rules
         </button>
+    </div>
+
+    <!-- ── Infrastructure Health Score Gauge (Feature 7) ────────────── -->
+    <div x-show="healthScore" x-cloak style="margin-bottom:1rem;cursor:pointer" @click="healthScoreExpanded = !healthScoreExpanded">
+        <div style="display:flex;align-items:center;gap:1rem;padding:.8rem 1rem;border:1px solid var(--border);border-radius:8px;background:var(--surface-2)">
+            <div style="position:relative;width:64px;height:64px;border-radius:50%;flex-shrink:0" :style="infraScoreRingStyle">
+                <div style="position:absolute;inset:6px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center">
+                    <span style="font-size:1.2rem;font-weight:700" :style="'color:' + infraScoreColor" x-text="healthScore ? healthScore.score : '--'"></span>
+                </div>
+            </div>
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:.9rem">Infrastructure Health</div>
+                <div style="font-size:.75rem;color:var(--text-muted)" x-text="healthScore ? ('Grade: ' + healthScore.grade + ' — ' + Object.keys(healthScore.categories||{}).length + ' categories') : 'Loading...'"></div>
+            </div>
+            <button class="btn btn-xs" @click.stop="fetchHealthScore()" title="Refresh"><i class="fas fa-sync-alt"></i></button>
+            <i class="fas" :class="healthScoreExpanded ? 'fa-chevron-up' : 'fa-chevron-down'" style="color:var(--text-muted)"></i>
+        </div>
+        <div x-show="healthScoreExpanded" x-cloak style="border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:.8rem 1rem;background:var(--surface-2)">
+            <template x-for="(cat, key) in (healthScore ? healthScore.categories : {})" :key="key">
+                <div style="margin-bottom:.6rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem">
+                        <span style="font-size:.8rem;font-weight:500;text-transform:capitalize" x-text="key.replace(/_/g, ' ')"></span>
+                        <div style="display:flex;align-items:center;gap:.4rem">
+                            <span class="badge" :class="cat.status==='ok'?'bs':cat.status==='warning'?'bw':'bd'" x-text="cat.score + '/' + cat.max" style="font-size:.6rem"></span>
+                        </div>
+                    </div>
+                    <div style="height:4px;background:var(--surface);border-radius:2px;overflow:hidden">
+                        <div style="height:100%;border-radius:2px;transition:width .3s"
+                             :style="'width:' + (cat.score/cat.max*100) + '%;background:' + (cat.status==='ok'?'var(--success)':cat.status==='warning'?'var(--warning)':'var(--danger)')"></div>
+                    </div>
+                    <div style="font-size:.65rem;color:var(--text-muted);margin-top:.15rem" x-text="cat.detail"></div>
+                    <template x-for="rec in (cat.recommendations||[])" :key="rec">
+                        <div style="font-size:.65rem;color:var(--warning);padding-left:.5rem"><i class="fas fa-exclamation-triangle" style="margin-right:.2rem;font-size:.55rem"></i><span x-text="rec"></span></div>
+                    </template>
+                </div>
+            </template>
+            <div style="font-size:.65rem;color:var(--text-muted);text-align:right;margin-top:.4rem" x-text="healthScore && healthScore.timestamp ? 'Updated: ' + new Date(healthScore.timestamp * 1000).toLocaleTimeString() : ''"></div>
+        </div>
     </div>
 
     <div class="grid" :class="{'glance-mode': glanceMode}" id="sortable-grid" x-cloak>
@@ -2323,27 +2374,120 @@
         </div>
         <!-- Incidents Tab -->
         <div x-show="monitoringTab==='incidents'">
-            <div x-show="incidentLoading" class="empty-msg">Loading...</div>
-            <template x-if="incidents.length > 0 && !incidentLoading">
-                <div>
-                    <template x-for="inc in incidents" :key="inc.id">
-                        <div style="display:flex;gap:.6rem;margin-bottom:.8rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0" :style="inc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':inc.severity==='warning'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'">
-                            <div style="flex:1">
-                                <div style="display:flex;justify-content:space-between;align-items:center">
-                                    <span style="font-weight:600;font-size:.85rem" x-text="inc.title"></span>
-                                    <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date(inc.timestamp*1000).toLocaleString()"></span>
-                                </div>
-                                <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem" x-text="inc.source + (inc.details ? ' \u2014 ' + inc.details : '')"></div>
-                                <div style="margin-top:.3rem" x-show="!inc.resolved_at">
-                                    <button class="btn btn-xs" @click="resolveIncident(inc.id)"><i class="fas fa-check"></i> Resolve</button>
-                                </div>
-                                <div x-show="inc.resolved_at" style="font-size:.65rem;color:var(--success);margin-top:.2rem">Resolved <span x-text="new Date(inc.resolved_at*1000).toLocaleTimeString()"></span></div>
-                            </div>
+            <!-- War Room View (shown when a status incident is selected) -->
+            <div x-show="warRoomIncident" style="margin-bottom:1rem">
+                <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem">
+                    <button class="btn btn-xs" @click="closeWarRoom()" title="Back to incident list"><i class="fas fa-arrow-left"></i> Back</button>
+                    <span style="font-weight:700;font-size:.95rem" x-text="warRoomIncident ? warRoomIncident.title : ''"></span>
+                    <span style="font-size:.6rem;padding:.15rem .5rem;border-radius:3px;text-transform:uppercase;font-weight:700"
+                          :style="warRoomIncident && warRoomIncident.severity==='critical'?'background:rgba(255,23,68,.15);color:var(--danger)':warRoomIncident && warRoomIncident.severity==='major'?'background:rgba(255,179,0,.15);color:var(--warning)':'background:rgba(0,200,255,.15);color:var(--accent)'"
+                          x-text="warRoomIncident ? warRoomIncident.severity : ''"></span>
+                    <span style="font-size:.6rem;padding:.15rem .5rem;border-radius:3px;background:var(--surface-2);color:var(--text-muted);text-transform:uppercase;font-weight:600"
+                          x-text="warRoomIncident ? warRoomIncident.status : ''"></span>
+                </div>
+                <div style="display:flex;gap:.5rem;margin-bottom:.8rem;flex-wrap:wrap;align-items:center">
+                    <span style="font-size:.7rem;color:var(--text-muted)">Assigned to:</span>
+                    <span style="font-size:.75rem;font-weight:600" x-text="warRoomIncident && warRoomIncident.assigned_to ? warRoomIncident.assigned_to : 'Unassigned'"></span>
+                    <template x-if="userRole !== 'viewer'">
+                        <div style="display:flex;gap:.3rem;align-items:center">
+                            <select class="field-input" style="font-size:.7rem;padding:.15rem .3rem;width:120px" x-model="warRoomAssignTo">
+                                <option value="">-- assign --</option>
+                                <template x-for="u in userList" :key="u.username || u">
+                                    <option :value="u.username || u" x-text="u.username || u"></option>
+                                </template>
+                            </select>
+                            <button class="btn btn-xs" @click="assignWarRoomIncident()" :disabled="!warRoomAssignTo">
+                                <i class="fas fa-user-tag"></i> Assign
+                            </button>
                         </div>
                     </template>
                 </div>
-            </template>
-            <div x-show="!incidentLoading && incidents.length===0" class="empty-msg">No incidents in the last 24 hours.</div>
+                <!-- Message Thread -->
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;max-height:350px;overflow-y:auto;padding:.6rem;margin-bottom:.6rem" x-ref="warRoomThread">
+                    <div x-show="warRoomLoading" class="empty-msg">Loading messages...</div>
+                    <template x-for="msg in warRoomMessages" :key="msg.id">
+                        <div style="margin-bottom:.5rem;padding:.4rem .6rem;border-radius:5px"
+                             :style="msg.msg_type==='system'?'background:var(--surface-2);border-left:3px solid var(--accent)':'background:var(--bg);border-left:3px solid var(--border)'">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem">
+                                <div style="display:flex;align-items:center;gap:.4rem">
+                                    <span style="font-size:.75rem;font-weight:700" x-text="msg.author"></span>
+                                    <span style="font-size:.55rem;padding:.1rem .35rem;border-radius:3px;text-transform:uppercase;font-weight:600"
+                                          :style="msg.msg_type==='system'?'background:rgba(0,200,255,.15);color:var(--accent)':msg.msg_type==='action'?'background:rgba(255,179,0,.15);color:var(--warning)':msg.msg_type==='note'?'background:rgba(156,39,176,.15);color:#ce93d8':'background:var(--surface-2);color:var(--text-muted)'"
+                                          x-text="msg.msg_type"></span>
+                                </div>
+                                <span style="font-size:.6rem;color:var(--text-muted)" x-text="new Date((msg.created_at||0)*1000).toLocaleString()"></span>
+                            </div>
+                            <div style="font-size:.8rem;white-space:pre-wrap;word-break:break-word" x-text="msg.message"></div>
+                        </div>
+                    </template>
+                    <div x-show="!warRoomLoading && warRoomMessages.length===0" style="font-size:.75rem;color:var(--text-muted);text-align:center;padding:1rem 0">No messages yet. Start the conversation.</div>
+                </div>
+                <!-- Message Input -->
+                <template x-if="userRole !== 'viewer'">
+                    <div style="display:flex;gap:.4rem">
+                        <input class="field-input" style="flex:1;font-size:.8rem" type="text" x-model="warRoomMsg" placeholder="Type a message..." @keydown.enter="sendWarRoomMessage()">
+                        <button class="btn btn-sm btn-primary" @click="sendWarRoomMessage()" :disabled="!warRoomMsg.trim()">
+                            <i class="fas fa-paper-plane"></i> Send
+                        </button>
+                    </div>
+                </template>
+            </div>
+            <!-- Incident Lists (hidden when war room is open) -->
+            <div x-show="!warRoomIncident">
+                <!-- Status Page Incidents (with War Room) -->
+                <div style="margin-bottom:1.2rem">
+                    <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
+                        <span style="font-weight:700;font-size:.85rem"><i class="fas fa-comments" style="margin-right:.3rem"></i>Status Incidents</span>
+                        <span style="font-size:.6rem;color:var(--text-muted)">(click to open war room)</span>
+                    </div>
+                    <template x-for="sinc in spIncidents" :key="sinc.id">
+                        <div style="display:flex;gap:.6rem;margin-bottom:.5rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0;cursor:pointer;transition:background .15s"
+                             :style="sinc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':sinc.severity==='major'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'"
+                             @click="openWarRoom(sinc.id)">
+                            <div style="flex:1">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <div style="display:flex;align-items:center;gap:.4rem">
+                                        <span style="font-weight:600;font-size:.85rem" x-text="sinc.title"></span>
+                                        <span style="font-size:.55rem;padding:.1rem .35rem;border-radius:3px;text-transform:uppercase;font-weight:600;background:var(--surface-2);color:var(--text-muted)" x-text="sinc.status"></span>
+                                    </div>
+                                    <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date((sinc.created_at||0)*1000).toLocaleString()"></span>
+                                </div>
+                                <div style="display:flex;gap:.6rem;margin-top:.2rem;font-size:.65rem;color:var(--text-muted)">
+                                    <span x-show="sinc.assigned_to"><i class="fas fa-user-tag"></i> <span x-text="sinc.assigned_to"></span></span>
+                                    <span x-show="sinc.created_by">by <span x-text="sinc.created_by"></span></span>
+                                    <span x-show="sinc.resolved_at" style="color:var(--success)"><i class="fas fa-check-circle"></i> Resolved</span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="spIncidents.length===0" style="font-size:.75rem;color:var(--text-muted);padding:.3rem 0">No status incidents.</div>
+                </div>
+                <!-- Auto-generated Alert Incidents -->
+                <div>
+                    <div style="font-weight:700;font-size:.85rem;margin-bottom:.5rem"><i class="fas fa-bell" style="margin-right:.3rem"></i>Alert Incidents</div>
+                    <div x-show="incidentLoading" class="empty-msg">Loading...</div>
+                    <template x-if="incidents.length > 0 && !incidentLoading">
+                        <div>
+                            <template x-for="inc in incidents" :key="inc.id">
+                                <div style="display:flex;gap:.6rem;margin-bottom:.8rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0" :style="inc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':inc.severity==='warning'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'">
+                                    <div style="flex:1">
+                                        <div style="display:flex;justify-content:space-between;align-items:center">
+                                            <span style="font-weight:600;font-size:.85rem" x-text="inc.title"></span>
+                                            <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date(inc.timestamp*1000).toLocaleString()"></span>
+                                        </div>
+                                        <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem" x-text="inc.source + (inc.details ? ' \u2014 ' + inc.details : '')"></div>
+                                        <div style="margin-top:.3rem" x-show="!inc.resolved_at">
+                                            <button class="btn btn-xs" @click="resolveIncident(inc.id)"><i class="fas fa-check"></i> Resolve</button>
+                                        </div>
+                                        <div x-show="inc.resolved_at" style="font-size:.65rem;color:var(--success);margin-top:.2rem">Resolved <span x-text="new Date(inc.resolved_at*1000).toLocaleTimeString()"></span></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <div x-show="!incidentLoading && incidents.length===0" class="empty-msg">No incidents in the last 24 hours.</div>
+                </div>
+            </div>
         </div>
         <!-- Correlation Tab -->
         <div x-show="monitoringTab==='correlation'">
@@ -2589,6 +2733,9 @@
             <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='tailscale'}" @click="infrastructureTab='tailscale'">Tailscale</button>
             <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='sync'}" @click="infrastructureTab='sync'; fetchSyncStatus()">Cross-Site Sync</button>
             <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='drift'}" @click="infrastructureTab='drift'; fetchDriftBaselines()">Config Drift</button>
+            <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='export'}" @click="infrastructureTab='export'" x-show="userRole!=='viewer'">Export</button>
+            <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='traffic'}" @click="infrastructureTab='traffic'"><i class="fas fa-chart-area" style="margin-right:.3rem"></i>Traffic</button>
+            <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='networkmap'}" @click="infrastructureTab='networkmap'; fetchNetworkDevices()">Network Map</button>
         </div>
         <!-- Tab contents will be moved here -->
         <!-- Service Map Tab -->
@@ -2871,6 +3018,210 @@
             </template>
             <div x-show="driftExpandedId !== null && driftResults.length === 0" class="empty-msg" style="margin-top:.5rem">No drift check results yet for this baseline. Click "Check Now" to run a check.</div>
         </div>
+        <!-- Export Tab -->
+        <div x-show="infrastructureTab==='export'">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:flex-end">
+                <div style="display:flex;flex-direction:column;gap:.2rem;min-width:160px">
+                    <label style="font-size:.7rem;color:var(--text-dim)">Format</label>
+                    <select x-model="iacFormat" style="padding:.3rem .5rem;font-size:.8rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text)">
+                        <option value="ansible">Ansible Playbook</option>
+                        <option value="docker-compose">Docker Compose</option>
+                        <option value="shell">Shell Script</option>
+                    </select>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:.2rem;min-width:160px">
+                    <label style="font-size:.7rem;color:var(--text-dim)">Agent</label>
+                    <select x-model="iacHostname" style="padding:.3rem .5rem;font-size:.8rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text)">
+                        <option value="">All Agents</option>
+                        <template x-for="a in (agents||[])" :key="a.hostname">
+                            <option :value="a.hostname" x-text="a.hostname"></option>
+                        </template>
+                    </select>
+                </div>
+                <button class="btn btn-sm btn-primary" @click="generateIaC()" :disabled="iacLoading">
+                    <i class="fas fa-file-code" :class="iacLoading?'fa-spin':''"></i> Generate
+                </button>
+                <button class="btn btn-sm" @click="downloadIaC()" :disabled="!iacOutput" title="Download file">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button class="btn btn-sm" @click="copyIaC()" :disabled="!iacOutput" title="Copy to clipboard">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+            </div>
+            <div x-show="iacLoading" class="empty-msg">Generating...</div>
+            <div x-show="!iacLoading && !iacOutput" class="empty-msg">Select a format and agent, then click Generate to create an Infrastructure-as-Code export.</div>
+            <div x-show="!iacLoading && iacOutput" style="position:relative">
+                <pre style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.8rem;font-size:.75rem;line-height:1.5;overflow-x:auto;max-height:600px;overflow-y:auto;font-family:'Fira Code','Cascadia Code',monospace;white-space:pre;tab-size:2;color:var(--text)" x-text="iacOutput"></pre>
+            </div>
+        </div>
+        <!-- Traffic Tab -->
+        <div x-show="infrastructureTab==='traffic'">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:flex-end">
+                <div style="display:flex;flex-direction:column;gap:.2rem;min-width:160px">
+                    <label style="font-size:.7rem;color:var(--text-dim)">Agent</label>
+                    <select x-model="trafficAgent" style="padding:.3rem .5rem;font-size:.8rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text)">
+                        <option value="">Select agent...</option>
+                        <template x-for="a in (agents||[])" :key="a.hostname">
+                            <option :value="a.hostname" x-text="a.hostname"></option>
+                        </template>
+                    </select>
+                </div>
+                <button class="btn btn-sm btn-primary" @click="fetchNetworkStats()" :disabled="!trafficAgent || trafficLoading">
+                    <i class="fas fa-sync-alt" :class="trafficLoading?'fa-spin':''"></i> Refresh
+                </button>
+            </div>
+            <div x-show="!trafficAgent" class="empty-msg">Select an agent to view network traffic analysis.</div>
+            <div x-show="trafficLoading" class="empty-msg">Loading network stats...</div>
+            <div x-show="trafficAgent && !trafficLoading && trafficData">
+                <!-- Per-interface table -->
+                <h3 style="font-size:.9rem;margin-bottom:.5rem;font-weight:600"><i class="fas fa-network-wired" style="margin-right:.3rem"></i> Interfaces</h3>
+                <div style="overflow-x:auto;margin-bottom:1.5rem">
+                    <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+                        <thead>
+                            <tr style="border-bottom:2px solid var(--border)">
+                                <th style="padding:.4rem;text-align:left">Interface</th>
+                                <th style="padding:.4rem;text-align:right">RX Rate</th>
+                                <th style="padding:.4rem;text-align:right">TX Rate</th>
+                                <th style="padding:.4rem;text-align:right">Total RX</th>
+                                <th style="padding:.4rem;text-align:right">Total TX</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="iface in (trafficData.interfaces||[])" :key="iface.name">
+                                <tr style="border-bottom:1px solid var(--border)">
+                                    <td style="padding:.4rem;font-weight:600;font-family:monospace" x-text="iface.name"></td>
+                                    <td style="padding:.4rem;text-align:right;color:var(--success)" x-text="humanBps(iface.rx_rate||0)"></td>
+                                    <td style="padding:.4rem;text-align:right;color:var(--accent)" x-text="humanBps(iface.tx_rate||0)"></td>
+                                    <td style="padding:.4rem;text-align:right" x-text="humanBytes(iface.rx_bytes||0)"></td>
+                                    <td style="padding:.4rem;text-align:right" x-text="humanBytes(iface.tx_bytes||0)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <div x-show="!trafficData.interfaces || trafficData.interfaces.length===0" class="empty-msg">No interface data available.</div>
+
+                <!-- Top Talkers -->
+                <h3 style="font-size:.9rem;margin-bottom:.5rem;font-weight:600"><i class="fas fa-fire" style="margin-right:.3rem"></i> Top Talkers</h3>
+                <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem">
+                    <template x-for="t in (trafficData.top_talkers||[])" :key="t.process">
+                        <div style="padding:.4rem .8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);font-size:.8rem;display:flex;align-items:center;gap:.4rem">
+                            <span style="font-weight:600" x-text="t.process"></span>
+                            <span class="badge bn" x-text="t.connections + ' conn'" style="font-size:.6rem"></span>
+                        </div>
+                    </template>
+                </div>
+                <div x-show="!trafficData.top_talkers || trafficData.top_talkers.length===0" class="empty-msg">No active process connections detected.</div>
+
+                <!-- Connection table with filtering -->
+                <h3 style="font-size:.9rem;margin-bottom:.5rem;font-weight:600"><i class="fas fa-plug" style="margin-right:.3rem"></i> Connections</h3>
+                <div style="display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+                    <input type="text" x-model="trafficConnFilter" placeholder="Filter by process, address, state..."
+                           style="padding:.3rem .5rem;font-size:.8rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text);flex:1;min-width:200px">
+                </div>
+                <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
+                    <table style="width:100%;font-size:.75rem;border-collapse:collapse">
+                        <thead style="position:sticky;top:0;background:var(--surface)">
+                            <tr style="border-bottom:2px solid var(--border)">
+                                <th style="padding:.3rem;text-align:left">PID</th>
+                                <th style="padding:.3rem;text-align:left">Process</th>
+                                <th style="padding:.3rem;text-align:left">Local</th>
+                                <th style="padding:.3rem;text-align:left">Remote</th>
+                                <th style="padding:.3rem;text-align:center">State</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="conn in filteredTrafficConns()" :key="conn.pid + conn.local + conn.remote">
+                                <tr style="border-bottom:1px solid var(--border)">
+                                    <td style="padding:.3rem;font-family:monospace" x-text="conn.pid||'-'"></td>
+                                    <td style="padding:.3rem;font-weight:600" x-text="conn.process||'-'"></td>
+                                    <td style="padding:.3rem;font-family:monospace;font-size:.7rem" x-text="conn.local"></td>
+                                    <td style="padding:.3rem;font-family:monospace;font-size:.7rem" x-text="conn.remote"></td>
+                                    <td style="padding:.3rem;text-align:center">
+                                        <span class="badge" :class="conn.state==='ESTAB'?'bs':conn.state==='LISTEN'?'bn':'bw'" x-text="conn.state" style="font-size:.55rem"></span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <div x-show="!trafficData.connections || trafficData.connections.length===0" class="empty-msg">No TCP connections found.</div>
+            </div>
+        </div>
+        <!-- Network Map Tab -->
+        <div x-show="infrastructureTab==='networkmap'">
+            <!-- Summary and discover controls -->
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+                <span style="font-size:.85rem;font-weight:600"><i class="fas fa-network-wired" style="margin-right:.3rem"></i> Discovered Devices: <span x-text="(networkDevices||[]).length"></span></span>
+                <div style="flex:1"></div>
+                <template x-if="userRole!=='viewer'">
+                    <div style="display:flex;gap:.3rem;align-items:center">
+                        <select x-model="networkDiscoverHost" style="font-size:.75rem;padding:.25rem .4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface-2);color:var(--text)">
+                            <option value="">Select agent...</option>
+                            <template x-for="a in (agents||[])" :key="a.hostname">
+                                <option :value="a.hostname" x-text="a.hostname"></option>
+                            </template>
+                        </select>
+                        <button class="btn btn-sm btn-primary" @click="triggerNetworkDiscover()" :disabled="networkDiscoverLoading || !networkDiscoverHost">
+                            <i class="fas fa-search" :class="networkDiscoverLoading?'fa-spin':''"></i> Discover
+                        </button>
+                        <button class="btn btn-sm" @click="fetchNetworkDevices()"><i class="fas fa-sync-alt"></i></button>
+                    </div>
+                </template>
+            </div>
+            <!-- Subnet grouping -->
+            <template x-if="networkDevices && networkDevices.length > 0">
+                <div>
+                    <template x-for="subnet in networkSubnets()" :key="subnet.prefix">
+                        <div style="margin-bottom:1rem">
+                            <div style="font-size:.78rem;font-weight:600;padding:.3rem .5rem;background:var(--surface-2);border-radius:4px;margin-bottom:.3rem;border:1px solid var(--border)">
+                                <i class="fas fa-sitemap" style="margin-right:.3rem;opacity:.6"></i>
+                                <span x-text="subnet.prefix + '.x'"></span>
+                                <span style="font-weight:normal;color:var(--text-dim);margin-left:.5rem" x-text="'(' + subnet.devices.length + ' devices)'"></span>
+                            </div>
+                            <table style="width:100%;font-size:.78rem;border-collapse:collapse">
+                                <thead>
+                                    <tr style="border-bottom:2px solid var(--border)">
+                                        <th style="padding:.3rem .4rem;text-align:left">IP</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">MAC</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">Hostname</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">Vendor</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">Open Ports</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">Discovered By</th>
+                                        <th style="padding:.3rem .4rem;text-align:left">Last Seen</th>
+                                        <th style="padding:.3rem .4rem" x-show="userRole!=='viewer'"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="d in subnet.devices" :key="d.id">
+                                        <tr style="border-bottom:1px solid var(--border)">
+                                            <td style="padding:.3rem .4rem;font-family:monospace" x-text="d.ip"></td>
+                                            <td style="padding:.3rem .4rem;font-family:monospace;font-size:.7rem;color:var(--text-dim)" x-text="d.mac || '-'"></td>
+                                            <td style="padding:.3rem .4rem;font-weight:600" x-text="d.hostname || '-'"></td>
+                                            <td style="padding:.3rem .4rem;font-size:.72rem;color:var(--text-dim)" x-text="d.vendor || '-'"></td>
+                                            <td style="padding:.3rem .4rem">
+                                                <template x-for="p in (d.open_ports||[])" :key="p">
+                                                    <span class="badge bn" style="font-size:.6rem;margin:1px" x-text="p"></span>
+                                                </template>
+                                                <span x-show="!d.open_ports || d.open_ports.length===0" style="color:var(--text-dim);font-size:.7rem">none</span>
+                                            </td>
+                                            <td style="padding:.3rem .4rem;font-size:.72rem" x-text="d.discovered_by || '-'"></td>
+                                            <td style="padding:.3rem .4rem;font-size:.7rem;color:var(--text-dim)" x-text="d.last_seen ? new Date(d.last_seen * 1000).toLocaleString() : '-'"></td>
+                                            <td style="padding:.3rem .4rem;text-align:center" x-show="userRole!=='viewer'">
+                                                <button class="btn btn-xs btn-danger" @click="deleteNetworkDevice(d.id)" title="Remove"><i class="fas fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <div x-show="!networkDevices || networkDevices.length===0" class="empty-msg">
+                No devices discovered yet. Select an agent and click "Discover" to scan the local network.
+            </div>
+        </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════════ -->
@@ -2905,6 +3256,87 @@
                     </div>
                 </div>
             </template>
+        </div>
+
+        <!-- ── Webhooks Section (Feature 8) ──────────────────────────── -->
+        <div x-show="userRole==='admin'" style="margin-top:2rem">
+            <h3 style="margin-bottom:.8rem"><i class="fas fa-link" style="margin-right:.5rem"></i> Webhooks</h3>
+            <div style="display:flex;gap:.5rem;margin-bottom:.8rem">
+                <button class="btn btn-sm btn-primary" @click="showWebhookCreateModal=true; lastCreatedWebhook=null"><i class="fas fa-plus"></i> New Webhook</button>
+                <button class="btn btn-sm" @click="fetchWebhooks()"><i class="fas fa-sync-alt" :class="webhookListLoading?'fa-spin':''"></i> Refresh</button>
+            </div>
+            <div x-show="webhookListLoading" class="empty-msg">Loading...</div>
+            <div x-show="!webhookListLoading && webhookList.length === 0" class="empty-msg">No webhooks configured. Create one to receive external triggers.</div>
+            <div x-show="!webhookListLoading && webhookList.length > 0" style="overflow-x:auto">
+                <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+                    <thead><tr style="border-bottom:1px solid var(--border)">
+                        <th style="padding:.4rem;text-align:left">Name</th>
+                        <th style="padding:.4rem;text-align:left">URL</th>
+                        <th style="padding:.4rem;text-align:left">Automation</th>
+                        <th style="padding:.4rem;text-align:center">Triggers</th>
+                        <th style="padding:.4rem;text-align:center">Last Triggered</th>
+                        <th style="padding:.4rem;text-align:center">Enabled</th>
+                        <th style="padding:.4rem;text-align:center">Actions</th>
+                    </tr></thead>
+                    <tbody>
+                        <template x-for="wh in webhookList" :key="wh.id">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:.4rem;font-weight:500" x-text="wh.name"></td>
+                                <td style="padding:.4rem">
+                                    <code style="font-size:.65rem;background:var(--surface);padding:1px 4px;border-radius:3px;word-break:break-all" x-text="webhookUrl(wh.hook_id)"></code>
+                                    <button class="btn btn-xs" style="margin-left:.3rem;padding:1px 4px" @click="copyToClipboard(webhookUrl(wh.hook_id))" title="Copy URL"><i class="fas fa-copy"></i></button>
+                                </td>
+                                <td style="padding:.4rem">
+                                    <span x-text="wh.automation_id ? (autoList.find(a=>a.id===wh.automation_id)||{}).name || wh.automation_id : '(none)'" style="font-size:.75rem"></span>
+                                </td>
+                                <td style="padding:.4rem;text-align:center" x-text="wh.trigger_count||0"></td>
+                                <td style="padding:.4rem;text-align:center;font-size:.7rem" x-text="wh.last_triggered ? new Date(wh.last_triggered*1000).toLocaleString() : 'Never'"></td>
+                                <td style="padding:.4rem;text-align:center"><span class="badge" :class="wh.enabled?'bs':'bw'" x-text="wh.enabled?'Yes':'No'" style="font-size:.55rem"></span></td>
+                                <td style="padding:.4rem;text-align:center">
+                                    <button class="btn btn-xs btn-danger" @click="deleteWebhook(wh.id)" title="Delete"><i class="fas fa-trash"></i></button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Webhook Create Modal (Feature 8) ──────────────────────── -->
+    <div x-show="showWebhookCreateModal" class="modal-overlay" style="display:none" @click.self="showWebhookCreateModal=false" role="dialog" aria-modal="true" x-cloak>
+        <div class="modal-box" style="max-width:500px">
+            <h3 class="modal-title"><i class="fas fa-link" style="margin-right:.5rem"></i> Create Webhook</h3>
+            <div style="padding:1rem">
+                <label class="field-label">Name</label>
+                <input type="text" x-model="newWebhookName" placeholder="GitHub Deploy Hook" style="width:100%;margin-bottom:.8rem;padding:.4rem;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+                <label class="field-label">Linked Automation (optional)</label>
+                <select x-model="newWebhookAutoId" style="width:100%;margin-bottom:.8rem;padding:.4rem;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">
+                    <option value="">None</option>
+                    <template x-for="a in autoList" :key="a.id">
+                        <option :value="a.id" x-text="a.name + ' (' + a.type + ')'"></option>
+                    </template>
+                </select>
+                <!-- Show created webhook details -->
+                <div x-show="lastCreatedWebhook" style="margin-top:.5rem;padding:.6rem;background:var(--surface);border:1px solid var(--border);border-radius:6px">
+                    <div style="font-weight:600;font-size:.8rem;margin-bottom:.4rem;color:var(--success)"><i class="fas fa-check-circle"></i> Webhook Created</div>
+                    <label class="field-label">Webhook URL</label>
+                    <div style="display:flex;gap:.3rem;margin-bottom:.5rem">
+                        <code style="flex:1;font-size:.65rem;background:var(--surface-2);padding:4px 6px;border-radius:3px;word-break:break-all" x-text="lastCreatedWebhook ? webhookUrl(lastCreatedWebhook.hook_id) : ''"></code>
+                        <button class="btn btn-xs" @click="copyToClipboard(webhookUrl(lastCreatedWebhook.hook_id))"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <label class="field-label">Secret (for HMAC-SHA256 signing)</label>
+                    <div style="display:flex;gap:.3rem">
+                        <code style="flex:1;font-size:.65rem;background:var(--surface-2);padding:4px 6px;border-radius:3px;word-break:break-all" x-text="lastCreatedWebhook ? lastCreatedWebhook.secret : ''"></code>
+                        <button class="btn btn-xs" @click="copyToClipboard(lastCreatedWebhook.secret)"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div style="font-size:.65rem;color:var(--text-muted);margin-top:.4rem"><i class="fas fa-info-circle"></i> Save the secret now. It will not be shown again.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-sm" @click="showWebhookCreateModal=false">Close</button>
+                <button class="btn btn-sm btn-primary" @click="createWebhook()" x-show="!lastCreatedWebhook"><i class="fas fa-plus"></i> Create</button>
+            </div>
         </div>
     </div>
 
@@ -3055,6 +3487,128 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Security Posture Page ──────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'security' && authenticated" x-cloak
+         x-effect="if(currentPage === 'security') fetchSecurityData()">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem">
+            <h2 style="margin:0"><i class="fas fa-shield-alt" style="margin-right:.5rem;color:var(--accent)"></i> Security Posture</h2>
+            <div style="display:flex;gap:.5rem">
+                <button class="btn btn-sm btn-primary" @click="securityScanAll()" :disabled="securityScanning"
+                        x-show="userRole !== 'viewer'">
+                    <i class="fas" :class="securityScanning ? 'fa-spinner fa-spin' : 'fa-radar'"></i> Scan All Agents
+                </button>
+            </div>
+        </div>
+
+        <!-- Overall Score Gauge -->
+        <div class="card" style="margin-bottom:1rem;text-align:center;padding:1.5rem">
+            <div style="font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);margin-bottom:.5rem">Aggregate Security Score</div>
+            <div style="position:relative;display:inline-block;width:120px;height:120px">
+                <svg viewBox="0 0 120 120" style="transform:rotate(-90deg)">
+                    <circle cx="60" cy="60" r="52" fill="none" stroke="var(--surface-2)" stroke-width="10"/>
+                    <circle cx="60" cy="60" r="52" fill="none"
+                            :stroke="(securityScore||0) >= 80 ? 'var(--success)' : (securityScore||0) >= 50 ? 'var(--warning)' : 'var(--danger)'"
+                            stroke-width="10"
+                            stroke-linecap="round"
+                            :stroke-dasharray="(2 * Math.PI * 52)"
+                            :stroke-dashoffset="(2 * Math.PI * 52) * (1 - ((securityScore||0) / 100))"/>
+                </svg>
+                <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:2rem;font-weight:700;font-family:var(--font-data)"
+                     :style="'color:' + ((securityScore||0) >= 80 ? 'var(--success)' : (securityScore||0) >= 50 ? 'var(--warning)' : 'var(--danger)')">
+                    <span x-text="securityScore !== null ? securityScore : '--'"></span>
+                </div>
+            </div>
+            <div style="font-size:.7rem;color:var(--text-muted);margin-top:.5rem" x-text="securityAgentCount + ' agent(s) scanned'"></div>
+        </div>
+
+        <!-- Per-Agent Score Cards -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem;margin-bottom:1rem">
+            <template x-for="agent in securityAgents" :key="agent.hostname">
+                <div class="card" style="padding:1rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+                        <span style="font-weight:600;font-size:.85rem" x-text="agent.hostname"></span>
+                        <span class="badge"
+                              :class="agent.score >= 80 ? 'bs' : agent.score >= 50 ? 'bw' : 'bd'"
+                              x-text="agent.score"></span>
+                    </div>
+                    <div style="font-size:.65rem;color:var(--text-muted)" x-text="agent.scanned_at ? new Date(agent.scanned_at * 1000).toLocaleString() : 'Never scanned'"></div>
+                    <div style="margin-top:.5rem;display:flex;gap:.5rem" x-show="userRole !== 'viewer'">
+                        <button class="btn btn-xs" @click="securityScanHost(agent.hostname)">
+                            <i class="fas fa-search"></i> Scan
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Findings Table -->
+        <div class="card" style="padding:1rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem">
+                <h3 style="margin:0;font-size:.95rem"><i class="fas fa-exclamation-triangle" style="color:var(--warning);margin-right:.3rem"></i> Findings</h3>
+                <div style="display:flex;gap:.5rem">
+                    <select class="form-select" style="font-size:.7rem;padding:.2rem .4rem"
+                            x-model="securityFilterSeverity" @change="fetchSecurityData()">
+                        <option value="">All Severities</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                    </select>
+                    <select class="form-select" style="font-size:.7rem;padding:.2rem .4rem"
+                            x-model="securityFilterHost" @change="fetchSecurityData()">
+                        <option value="">All Hosts</option>
+                        <template x-for="agent in securityAgents" :key="agent.hostname">
+                            <option :value="agent.hostname" x-text="agent.hostname"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+            <div style="overflow-x:auto">
+                <table class="data-table" style="width:100%;font-size:.75rem">
+                    <thead>
+                        <tr>
+                            <th>Host</th>
+                            <th>Severity</th>
+                            <th>Category</th>
+                            <th>Description</th>
+                            <th>Remediation</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="f in securityFindings" :key="f.id">
+                            <tr>
+                                <td x-text="f.hostname" style="white-space:nowrap"></td>
+                                <td>
+                                    <span class="badge"
+                                          :class="f.severity === 'high' ? 'bd' : f.severity === 'medium' ? 'bw' : 'bn'"
+                                          x-text="f.severity"></span>
+                                </td>
+                                <td x-text="f.category" style="white-space:nowrap"></td>
+                                <td x-text="f.description"></td>
+                                <td style="font-size:.7rem;color:var(--text-muted)" x-text="f.remediation"></td>
+                            </tr>
+                        </template>
+                        <tr x-show="securityFindings.length === 0">
+                            <td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem">
+                                No findings. Run a scan to check your security posture.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Historical Score Trend Placeholder -->
+        <div class="card" style="padding:1rem;margin-top:1rem">
+            <h3 style="margin:0 0 .5rem;font-size:.95rem"><i class="fas fa-chart-line" style="color:var(--accent);margin-right:.3rem"></i> Score History</h3>
+            <canvas id="securityScoreChart" height="120"></canvas>
+            <div x-show="securityHistory.length === 0" style="text-align:center;color:var(--text-muted);padding:1.5rem;font-size:.75rem">
+                No historical data yet. Scores will appear here after scans.
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
     <!-- ── Settings Sub-Pages ──────────────────────────────────────── -->
     <!-- ══════════════════════════════════════════════════════════════ -->
     <!-- ── Settings Pages (rendered inline, mapped from currentPage to settingsTab) ── -->
@@ -3062,13 +3616,14 @@
          x-effect="if(currentPage==='settings/general') settingsTab='data';
                     else if(currentPage==='settings/visibility') settingsTab='visibility';
                     else if(currentPage==='settings/integrations') settingsTab='integrations';
-                    else if(currentPage==='settings/backup') { settingsTab='backup'; fetchCloudRemotes(); fetchBackupStatus(); }
+                    else if(currentPage==='settings/backup') { settingsTab='backup'; fetchCloudRemotes(); fetchBackupStatus(); fetchBackupVerifications(); fetchBackup321Status(); }
                     else if(currentPage==='settings/users') { settingsTab='users'; fetchUsers(); }
                     else if(currentPage==='settings/alerts') settingsTab='alerts';
                     else if(currentPage==='settings/statuspage') { settingsTab='statuspage'; fetchStatusComponents(); fetchStatusIncidents(); }
-                    else if(currentPage==='settings/shortcuts') settingsTab='shortcuts';">
+                    else if(currentPage==='settings/shortcuts') settingsTab='shortcuts';
+                    else if(currentPage==='settings/plugins') { settingsTab='plugins'; fetchPlugins(); }">
         <h2 style="margin-bottom:1rem">
-            <i class="fas" :class="currentPage==='settings/general'?'fa-database':currentPage==='settings/visibility'?'fa-eye':currentPage==='settings/integrations'?'fa-plug':currentPage==='settings/backup'?'fa-archive':currentPage==='settings/users'?'fa-users':currentPage==='settings/alerts'?'fa-bell':currentPage==='settings/statuspage'?'fa-signal':'fa-keyboard'" style="margin-right:.5rem"></i>
+            <i class="fas" :class="currentPage==='settings/general'?'fa-database':currentPage==='settings/visibility'?'fa-eye':currentPage==='settings/integrations'?'fa-plug':currentPage==='settings/backup'?'fa-archive':currentPage==='settings/users'?'fa-users':currentPage==='settings/alerts'?'fa-bell':currentPage==='settings/statuspage'?'fa-signal':currentPage==='settings/plugins'?'fa-puzzle-piece':'fa-keyboard'" style="margin-right:.5rem"></i>
             Settings &mdash; <span x-text="currentPage.split('/')[1]?.charAt(0).toUpperCase() + currentPage.split('/')[1]?.slice(1)"></span>
         </h2>
         <!-- Settings content is rendered from the existing settingsTab blocks below -->
@@ -3085,6 +3640,18 @@
     </div>
 </div>
 
+<!-- Mobile quick actions sheet -->
+<div class="quick-actions-sheet" :class="{ open: quickActionsOpen }" x-show="authenticated" x-cloak @click.outside="quickActionsOpen=false">
+    <div style="text-align:center;margin-bottom:.6rem">
+        <div style="width:32px;height:4px;background:var(--border);border-radius:2px;margin:0 auto"></div>
+    </div>
+    <div class="quick-actions-grid" x-show="userRole !== 'viewer'">
+        <button class="quick-action-btn" @click="quickActionsOpen=false; refreshStats()"><i class="fas fa-sync"></i>Refresh</button>
+        <button class="quick-action-btn" @click="quickActionsOpen=false; navigateTo('agents')"><i class="fas fa-terminal"></i>Commands</button>
+        <button class="quick-action-btn" @click="quickActionsOpen=false; navigateTo('monitoring')"><i class="fas fa-bell"></i>Alerts</button>
+    </div>
+</div>
+
 <!-- Mobile bottom nav -->
 <nav class="mobile-nav" x-show="authenticated" x-cloak>
     <a class="mobile-nav-item" :class="{ active: currentPage === 'dashboard' }" @click="navigateTo('dashboard')">
@@ -3092,6 +3659,9 @@
     </a>
     <a class="mobile-nav-item" :class="{ active: currentPage === 'agents' }" @click="navigateTo('agents')">
         <i class="fas fa-robot"></i><span>Agents</span>
+    </a>
+    <a class="mobile-nav-item" @click="quickActionsOpen=!quickActionsOpen">
+        <i class="fas fa-bolt"></i><span>Actions</span>
     </a>
     <a class="mobile-nav-item" :class="{ active: currentPage === 'monitoring' || currentPage === 'infrastructure' }" @click="navigateTo('monitoring')">
         <i class="fas fa-chart-line"></i><span>Monitor</span>
@@ -4659,6 +5229,109 @@
                 <p class="help-text" style="margin-bottom:.6rem">Email address for backup completion reports.</p>
                 <input class="field-input" type="email" x-model="backupEmail" placeholder="admin@example.com">
             </div>
+            <!-- 3-2-1 Backup Compliance -->
+            <div class="s-section" x-init="fetchBackup321Status()">
+                <span class="s-label">3-2-1 Backup Compliance</span>
+                <p class="help-text" style="margin-bottom:.6rem">Track that your backups follow the 3-2-1 rule: 3 copies, 2 media types, 1 offsite.</p>
+                <div x-show="backup321Status.length === 0 && !backup321Loading" style="color:var(--text-muted);font-size:.78rem;margin-bottom:.5rem">No backups tracked yet.</div>
+                <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:.6rem">
+                    <template x-for="entry in backup321Status" :key="entry.id">
+                        <div style="padding:.5rem .65rem;background:var(--surface-2);border-radius:4px;font-size:.78rem">
+                            <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem">
+                                <strong x-text="entry.backup_name" style="flex:1"></strong>
+                                <span :class="backupFreshnessClass(entry.last_verified)" x-text="backupFreshnessLabel(entry.last_verified)" style="font-size:.65rem"></span>
+                            </div>
+                            <div style="display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
+                                <span :style="'color:' + (entry.copies >= 3 ? 'var(--success)' : 'var(--danger)')">
+                                    <i class="fas" :class="entry.copies >= 3 ? 'fa-check-circle' : 'fa-times-circle'" aria-hidden="true"></i>
+                                    <span x-text="entry.copies + ' copies'"></span>
+                                </span>
+                                <span :style="'color:' + ((entry.media_types && entry.media_types.length >= 2) ? 'var(--success)' : 'var(--danger)')">
+                                    <i class="fas" :class="(entry.media_types && entry.media_types.length >= 2) ? 'fa-check-circle' : 'fa-times-circle'" aria-hidden="true"></i>
+                                    <span x-text="(entry.media_types ? entry.media_types.length : 0) + ' media'"></span>
+                                </span>
+                                <span :style="'color:' + (entry.has_offsite ? 'var(--success)' : 'var(--danger)')">
+                                    <i class="fas" :class="entry.has_offsite ? 'fa-check-circle' : 'fa-times-circle'" aria-hidden="true"></i>
+                                    <span x-text="entry.has_offsite ? 'Offsite' : 'No offsite'"></span>
+                                </span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <button class="btn btn-sm" x-show="userRole !== 'viewer'" @click="show321Modal=true">
+                    <i class="fas fa-plus" aria-hidden="true"></i> Add Backup Entry
+                </button>
+            </div>
+
+            <!-- Verify Now -->
+            <div class="s-section" x-show="userRole !== 'viewer'">
+                <span class="s-label">Verify Backup</span>
+                <p class="help-text" style="margin-bottom:.6rem">Run a verification check on a backup file via an agent.</p>
+                <div style="display:flex;flex-direction:column;gap:.5rem">
+                    <div class="field-2">
+                        <div>
+                            <label class="field-label">Agent</label>
+                            <select class="theme-select" style="width:100%" x-model="verifyForm.hostname">
+                                <option value="">Select agent...</option>
+                                <template x-for="a in Object.keys(agents || {})" :key="a">
+                                    <option :value="a" x-text="a"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="field-label">Verification Type</label>
+                            <select class="theme-select" style="width:100%" x-model="verifyForm.verification_type">
+                                <option value="checksum">Checksum (SHA-256)</option>
+                                <option value="restore_test">Restore Test (tar/gz)</option>
+                                <option value="db_integrity">DB Integrity (SQLite)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="field-label">Backup Path</label>
+                        <input class="field-input" type="text" x-model="verifyForm.path" placeholder="/mnt/nas/backups/latest.tar.gz">
+                    </div>
+                    <button class="btn btn-sm" @click="triggerBackupVerify()" :disabled="verifyLoading">
+                        <i class="fas" :class="verifyLoading ? 'fa-spinner fa-spin' : 'fa-shield-alt'" aria-hidden="true"></i>
+                        <span x-text="verifyLoading ? 'Verifying...' : 'Verify Now'"></span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Verification History -->
+            <div class="s-section" x-init="fetchBackupVerifications()">
+                <span class="s-label">Verification History</span>
+                <p class="help-text" style="margin-bottom:.6rem">Recent backup integrity checks across all agents.</p>
+                <div x-show="backupVerifLoading" style="color:var(--text-muted);font-size:.78rem">Loading...</div>
+                <div x-show="!backupVerifLoading && backupVerifications.length === 0" style="color:var(--text-muted);font-size:.78rem">No verifications recorded yet.</div>
+                <div x-show="backupVerifications.length > 0" style="overflow-x:auto">
+                    <table style="width:100%;font-size:.75rem;border-collapse:collapse">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border);text-align:left">
+                                <th style="padding:.25rem .4rem">Path</th>
+                                <th style="padding:.25rem .4rem">Agent</th>
+                                <th style="padding:.25rem .4rem">Type</th>
+                                <th style="padding:.25rem .4rem">Status</th>
+                                <th style="padding:.25rem .4rem">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="v in backupVerifications" :key="v.id">
+                                <tr style="border-bottom:1px solid var(--border)">
+                                    <td style="padding:.25rem .4rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="v.backup_path" x-text="v.backup_path"></td>
+                                    <td style="padding:.25rem .4rem" x-text="v.hostname"></td>
+                                    <td style="padding:.25rem .4rem"><span class="badge bn" style="font-size:.6rem" x-text="v.verification_type"></span></td>
+                                    <td style="padding:.25rem .4rem">
+                                        <span :class="v.status === 'ok' ? 'badge bs' : 'badge bd'" style="font-size:.6rem" x-text="v.status === 'ok' ? 'PASS' : 'FAIL'"></span>
+                                    </td>
+                                    <td style="padding:.25rem .4rem;white-space:nowrap" x-text="v.verified_at ? new Date(v.verified_at * 1000).toLocaleString() : '—'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- Organize Downloads -->
             <div class="s-section">
                 <span class="s-label">Organize Downloads</span>
@@ -5092,6 +5765,58 @@
             </div>
         </div>
 
+        <!-- Plugins tab (admin only) -->
+        <div x-show="settingsTab==='plugins' && userRole==='admin'" role="tabpanel">
+            <div class="s-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+                    <span class="s-label" style="margin:0"><i class="fas fa-puzzle-piece" style="margin-right:.3rem"></i> Installed Plugins</span>
+                    <button class="btn btn-sm" @click="reloadPlugins()" :disabled="pluginLoading">
+                        <i class="fas fa-sync" :class="{ 'fa-spin': pluginLoading }"></i> Reload Plugins
+                    </button>
+                </div>
+                <div x-show="pluginLoading" style="text-align:center;padding:1rem;color:var(--text-muted)">
+                    <i class="fas fa-spinner fa-spin"></i> Loading plugins...
+                </div>
+                <div x-show="!pluginLoading && pluginList.length === 0" class="empty-msg">
+                    No plugins installed. Place <code>.py</code> files in <code>~/.config/noba/plugins/</code> to get started.
+                </div>
+                <div style="display:flex;flex-direction:column;gap:.5rem">
+                    <template x-for="p in pluginList" :key="p.id">
+                        <div class="plugin-card">
+                            <div class="plugin-icon"><i class="fas" :class="p.icon || 'fa-puzzle-piece'"></i></div>
+                            <div class="plugin-info">
+                                <div>
+                                    <span class="plugin-name" x-text="p.name"></span>
+                                    <span class="plugin-version" x-text="'v' + (p.version || '?')"></span>
+                                </div>
+                                <div class="plugin-desc" x-text="p.description || 'No description'"></div>
+                                <div style="font-size:.65rem;color:var(--text-muted);margin-top:2px">
+                                    <span x-text="p.id"></span>
+                                    <template x-if="p.error"><span style="color:var(--danger);margin-left:.5rem" x-text="'Error: ' + p.error"></span></template>
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+                                <span class="badge" :class="p.enabled ? 'bs' : 'bd'" x-text="p.enabled ? 'Enabled' : 'Disabled'" style="font-size:.65rem"></span>
+                                <button class="btn btn-sm" @click="togglePlugin(p.id, !p.enabled)"
+                                        :title="p.enabled ? 'Disable plugin' : 'Enable plugin'"
+                                        :style="p.enabled ? 'color:var(--danger)' : 'color:var(--success)'">
+                                    <i class="fas" :class="p.enabled ? 'fa-toggle-on' : 'fa-toggle-off'" style="font-size:1.2rem"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="s-section" style="margin-top:1rem">
+                <span class="s-label">Plugin Directory</span>
+                <div style="font-size:.78rem;color:var(--text-muted)">
+                    Plugins are Python files placed in <code>~/.config/noba/plugins/</code>.<br>
+                    Each plugin must export <code>PLUGIN_NAME</code>, <code>PLUGIN_VERSION</code>, and a <code>register(app, db)</code> function.<br>
+                    Plugins can add API routes, dashboard cards, automation types, and metric collectors.
+                </div>
+            </div>
+        </div>
+
         <div class="settings-footer" style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
             <button class="btn btn-sm" @click="showChangelogModal=true; fetchConfigChangelog()" style="margin-right:auto"><i class="fas fa-history"></i> History</button>
             <button class="btn btn-sm btn-primary" @click="applySettings()" :disabled="userRole!=='admin'" :title="userRole!=='admin'?'Admin role required':'Save and apply settings'">
@@ -5294,6 +6019,35 @@
         </div>
         <div class="modal-footer">
             <button class="btn btn-sm" @click="showSessionsModal=false">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- 3-2-1 Backup Entry Modal -->
+<div class="modal-overlay" x-show="show321Modal" x-cloak @click.self="show321Modal=false" @keydown.escape.window="show321Modal=false" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width:420px">
+        <div class="modal-title"><i class="fas fa-archive" style="color:var(--accent)" aria-hidden="true"></i> Add 3-2-1 Backup Entry</div>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+            <div>
+                <label class="field-label">Backup Name</label>
+                <input class="field-input" type="text" x-model="form321.backup_name" placeholder="e.g. noba-config, nas-daily">
+            </div>
+            <div>
+                <label class="field-label">Number of Copies</label>
+                <input class="field-input" type="number" min="0" x-model.number="form321.copies" placeholder="3">
+            </div>
+            <div>
+                <label class="field-label">Media Types (comma-separated)</label>
+                <input class="field-input" type="text" x-model="form321._mediaInput" placeholder="ssd, nas, cloud" @input="form321.media_types = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)">
+            </div>
+            <div style="display:flex;align-items:center;gap:.5rem">
+                <input type="checkbox" id="form321-offsite" x-model="form321.has_offsite">
+                <label for="form321-offsite" class="field-label" style="margin:0">Has offsite copy</label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-sm" @click="show321Modal=false">Cancel</button>
+            <button class="btn btn-sm" style="background:var(--accent);color:#fff" @click="addBackup321Entry()">Add</button>
         </div>
     </div>
 </div>

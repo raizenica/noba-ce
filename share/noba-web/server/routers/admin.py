@@ -804,6 +804,39 @@ async def api_plugins_install(request: Request, auth=Depends(_require_admin)):
     return {"status": "ok"}
 
 
+# ── /api/plugins (managed list, enable/disable, reload) ──────────────────────
+@router.get("/api/plugins/managed")
+def api_plugins_managed(auth=Depends(_get_auth)):
+    """List all plugins with management metadata (name, version, enabled)."""
+    return plugin_manager.get_managed()
+
+
+@router.post("/api/plugins/{name}/enable")
+async def api_plugin_enable(name: str, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    if not plugin_manager.enable_plugin(name):
+        raise HTTPException(404, f"Plugin '{name}' not found")
+    db.audit_log("plugin_enable", username, f"Enabled plugin {name}", _client_ip(request))
+    return {"status": "ok", "plugin": name, "enabled": True}
+
+
+@router.post("/api/plugins/{name}/disable")
+async def api_plugin_disable(name: str, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    if not plugin_manager.disable_plugin(name):
+        raise HTTPException(404, f"Plugin '{name}' not found")
+    db.audit_log("plugin_disable", username, f"Disabled plugin {name}", _client_ip(request))
+    return {"status": "ok", "plugin": name, "enabled": False}
+
+
+@router.post("/api/plugins/reload")
+async def api_plugins_reload(request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    plugin_manager.reload()
+    db.audit_log("plugin_reload", username, "Reloaded all plugins", _client_ip(request))
+    return {"status": "ok", "count": plugin_manager.count}
+
+
 # ── /api/runbooks ─────────────────────────────────────────────────────────────
 @router.get("/api/runbooks")
 def api_runbooks(auth=Depends(_get_auth)):

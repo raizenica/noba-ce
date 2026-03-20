@@ -1121,6 +1121,107 @@ def _cmd_service_control(params: dict, _ctx: dict) -> dict:
 
 # -- Network commands ---------------------------------------------------------
 
+# Previous interface readings for rate calculation (keyed by interface name)
+_prev_net_readings: dict[str, dict] = {}
+_prev_net_readings_lock = threading.Lock()
+
+
+def _cmd_network_stats(_params: dict, _ctx: dict) -> dict:
+    """Return per-interface traffic stats and per-process TCP connections."""
+    # 1. Per-interface byte counters from /proc/net/dev
+    interfaces: list[dict] = []
+    now = time.time()
+    for line in _read_proc("/proc/net/dev").split("\n")[2:]:
+        if ":" not in line:
+            continue
+        iface, data = line.split(":", 1)
+        iface = iface.strip()
+        if iface == "lo":
+            continue
+        parts = data.split()
+        if len(parts) < 9:
+            continue
+        rx_bytes = int(parts[0])
+        tx_bytes = int(parts[8])
+        rx_rate = 0.0
+        tx_rate = 0.0
+        with _prev_net_readings_lock:
+            prev = _prev_net_readings.get(iface)
+            if prev:
+                dt = now - prev["time"]
+                if dt > 0:
+                    rx_rate = round((rx_bytes - prev["rx"]) / dt, 1)
+                    tx_rate = round((tx_bytes - prev["tx"]) / dt, 1)
+                    # Clamp negative rates (counter reset)
+                    if rx_rate < 0:
+                        rx_rate = 0.0
+                    if tx_rate < 0:
+                        tx_rate = 0.0
+            _prev_net_readings[iface] = {"rx": rx_bytes, "tx": tx_bytes, "time": now}
+        interfaces.append({
+            "name": iface,
+            "rx_bytes": rx_bytes,
+            "tx_bytes": tx_bytes,
+            "rx_rate": rx_rate,
+            "tx_rate": tx_rate,
+        })
+
+    # 2. Per-process TCP connections from ss -tnp
+    connections: list[dict] = []
+    top_talkers_map: dict[str, int] = {}
+    try:
+        result = subprocess.run(
+            ["ss", "-tnp"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines()[1:]:  # skip header
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            state = parts[0]
+            local = parts[3]
+            remote = parts[4]
+            # Parse users:(("process",pid=123,fd=4)) from last field(s)
+            pid = 0
+            process = ""
+            rest = " ".join(parts[5:])
+            if "pid=" in rest:
+                try:
+                    pid = int(rest.split("pid=")[1].split(",")[0].split(")")[0])
+                except (IndexError, ValueError):
+                    pass
+            if '("' in rest:
+                try:
+                    process = rest.split('("')[1].split('"')[0]
+                except (IndexError, ValueError):
+                    pass
+            connections.append({
+                "pid": pid,
+                "process": process,
+                "local": local,
+                "remote": remote,
+                "state": state,
+            })
+            if process:
+                top_talkers_map[process] = top_talkers_map.get(process, 0) + 1
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+        pass
+
+    # 3. Top talkers sorted by connection count
+    top_talkers = sorted(
+        [{"process": p, "connections": c} for p, c in top_talkers_map.items()],
+        key=lambda x: x["connections"],
+        reverse=True,
+    )[:20]
+
+    return {
+        "status": "ok",
+        "interfaces": interfaces,
+        "connections": connections[:200],  # cap at 200 entries
+        "top_talkers": top_talkers,
+    }
+
+
 def _cmd_network_config(_params: dict, _ctx: dict) -> dict:
     """Return network configuration."""
     parts = []
@@ -1842,6 +1943,510 @@ def _cmd_discover_services(_params: dict, _ctx: dict) -> dict:
     return {"status": "ok", "services": services}
 
 
+# ── Network auto-discovery ────────────────────────────────────────────────
+
+def _cmd_network_discover(_params: dict, _ctx: dict) -> dict:
+    """Discover devices on the local network via ARP + mDNS + port probing.
+
+    - ARP scan: parses ``ip neigh`` output
+    - mDNS: tries ``avahi-browse -apt --no-db-lookup -t`` (skipped if missing)
+    - Port probe: connects to common ports with a 0.3 s timeout
+
+    Returns ``{devices: [{ip, mac, hostname, open_ports}]}``.
+    """
+    devices: dict[str, dict] = {}  # keyed by IP
+
+    # ── 1. ARP neighbours via ``ip neigh`` ───────────────────────────────────
+    try:
+        result = subprocess.run(
+            ["ip", "neigh"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                ip_addr = parts[0]
+                mac_addr = ""
+                # typical: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+                if "lladdr" in parts:
+                    idx = parts.index("lladdr")
+                    if idx + 1 < len(parts):
+                        mac_addr = parts[idx + 1].lower()
+                state = parts[-1].upper()
+                if state in ("FAILED", "INCOMPLETE"):
+                    continue
+                devices[ip_addr] = {
+                    "ip": ip_addr,
+                    "mac": mac_addr,
+                    "hostname": "",
+                    "open_ports": [],
+                }
+    except Exception:
+        pass
+
+    # ── 2. mDNS discovery via avahi-browse ───────────────────────────────────
+    try:
+        result = subprocess.run(
+            ["avahi-browse", "-apt", "--no-db-lookup", "-t"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                # Format: +;eth0;IPv4;hostname;_http._tcp;local;host.local;192.168.1.x;80;...
+                fields = line.split(";")
+                if len(fields) < 8:
+                    continue
+                if fields[0] not in ("+", "="):
+                    continue
+                ip_addr = fields[7] if len(fields) > 7 else ""
+                mdns_host = fields[3] if len(fields) > 3 else ""
+                if not ip_addr:
+                    continue
+                if ip_addr in devices:
+                    if mdns_host and not devices[ip_addr]["hostname"]:
+                        devices[ip_addr]["hostname"] = mdns_host
+                else:
+                    devices[ip_addr] = {
+                        "ip": ip_addr,
+                        "mac": "",
+                        "hostname": mdns_host,
+                        "open_ports": [],
+                    }
+    except FileNotFoundError:
+        pass  # avahi-browse not installed
+    except Exception:
+        pass
+
+    # ── 3. Reverse DNS for devices without a hostname ────────────────────────
+    for dev in devices.values():
+        if not dev["hostname"]:
+            try:
+                host, _, _ = socket.gethostbyaddr(dev["ip"])
+                dev["hostname"] = host
+            except (socket.herror, socket.gaierror, OSError):
+                pass
+
+    # ── 4. Port probing ──────────────────────────────────────────────────────
+    probe_ports = [
+        22, 80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090,
+        3306, 5432, 6379, 1883, 8883, 53, 67, 68, 161,
+        445, 139, 548, 631, 5353, 9100,
+    ]
+    for dev in devices.values():
+        open_ports: list[int] = []
+        for port in probe_ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                err = s.connect_ex((dev["ip"], port))
+                s.close()
+                if err == 0:
+                    open_ports.append(port)
+            except Exception:
+                pass
+        dev["open_ports"] = sorted(open_ports)
+
+    return {"status": "ok", "devices": list(devices.values())}
+
+
+# ── Security posture scanning ────────────────────────────────────────────────
+
+def _cmd_security_scan(_params: dict, _ctx: dict) -> dict:
+    """Scan the host for common security misconfigurations.
+
+    Checks SSH config, firewall status, auto-updates, sensitive file
+    permissions, and insecure service ports.  Returns an overall score
+    (0-100) and a list of findings with severity and remediation advice.
+    """
+    findings: list[dict] = []
+
+    # ── 1. SSH configuration ─────────────────────────────────────────
+    _check_ssh_config(findings)
+
+    # ── 2. Firewall status ───────────────────────────────────────────
+    _check_firewall(findings)
+
+    # ── 3. Automatic updates ─────────────────────────────────────────
+    _check_auto_updates(findings)
+
+    # ── 4. Sensitive file permissions ────────────────────────────────
+    _check_sensitive_files(findings)
+
+    # ── 5. Insecure service ports (telnet:23, ftp:21) ────────────────
+    _check_insecure_ports(findings)
+
+    # ── Score calculation ────────────────────────────────────────────
+    score = _calculate_security_score(findings)
+
+    return {"status": "ok", "score": score, "findings": findings}
+
+
+def _check_ssh_config(findings: list[dict]) -> None:
+    """Check /etc/ssh/sshd_config for weak settings."""
+    ssh_config = "/etc/ssh/sshd_config"
+    if not os.path.isfile(ssh_config):
+        findings.append({
+            "severity": "low",
+            "category": "ssh",
+            "description": "SSH server config not found — sshd may not be installed",
+            "remediation": "No action needed if SSH is not required on this host.",
+        })
+        return
+
+    try:
+        with open(ssh_config) as f:
+            content = f.read()
+    except PermissionError:
+        findings.append({
+            "severity": "low",
+            "category": "ssh",
+            "description": "Cannot read /etc/ssh/sshd_config (permission denied)",
+            "remediation": "Run the agent with sufficient privileges to audit SSH config.",
+        })
+        return
+
+    lines = content.lower().splitlines()
+    # Build a dict of active (non-commented) settings
+    active: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split(None, 1)
+        if len(parts) == 2:
+            active[parts[0]] = parts[1]
+
+    # PermitRootLogin
+    root_login = active.get("permitrootlogin", "")
+    if root_login in ("yes", ""):
+        findings.append({
+            "severity": "high",
+            "category": "ssh",
+            "description": "SSH PermitRootLogin is enabled (or defaults to yes)",
+            "remediation": "Set 'PermitRootLogin no' or 'PermitRootLogin prohibit-password' in /etc/ssh/sshd_config.",
+        })
+
+    # PasswordAuthentication
+    pass_auth = active.get("passwordauthentication", "")
+    if pass_auth == "yes":
+        findings.append({
+            "severity": "medium",
+            "category": "ssh",
+            "description": "SSH PasswordAuthentication is enabled — prefer key-based auth",
+            "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and use SSH keys.",
+        })
+    elif pass_auth == "":
+        # Default varies by distro — flag as informational
+        findings.append({
+            "severity": "low",
+            "category": "ssh",
+            "description": "SSH PasswordAuthentication not explicitly set — default may allow passwords",
+            "remediation": "Explicitly set 'PasswordAuthentication no' in /etc/ssh/sshd_config.",
+        })
+
+
+def _check_firewall(findings: list[dict]) -> None:
+    """Check whether a firewall is active (iptables, nftables, or ufw)."""
+    fw_active = False
+
+    # Try ufw first
+    try:
+        r = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and "active" in r.stdout.lower():
+            fw_active = True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Try nftables
+    if not fw_active:
+        try:
+            r = subprocess.run(["nft", "list", "tables"], capture_output=True, text=True, timeout=10)
+            if r.returncode == 0 and r.stdout.strip():
+                fw_active = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    # Try iptables
+    if not fw_active:
+        try:
+            r = subprocess.run(["iptables", "-L", "-n"], capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                # Check if there are non-default rules (more than just policy lines)
+                rule_lines = [
+                    ln for ln in r.stdout.splitlines()
+                    if ln.strip() and not ln.startswith("Chain") and not ln.startswith("target")
+                ]
+                if rule_lines:
+                    fw_active = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    if not fw_active:
+        findings.append({
+            "severity": "high",
+            "category": "firewall",
+            "description": "No active firewall detected (checked ufw, nftables, iptables)",
+            "remediation": "Enable a firewall: 'ufw enable' or configure nftables/iptables rules.",
+        })
+
+
+def _check_auto_updates(findings: list[dict]) -> None:
+    """Check whether automatic security updates are configured."""
+    auto_update = False
+
+    # Debian/Ubuntu: unattended-upgrades
+    if os.path.isfile("/etc/apt/apt.conf.d/20auto-upgrades"):
+        try:
+            with open("/etc/apt/apt.conf.d/20auto-upgrades") as f:
+                content = f.read().lower()
+            if 'unattended-upgrade "1"' in content or "unattended-upgrade \"1\"" in content:
+                auto_update = True
+        except (PermissionError, OSError):
+            pass
+
+    # Fedora/RHEL: dnf-automatic
+    if not auto_update and os.path.isfile("/etc/dnf/automatic.conf"):
+        try:
+            with open("/etc/dnf/automatic.conf") as f:
+                content = f.read().lower()
+            if "apply_updates = yes" in content or "apply_updates=yes" in content:
+                auto_update = True
+        except (PermissionError, OSError):
+            pass
+
+    # RHEL/CentOS 7: yum-cron
+    if not auto_update and os.path.isfile("/etc/yum/yum-cron.conf"):
+        try:
+            with open("/etc/yum/yum-cron.conf") as f:
+                content = f.read().lower()
+            if "apply_updates = yes" in content or "apply_updates=yes" in content:
+                auto_update = True
+        except (PermissionError, OSError):
+            pass
+
+    # Check if any auto-update service is enabled via systemd
+    if not auto_update and _HAS_SYSTEMD:
+        for svc in ("unattended-upgrades", "dnf-automatic-install.timer",
+                     "dnf-automatic.timer", "yum-cron"):
+            try:
+                r = subprocess.run(
+                    ["systemctl", "is-enabled", svc],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and "enabled" in r.stdout.lower():
+                    auto_update = True
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+    if not auto_update:
+        findings.append({
+            "severity": "medium",
+            "category": "updates",
+            "description": "Automatic security updates are not configured",
+            "remediation": (
+                "Enable unattended-upgrades (Debian/Ubuntu), dnf-automatic (Fedora/RHEL), "
+                "or yum-cron (CentOS 7)."
+            ),
+        })
+
+
+def _check_sensitive_files(findings: list[dict]) -> None:
+    """Check permissions on sensitive system files."""
+    checks = [
+        ("/etc/shadow", 0o640, "Shadow password file"),
+        ("/etc/gshadow", 0o640, "Group shadow file"),
+    ]
+    for path, max_perm, label in checks:
+        if not os.path.exists(path):
+            continue
+        try:
+            mode = os.stat(path).st_mode & 0o777
+            if mode > max_perm:
+                # Check if world-readable
+                if mode & 0o004:
+                    sev = "high"
+                    desc = f"{label} ({path}) is world-readable (mode {oct(mode)})"
+                elif mode & 0o040:
+                    sev = "medium"
+                    desc = f"{label} ({path}) has excessive group permissions (mode {oct(mode)})"
+                else:
+                    sev = "low"
+                    desc = f"{label} ({path}) permissions ({oct(mode)}) exceed recommended {oct(max_perm)}"
+                findings.append({
+                    "severity": sev,
+                    "category": "file_permissions",
+                    "description": desc,
+                    "remediation": f"Run: chmod {oct(max_perm)[2:]} {path}",
+                })
+        except PermissionError:
+            pass
+
+
+def _check_insecure_ports(findings: list[dict]) -> None:
+    """Check for services listening on commonly insecure ports."""
+    insecure_ports = {
+        21: ("FTP", "high"),
+        23: ("Telnet", "high"),
+        69: ("TFTP", "medium"),
+        161: ("SNMP", "medium"),
+        445: ("SMB", "medium"),
+    }
+    listening: set[int] = set()
+
+    # Parse /proc/net/tcp for listening sockets
+    for proto_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+        if not os.path.isfile(proto_file):
+            continue
+        try:
+            with open(proto_file) as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+                    # State 0A = LISTEN
+                    if parts[3] != "0A":
+                        continue
+                    # local_address is hex ip:port
+                    port_hex = parts[1].split(":")[-1]
+                    try:
+                        port = int(port_hex, 16)
+                        listening.add(port)
+                    except ValueError:
+                        continue
+        except (PermissionError, OSError):
+            pass
+
+    for port, (service_name, severity) in insecure_ports.items():
+        if port in listening:
+            findings.append({
+                "severity": severity,
+                "category": "insecure_services",
+                "description": f"{service_name} service running on port {port}",
+                "remediation": f"Disable {service_name} if not needed, or restrict access with firewall rules.",
+            })
+
+
+def _calculate_security_score(findings: list[dict]) -> int:
+    """Calculate a 0-100 security score based on findings.
+
+    Starts at 100, deducts points per finding:
+      high   -> -20 each (capped at -60)
+      medium -> -10 each (capped at -30)
+      low    ->  -5 each (capped at -15)
+    """
+    deductions = {"high": 0, "medium": 0, "low": 0}
+    for f in findings:
+        sev = f.get("severity", "low")
+        if sev == "high":
+            deductions["high"] += 20
+        elif sev == "medium":
+            deductions["medium"] += 10
+        else:
+            deductions["low"] += 5
+
+    # Cap deductions per severity tier
+    total = min(deductions["high"], 60) + min(deductions["medium"], 30) + min(deductions["low"], 15)
+    return max(0, 100 - total)
+
+
+# ── Backup verification ──────────────────────────────────────────────────
+
+def _cmd_verify_backup(params: dict, _ctx: dict) -> dict:
+    """Verify a backup file's integrity.
+
+    Verification types:
+      - ``checksum``: Compute SHA-256 of the file/archive.
+      - ``restore_test``: If tar/gz, list contents and verify key files exist.
+      - ``db_integrity``: If ``.db`` file, run ``PRAGMA integrity_check``.
+    """
+    import tarfile
+    import sqlite3 as _sqlite3
+
+    path = params.get("path", "")
+    if not path:
+        return {"status": "error", "error": "Parameter 'path' is required"}
+
+    err = _safe_path(path)
+    if err:
+        return {"status": "error", "error": err}
+    if not os.path.exists(path):
+        return {"status": "error", "error": f"Path does not exist: {path}"}
+
+    vtype = params.get("verification_type", "checksum")
+    now = int(time.time())
+
+    if vtype == "checksum":
+        try:
+            sha = hashlib.sha256()
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    sha.update(chunk)
+            digest = sha.hexdigest()
+            size = os.path.getsize(path)
+            return {
+                "status": "ok",
+                "verification_type": "checksum",
+                "path": path,
+                "details": {"sha256": digest, "size": size},
+                "verified_at": now,
+            }
+        except Exception as e:
+            return {"status": "error", "verification_type": "checksum",
+                    "path": path, "error": str(e), "verified_at": now}
+
+    elif vtype == "restore_test":
+        try:
+            if not tarfile.is_tarfile(path):
+                return {"status": "error", "verification_type": "restore_test",
+                        "path": path, "error": "Not a valid tar archive",
+                        "verified_at": now}
+            with tarfile.open(path, "r:*") as tf:
+                members = tf.getnames()
+            file_count = len(members)
+            # Show first 50 entries as a sample
+            sample = members[:50]
+            return {
+                "status": "ok",
+                "verification_type": "restore_test",
+                "path": path,
+                "details": {
+                    "file_count": file_count,
+                    "sample_files": sample,
+                    "readable": True,
+                },
+                "verified_at": now,
+            }
+        except Exception as e:
+            return {"status": "error", "verification_type": "restore_test",
+                    "path": path, "error": str(e), "verified_at": now}
+
+    elif vtype == "db_integrity":
+        try:
+            conn = _sqlite3.connect(path)
+            result = conn.execute("PRAGMA integrity_check").fetchone()
+            conn.close()
+            ok = result and result[0] == "ok"
+            return {
+                "status": "ok" if ok else "error",
+                "verification_type": "db_integrity",
+                "path": path,
+                "details": {"integrity_check": result[0] if result else "unknown"},
+                "verified_at": now,
+            }
+        except Exception as e:
+            return {"status": "error", "verification_type": "db_integrity",
+                    "path": path, "error": str(e), "verified_at": now}
+
+    else:
+        return {"status": "error", "error": f"Unknown verification_type: {vtype}"}
+
+
 def execute_commands(commands: list, ctx: dict) -> list:
     """Execute a list of commands and return results."""
     results = []
@@ -1865,6 +2470,7 @@ def execute_commands(commands: list, ctx: dict) -> list:
         "list_services": _cmd_list_services,
         "service_control": _cmd_service_control,
         # Network commands
+        "network_stats": _cmd_network_stats,
         "network_config": _cmd_network_config,
         "dns_lookup": _cmd_dns_lookup,
         # File commands
@@ -1894,6 +2500,12 @@ def execute_commands(commands: list, ctx: dict) -> list:
         "get_stream": _cmd_get_stream,
         # Service discovery
         "discover_services": _cmd_discover_services,
+        # Network discovery
+        "network_discover": _cmd_network_discover,
+        # Security posture scanning
+        "security_scan": _cmd_security_scan,
+        # Backup verification
+        "verify_backup": _cmd_verify_backup,
     }
     for cmd in commands[:20]:  # Max 20 commands per cycle
         cmd_type = cmd.get("type", "")

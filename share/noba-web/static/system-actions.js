@@ -80,6 +80,10 @@ function systemActionsMixin() {
         systemHealth: null,
         showHealthModal: false,
 
+        // ── Infrastructure Health Score state (Feature 7) ────────────────────
+        healthScore: null,
+        healthScoreExpanded: false,
+
         // ── Network Analysis state ───────────────────────────────────────────
         networkConnections: [],
         listeningPorts: [],
@@ -127,6 +131,12 @@ function systemActionsMixin() {
 
         // ── Correlation chart state ──────────────────────────────────────────
         _correlateChart: null,
+
+        // ── Network Traffic Analysis state ──────────────────────────────
+        trafficAgent: '',
+        trafficData: null,
+        trafficLoading: false,
+        trafficConnFilter: '',
 
 
         // ── History & Metrics ──────────────────────────────────────────────────
@@ -996,6 +1006,111 @@ function systemActionsMixin() {
         },
 
 
+        // ── Infrastructure Health Score (Feature 7) ─────────────────────────────
+
+        async fetchHealthScore() {
+            try {
+                const res = await fetch('/api/health-score', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.healthScore = await res.json();
+            } catch { /* silent */ }
+        },
+
+        get infraScoreColor() {
+            if (!this.healthScore) return '#888';
+            const s = this.healthScore.score;
+            if (s > 80) return 'var(--success)';
+            if (s > 50) return 'var(--warning)';
+            return 'var(--danger)';
+        },
+
+        get infraScoreRingStyle() {
+            if (!this.healthScore) return 'background: conic-gradient(var(--surface-2) 0deg, var(--surface-2) 360deg)';
+            const pct = this.healthScore.score / 100;
+            const deg = Math.round(pct * 360);
+            const color = this.infraScoreColor;
+            return `background: conic-gradient(${color} 0deg, ${color} ${deg}deg, var(--surface-2) ${deg}deg, var(--surface-2) 360deg)`;
+        },
+
+
+        // ── Webhook Management (Feature 8) ──────────────────────────────────────
+
+        webhookList: [],
+        webhookListLoading: false,
+        showWebhookCreateModal: false,
+        newWebhookName: '',
+        newWebhookAutoId: '',
+        lastCreatedWebhook: null,
+
+        async fetchWebhooks() {
+            this.webhookListLoading = true;
+            try {
+                const res = await fetch('/api/webhooks', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.webhookList = await res.json();
+            } catch (e) {
+                this.addToast('Failed to load webhooks: ' + e.message, 'error');
+            } finally {
+                this.webhookListLoading = false;
+            }
+        },
+
+        async createWebhook() {
+            const name = this.newWebhookName.trim();
+            if (!name) { this.addToast('Name is required', 'error'); return; }
+            try {
+                const body = { name };
+                if (this.newWebhookAutoId) body.automation_id = this.newWebhookAutoId;
+                const res = await fetch('/api/webhooks', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + this._token(),
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Failed'); }
+                const data = await res.json();
+                this.lastCreatedWebhook = data;
+                this.addToast('Webhook created', 'success');
+                this.newWebhookName = '';
+                this.newWebhookAutoId = '';
+                await this.fetchWebhooks();
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        async deleteWebhook(id) {
+            if (!confirm('Delete this webhook?')) return;
+            try {
+                const res = await fetch('/api/webhooks/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error('Failed to delete');
+                this.addToast('Webhook deleted', 'success');
+                this.lastCreatedWebhook = null;
+                await this.fetchWebhooks();
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        webhookUrl(hookId) {
+            return location.origin + '/api/webhooks/receive/' + hookId;
+        },
+
+        copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(
+                () => this.addToast('Copied to clipboard', 'success'),
+                () => this.addToast('Copy failed', 'error')
+            );
+        },
+
+
         // ── Network Analysis ────────────────────────────────────────────────────
 
         async fetchNetworkInfo() {
@@ -1814,6 +1929,90 @@ function systemActionsMixin() {
             } catch { /* silent */ }
         },
 
+        // ── Incident War Room ─────────────────────────────────────────────────
+
+        async openWarRoom(incidentId) {
+            this.warRoomLoading = true;
+            this.warRoomMessages = [];
+            this.warRoomMsg = '';
+            this.warRoomAssignTo = '';
+            try {
+                var incRes = await fetch('/api/status/incidents', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (incRes.ok) {
+                    var data = await incRes.json();
+                    var found = (data.incidents || []).find(function(i) { return i.id === incidentId; });
+                    this.warRoomIncident = found || null;
+                }
+                var msgRes = await fetch('/api/incidents/' + incidentId + '/messages', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (msgRes.ok) {
+                    var msgData = await msgRes.json();
+                    this.warRoomMessages = msgData.messages || [];
+                }
+            } catch { /* silent */ }
+            finally { this.warRoomLoading = false; }
+        },
+
+        closeWarRoom() {
+            this.warRoomIncident = null;
+            this.warRoomMessages = [];
+            this.warRoomMsg = '';
+        },
+
+        async sendWarRoomMessage() {
+            if (!this.warRoomIncident || !this.warRoomMsg.trim()) return;
+            try {
+                var res = await fetch('/api/incidents/' + this.warRoomIncident.id + '/messages', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: this.warRoomMsg.trim(), msg_type: 'comment' }),
+                });
+                if (res.ok) {
+                    this.warRoomMsg = '';
+                    await this.refreshWarRoomMessages();
+                } else {
+                    var e = await res.json().catch(function() { return {}; });
+                    this.addToast('Failed: ' + (e.detail || 'Unknown error'), 'error');
+                }
+            } catch (err) { this.addToast('Error: ' + err.message, 'error'); }
+        },
+
+        async refreshWarRoomMessages() {
+            if (!this.warRoomIncident) return;
+            try {
+                var res = await fetch('/api/incidents/' + this.warRoomIncident.id + '/messages', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var data = await res.json();
+                    this.warRoomMessages = data.messages || [];
+                }
+            } catch { /* silent */ }
+        },
+
+        async assignWarRoomIncident() {
+            if (!this.warRoomIncident || !this.warRoomAssignTo) return;
+            try {
+                var res = await fetch('/api/incidents/' + this.warRoomIncident.id + '/assign', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ assigned_to: this.warRoomAssignTo }),
+                });
+                if (res.ok) {
+                    this.warRoomIncident.assigned_to = this.warRoomAssignTo;
+                    this.addToast('Incident assigned to ' + this.warRoomAssignTo, 'ok');
+                    await this.refreshWarRoomMessages();
+                    this.fetchStatusIncidents();
+                } else {
+                    var e = await res.json().catch(function() { return {}; });
+                    this.addToast('Failed: ' + (e.detail || 'Unknown error'), 'error');
+                }
+            } catch (err) { this.addToast('Error: ' + err.message, 'error'); }
+        },
+
         // ── Service Dependency Topology ─────────────────────────────────────
 
         async fetchTopology() {
@@ -2084,6 +2283,404 @@ function systemActionsMixin() {
                     this.driftResults = data.results || [];
                 }
             } catch { /* silent */ }
+        },
+
+        // ── Network Discovery ───────────────────────────────────────────────
+
+        async fetchNetworkDevices() {
+            try {
+                var res = await fetch('/api/network/devices', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.networkDevices = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async triggerNetworkDiscover() {
+            if (!this.networkDiscoverHost) return;
+            this.networkDiscoverLoading = true;
+            try {
+                var res = await fetch('/api/network/discover/' + encodeURIComponent(this.networkDiscoverHost), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.toast('Discovery started on ' + this.networkDiscoverHost, 'success');
+                    // Poll for results after a delay
+                    var self = this;
+                    setTimeout(function() { self.fetchNetworkDevices(); }, 8000);
+                } else {
+                    var data = await res.json().catch(function() { return {}; });
+                    this.toast(data.detail || 'Discovery failed', 'error');
+                }
+            } catch {
+                this.toast('Network error', 'error');
+            } finally {
+                this.networkDiscoverLoading = false;
+            }
+        },
+
+        async deleteNetworkDevice(id) {
+            if (!confirm('Remove this device from the list?')) return;
+            try {
+                var res = await fetch('/api/network/devices/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.networkDevices = this.networkDevices.filter(function(d) { return d.id !== id; });
+                    this.toast('Device removed', 'success');
+                }
+            } catch { /* silent */ }
+        },
+
+        networkSubnets() {
+            var groups = {};
+            (this.networkDevices || []).forEach(function(d) {
+                var parts = (d.ip || '').split('.');
+                var prefix = parts.length >= 3 ? parts.slice(0, 3).join('.') : 'other';
+                if (!groups[prefix]) groups[prefix] = { prefix: prefix, devices: [] };
+                groups[prefix].devices.push(d);
+            });
+            var result = Object.values(groups);
+            result.sort(function(a, b) { return a.prefix.localeCompare(b.prefix); });
+            return result;
+        },
+
+        // ── Security Posture Scoring ─────────────────────────────────────────
+        securityScore: null,
+        securityAgentCount: 0,
+        securityAgents: [],
+        securityFindings: [],
+        securityHistory: [],
+        securityScanning: false,
+        securityFilterSeverity: '',
+        securityFilterHost: '',
+        _securityScoreChart: null,
+
+        async fetchSecurityData() {
+            try {
+                var scoreRes = await fetch('/api/security/score', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (scoreRes.ok) {
+                    var scoreData = await scoreRes.json();
+                    this.securityScore = scoreData.score;
+                    this.securityAgentCount = scoreData.agent_count || 0;
+                    this.securityAgents = scoreData.agents || [];
+                }
+
+                var params = new URLSearchParams();
+                if (this.securityFilterSeverity) params.set('severity', this.securityFilterSeverity);
+                if (this.securityFilterHost) params.set('hostname', this.securityFilterHost);
+                var findingsRes = await fetch('/api/security/findings?' + params, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (findingsRes.ok) {
+                    this.securityFindings = await findingsRes.json();
+                }
+
+                var histRes = await fetch('/api/security/history?limit=50', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (histRes.ok) {
+                    this.securityHistory = await histRes.json();
+                    this.$nextTick(() => this._renderSecurityChart());
+                }
+            } catch { /* silent */ }
+        },
+
+        async securityScanAll() {
+            this.securityScanning = true;
+            try {
+                var res = await fetch('/api/security/scan-all', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var data = await res.json();
+                    this.addToast('Security scan queued for ' + (data.count || 0) + ' agent(s)', 'info');
+                    // Poll for results after a delay
+                    setTimeout(() => this.fetchSecurityData(), 10000);
+                } else {
+                    this.addToast('Failed to start scan', 'error');
+                }
+            } catch {
+                this.addToast('Scan request failed', 'error');
+            }
+            this.securityScanning = false;
+        },
+
+        async securityScanHost(hostname) {
+            try {
+                var res = await fetch('/api/security/scan/' + encodeURIComponent(hostname), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Security scan queued for ' + hostname, 'info');
+                    setTimeout(() => this.fetchSecurityData(), 10000);
+                } else {
+                    this.addToast('Failed to start scan for ' + hostname, 'error');
+                }
+            } catch {
+                this.addToast('Scan request failed', 'error');
+            }
+        },
+
+        _renderSecurityChart() {
+            if (typeof Chart === 'undefined' || !this.securityHistory.length) return;
+            var canvas = document.getElementById('securityScoreChart');
+            if (!canvas) return;
+            if (this._securityScoreChart) { this._securityScoreChart.destroy(); this._securityScoreChart = null; }
+
+            // Group by hostname, sort by time
+            var byHost = {};
+            this.securityHistory.forEach(function(h) {
+                if (!byHost[h.hostname]) byHost[h.hostname] = [];
+                byHost[h.hostname].push(h);
+            });
+            var datasets = [];
+            var colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+            var ci = 0;
+            Object.keys(byHost).forEach(function(host) {
+                var points = byHost[host].sort(function(a, b) { return a.scanned_at - b.scanned_at; });
+                datasets.push({
+                    label: host,
+                    data: points.map(function(p) { return { x: new Date(p.scanned_at * 1000), y: p.score }; }),
+                    borderColor: colors[ci % colors.length],
+                    backgroundColor: 'transparent',
+                    tension: 0.3,
+                    pointRadius: 3,
+                });
+                ci++;
+            });
+
+            this._securityScoreChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'MMM d, HH:mm' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    },
+                    plugins: { legend: { labels: { color: 'rgba(255,255,255,0.7)', font: { size: 10 } } } },
+                },
+            });
+        },
+
+        // ── Backup Verification (Feature 4) ─────────────────────────────────────
+
+        async fetchBackupVerifications() {
+            this.backupVerifLoading = true;
+            try {
+                const res = await fetch('/api/backup/verifications?limit=50', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.backupVerifications = await res.json();
+            } catch { /* silent */ }
+            this.backupVerifLoading = false;
+        },
+
+        async triggerBackupVerify() {
+            const f = this.verifyForm;
+            if (!f.hostname || !f.path) {
+                this.addToast('Hostname and path are required', 'error');
+                return;
+            }
+            this.verifyLoading = true;
+            try {
+                const res = await fetch('/api/backup/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({ hostname: f.hostname, path: f.path, verification_type: f.verification_type }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    this.addToast(`Verification ${data.status}: ${data.id}`, 'success');
+                    setTimeout(() => this.fetchBackupVerifications(), 3000);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast('Verify failed: ' + (err.detail || res.statusText), 'error');
+                }
+            } catch (e) {
+                this.addToast('Verify failed: ' + e.message, 'error');
+            }
+            this.verifyLoading = false;
+        },
+
+        async fetchBackup321Status() {
+            this.backup321Loading = true;
+            try {
+                const res = await fetch('/api/backup/321-status', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.backup321Status = await res.json();
+            } catch { /* silent */ }
+            this.backup321Loading = false;
+        },
+
+        async updateBackup321(name, field, value) {
+            const body = { backup_name: name };
+            body[field] = value;
+            try {
+                const res = await fetch('/api/backup/321-status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) {
+                    this.addToast('3-2-1 status updated', 'success');
+                    this.fetchBackup321Status();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast('Update failed: ' + (err.detail || res.statusText), 'error');
+                }
+            } catch (e) {
+                this.addToast('Update failed: ' + e.message, 'error');
+            }
+        },
+
+        async addBackup321Entry() {
+            const f = this.form321;
+            if (!f.backup_name) {
+                this.addToast('Backup name is required', 'error');
+                return;
+            }
+            try {
+                const res = await fetch('/api/backup/321-status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify({
+                        backup_name: f.backup_name,
+                        copies: f.copies || 0,
+                        media_types: f.media_types && f.media_types.length ? f.media_types : [],
+                        has_offsite: !!f.has_offsite,
+                    }),
+                });
+                if (res.ok) {
+                    this.addToast('3-2-1 entry added', 'success');
+                    this.fetchBackup321Status();
+                    this.form321 = { backup_name: '', copies: 0, media_types: [], has_offsite: false };
+                    this.show321Modal = false;
+                }
+            } catch (e) {
+                this.addToast('Failed: ' + e.message, 'error');
+            }
+        },
+
+        backupFreshnessClass(verifiedAt) {
+            if (!verifiedAt) return 'badge bd';
+            const age = (Date.now() / 1000) - verifiedAt;
+            if (age < 86400) return 'badge bs';
+            if (age < 604800) return 'badge bw';
+            return 'badge bd';
+        },
+
+        backupFreshnessLabel(verifiedAt) {
+            if (!verifiedAt) return 'Never';
+            const age = (Date.now() / 1000) - verifiedAt;
+            if (age < 3600) return Math.floor(age / 60) + 'm ago';
+            if (age < 86400) return Math.floor(age / 3600) + 'h ago';
+            return Math.floor(age / 86400) + 'd ago';
+        },
+
+        // ── IaC Export ──────────────────────────────────────────────────────
+
+        /** Generate Infrastructure-as-Code output from the selected format + agent. */
+        async generateIaC() {
+            if (!this.iacFormat) return;
+            this.iacLoading = true;
+            this.iacOutput = '';
+            try {
+                var endpoint = '/api/export/' + this.iacFormat;
+                var params = this.iacHostname ? '?hostname=' + encodeURIComponent(this.iacHostname) : '';
+                var res = await fetch(endpoint + params, {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) {
+                    var errText = await res.text();
+                    throw new Error(errText || ('HTTP ' + res.status));
+                }
+                this.iacOutput = await res.text();
+            } catch (e) {
+                this.addToast('IaC export failed: ' + e.message, 'error');
+            } finally {
+                this.iacLoading = false;
+            }
+        },
+
+        /** Download the current IaC output as a file. */
+        downloadIaC() {
+            if (!this.iacOutput) return;
+            var ext = 'txt';
+            var mime = 'text/plain';
+            if (this.iacFormat === 'ansible') { ext = 'yml'; mime = 'text/yaml'; }
+            else if (this.iacFormat === 'docker-compose') { ext = 'yml'; mime = 'text/yaml'; }
+            else if (this.iacFormat === 'shell') { ext = 'sh'; mime = 'text/x-shellscript'; }
+            var filename = 'noba-export-' + this.iacFormat + (this.iacHostname ? '-' + this.iacHostname : '') + '.' + ext;
+            var blob = new Blob([this.iacOutput], { type: mime });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        },
+
+        /** Copy IaC output to clipboard. */
+        async copyIaC() {
+            if (!this.iacOutput) return;
+            try {
+                await navigator.clipboard.writeText(this.iacOutput);
+                this.addToast('Copied to clipboard', 'success');
+            } catch {
+                this.addToast('Failed to copy to clipboard', 'error');
+            }
+        },
+
+
+        // ── Network Traffic Analysis ─────────────────────────────────────────
+
+        /** Fetch network stats from an agent. */
+        async fetchNetworkStats() {
+            if (!this.trafficAgent) return;
+            this.trafficLoading = true;
+            this.trafficData = null;
+            try {
+                var res = await fetch('/api/agents/' + encodeURIComponent(this.trafficAgent) + '/network-stats', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                var data = await res.json();
+                if (data.status === 'queued') {
+                    this.addToast('Command queued. Refresh in a few seconds.', 'info');
+                } else {
+                    this.trafficData = data;
+                }
+            } catch (e) {
+                this.addToast('Failed to fetch network stats: ' + e.message, 'error');
+            } finally {
+                this.trafficLoading = false;
+            }
+        },
+
+        /** Return traffic connections filtered by the search input. */
+        filteredTrafficConns() {
+            if (!this.trafficData || !this.trafficData.connections) return [];
+            var filter = (this.trafficConnFilter || '').toLowerCase();
+            if (!filter) return this.trafficData.connections;
+            return this.trafficData.connections.filter(function(c) {
+                return (c.process || '').toLowerCase().indexOf(filter) !== -1
+                    || (c.local || '').toLowerCase().indexOf(filter) !== -1
+                    || (c.remote || '').toLowerCase().indexOf(filter) !== -1
+                    || (c.state || '').toLowerCase().indexOf(filter) !== -1
+                    || String(c.pid || '').indexOf(filter) !== -1;
+            });
         },
     };
 }

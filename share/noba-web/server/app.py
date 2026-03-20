@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
     # warm up psutil CPU measurement
     import psutil
     psutil.cpu_percent(interval=None)
-    plugin_manager.discover()
+    plugin_manager.discover(app=app, db=db)
     plugin_manager.start()
     from .scheduler import scheduler
     scheduler.start()

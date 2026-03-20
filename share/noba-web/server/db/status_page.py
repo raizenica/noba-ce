@@ -150,13 +150,14 @@ def list_status_incidents(
         where = "" if include_resolved else " WHERE resolved_at IS NULL"
         with lock:
             rows = conn.execute(
-                "SELECT id, title, severity, status, created_at, resolved_at, created_by "
+                "SELECT id, title, severity, status, created_at, resolved_at, created_by, assigned_to "
                 f"FROM status_incidents{where} ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [
             {"id": r[0], "title": r[1], "severity": r[2], "status": r[3],
-             "created_at": r[4], "resolved_at": r[5], "created_by": r[6]}
+             "created_at": r[4], "resolved_at": r[5], "created_by": r[6],
+             "assigned_to": r[7]}
             for r in rows
         ]
     except Exception as e:
@@ -173,7 +174,7 @@ def get_status_incident(
     try:
         with lock:
             r = conn.execute(
-                "SELECT id, title, severity, status, created_at, resolved_at, created_by "
+                "SELECT id, title, severity, status, created_at, resolved_at, created_by, assigned_to "
                 "FROM status_incidents WHERE id = ?",
                 (incident_id,),
             ).fetchone()
@@ -187,6 +188,7 @@ def get_status_incident(
         return {
             "id": r[0], "title": r[1], "severity": r[2], "status": r[3],
             "created_at": r[4], "resolved_at": r[5], "created_by": r[6],
+            "assigned_to": r[7],
             "updates": [
                 {"id": u[0], "message": u[1], "status": u[2],
                  "created_at": u[3], "created_by": u[4]}
@@ -322,3 +324,74 @@ def get_status_uptime_history(
     except Exception as e:
         logger.error("get_status_uptime_history failed: %s", e)
         return []
+
+
+# -- Incident War Room (messages & assignment) --------------------------------
+
+def add_incident_message(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    incident_id: int,
+    author: str,
+    message: str,
+    msg_type: str = "comment",
+) -> int:
+    """Add a message to an incident's war room thread."""
+    now = int(time.time())
+    try:
+        with lock:
+            c = conn.execute(
+                "INSERT INTO incident_messages (incident_id, author, message, msg_type, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (incident_id, author, message, msg_type, now),
+            )
+            conn.commit()
+            return c.lastrowid or 0
+    except Exception as e:
+        logger.error("add_incident_message failed: %s", e)
+        return 0
+
+
+def get_incident_messages(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    incident_id: int,
+    limit: int = 200,
+) -> list[dict]:
+    """Return war room messages for an incident, oldest first."""
+    try:
+        with lock:
+            rows = conn.execute(
+                "SELECT id, incident_id, author, message, msg_type, created_at "
+                "FROM incident_messages WHERE incident_id = ? "
+                "ORDER BY created_at ASC, id ASC LIMIT ?",
+                (incident_id, limit),
+            ).fetchall()
+        return [
+            {"id": r[0], "incident_id": r[1], "author": r[2], "message": r[3],
+             "msg_type": r[4], "created_at": r[5]}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("get_incident_messages failed: %s", e)
+        return []
+
+
+def assign_incident(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    incident_id: int,
+    assigned_to: str,
+) -> bool:
+    """Assign a status incident to a user."""
+    try:
+        with lock:
+            cur = conn.execute(
+                "UPDATE status_incidents SET assigned_to = ? WHERE id = ?",
+                (assigned_to, incident_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        logger.error("assign_incident failed: %s", e)
+        return False

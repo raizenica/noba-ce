@@ -76,17 +76,20 @@ self.addEventListener('fetch', event => {
     // SSE streams — always bypass
     if (url.pathname === '/api/stream') return;
 
-    // API calls: network-first, cache last-seen stats for offline
+    // API calls: network-first, cache last-seen data for offline
     if (url.pathname.startsWith('/api/')) {
-        if (url.pathname === '/api/stats') {
+        // Cache /api/stats and /api/status for offline access
+        if (url.pathname === '/api/stats' || url.pathname === '/api/status') {
             event.respondWith(
                 fetch(event.request).then(res => {
                     const clone = res.clone();
-                    caches.open(STATS_CACHE).then(c => c.put('/api/stats', clone));
+                    caches.open(STATS_CACHE).then(c => c.put(url.pathname, clone));
                     return res;
                 }).catch(() =>
-                    caches.match('/api/stats').then(r => r || new Response('{}', { status: 503 }))
-                )
+                    caches.match(url.pathname).then(r => r || new Response('{}', {
+                        status: 503,
+                        headers: { 'Content-Type': 'application/json', 'X-Noba-Stale': 'true' }
+                    }))
             );
             return;
         }

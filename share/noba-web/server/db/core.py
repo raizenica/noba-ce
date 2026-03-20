@@ -95,11 +95,34 @@ from .user_preferences import (
     get_user_preferences as _get_user_preferences,
     save_user_preferences as _save_user_preferences,
 )
+from .security import (  # noqa: F401
+    get_aggregate_score as _get_aggregate_score,
+    get_findings as _get_findings,
+    get_latest_scores as _get_latest_scores,
+    get_score_history as _get_score_history,
+    record_scan as _record_scan,
+)
+from .webhooks import (
+    create_webhook as _create_webhook,
+    delete_webhook as _delete_webhook,
+    get_webhook_by_hook_id as _get_webhook_by_hook_id,
+    list_webhooks as _list_webhooks,
+    record_trigger as _record_trigger,
+)
+from .backup_verify import (  # noqa: F401
+    get_321_status as _get_321_status,
+    list_verifications as _list_verifications,
+    record_verification as _record_verification,
+    update_321_status as _update_321_status,
+)
 from .status_page import (  # noqa: F401
+    add_incident_message as _add_incident_message,
     add_status_update as _add_status_update,
+    assign_incident as _assign_incident,
     create_status_component as _create_status_component,
     create_status_incident as _create_status_incident,
     delete_status_component as _delete_status_component,
+    get_incident_messages as _get_incident_messages,
     get_status_incident as _get_status_incident,
     get_status_uptime_history as _get_status_uptime_history,
     list_status_components as _list_status_components,
@@ -322,7 +345,8 @@ class Database:
                     status TEXT DEFAULT 'investigating',
                     created_at INTEGER,
                     resolved_at INTEGER,
-                    created_by TEXT
+                    created_by TEXT,
+                    assigned_to TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS status_updates (
@@ -335,6 +359,17 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_status_updates_incident
                     ON status_updates(incident_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS incident_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL,
+                    author TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    msg_type TEXT DEFAULT 'comment',
+                    created_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_incident_messages_incident
+                    ON incident_messages(incident_id, created_at ASC);
 
                 CREATE TABLE IF NOT EXISTS service_dependencies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +389,32 @@ class Database:
                     preferences_json TEXT DEFAULT '{}',
                     updated_at INTEGER
                 );
+
+                CREATE TABLE IF NOT EXISTS security_findings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hostname TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    remediation TEXT,
+                    score INTEGER,
+                    found_at INTEGER,
+                    resolved_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_sec_findings_host
+                    ON security_findings(hostname, found_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_sec_findings_sev
+                    ON security_findings(severity);
+
+                CREATE TABLE IF NOT EXISTS security_scores (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hostname TEXT NOT NULL,
+                    score INTEGER NOT NULL,
+                    scanned_at INTEGER,
+                    findings_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_sec_scores_host
+                    ON security_scores(hostname, scanned_at DESC);
 
                 CREATE TABLE IF NOT EXISTS config_baselines (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -376,7 +437,66 @@ class Database:
                     ON drift_checks(baseline_id, checked_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_drift_checks_hostname
                     ON drift_checks(hostname, checked_at DESC);
+
+                CREATE TABLE IF NOT EXISTS network_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip TEXT NOT NULL,
+                    mac TEXT,
+                    hostname TEXT,
+                    vendor TEXT,
+                    open_ports TEXT,
+                    discovered_by TEXT,
+                    first_seen INTEGER,
+                    last_seen INTEGER,
+                    UNIQUE(ip, mac)
+                );
+                CREATE INDEX IF NOT EXISTS idx_network_devices_ip
+                    ON network_devices(ip);
+
+                CREATE TABLE IF NOT EXISTS webhook_endpoints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    hook_id TEXT UNIQUE NOT NULL,
+                    secret TEXT NOT NULL,
+                    automation_id TEXT,
+                    enabled INTEGER DEFAULT 1,
+                    last_triggered INTEGER,
+                    trigger_count INTEGER DEFAULT 0,
+                    created_at INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS backup_verifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    backup_path TEXT NOT NULL,
+                    hostname TEXT NOT NULL,
+                    verification_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    details TEXT,
+                    verified_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_backup_verif_host
+                    ON backup_verifications(hostname, verified_at DESC);
+
+                CREATE TABLE IF NOT EXISTS backup_321_status (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    backup_name TEXT NOT NULL UNIQUE,
+                    copies INTEGER DEFAULT 0,
+                    media_types TEXT DEFAULT '[]',
+                    has_offsite INTEGER DEFAULT 0,
+                    last_verified INTEGER,
+                    updated_at INTEGER
+                );
             """)
+            # Migrate existing databases: add assigned_to column if missing
+            try:
+                cols = [row[1] for row in conn.execute(
+                    "PRAGMA table_info(status_incidents)").fetchall()]
+                if "assigned_to" not in cols:
+                    conn.execute(
+                        "ALTER TABLE status_incidents ADD COLUMN assigned_to TEXT")
+                    conn.commit()
+            except Exception:
+                pass
 
     # ── Metrics ───────────────────────────────────────────────────────────────
     def insert_metrics(self, metrics: list[tuple]) -> None:
@@ -738,6 +858,43 @@ class Database:
     def get_status_uptime_history(self, days: int = 90) -> list[dict]:
         return _get_status_uptime_history(self._get_conn(), self._lock, days=days)
 
+    # ── Incident War Room ────────────────────────────────────────────────────
+    def add_incident_message(self, incident_id: int, author: str,
+                             message: str, msg_type: str = "comment") -> int:
+        return _add_incident_message(self._get_conn(), self._lock, incident_id,
+                                     author, message, msg_type=msg_type)
+
+    def get_incident_messages(self, incident_id: int,
+                              limit: int = 200) -> list[dict]:
+        return _get_incident_messages(self._get_conn(), self._lock, incident_id,
+                                      limit=limit)
+
+    def assign_incident(self, incident_id: int, assigned_to: str) -> bool:
+        return _assign_incident(self._get_conn(), self._lock, incident_id,
+                                assigned_to)
+
+    # ── Security Posture Scoring ────────────────────────────────────────────
+    def record_security_scan(self, hostname: str, score: int,
+                             findings: list[dict]) -> int | None:
+        return _record_scan(self._get_conn(), self._lock, hostname, score, findings)
+
+    def get_security_scores(self) -> list[dict]:
+        return _get_latest_scores(self._get_conn(), self._lock)
+
+    def get_security_findings(self, hostname: str | None = None,
+                              severity: str | None = None,
+                              limit: int = 200) -> list[dict]:
+        return _get_findings(self._get_conn(), self._lock,
+                             hostname=hostname, severity=severity, limit=limit)
+
+    def get_aggregate_security_score(self) -> dict:
+        return _get_aggregate_score(self._get_conn(), self._lock)
+
+    def get_security_score_history(self, hostname: str | None = None,
+                                   limit: int = 50) -> list[dict]:
+        return _get_score_history(self._get_conn(), self._lock,
+                                  hostname=hostname, limit=limit)
+
     # ── Service Dependencies ─────────────────────────────────────────────────
     def create_dependency(self, source: str, target: str, *,
                           dependency_type: str = "requires",
@@ -780,3 +937,77 @@ class Database:
 
     def get_drift_results(self, baseline_id: int | None = None) -> list[dict]:
         return _get_drift_results(self._get_conn(), self._lock, baseline_id=baseline_id)
+
+    # ── Network Devices ──────────────────────────────────────────────────
+    def upsert_network_device(self, ip: str, mac: str | None = None,
+                              hostname: str | None = None,
+                              vendor: str | None = None,
+                              open_ports: list[int] | None = None,
+                              discovered_by: str | None = None) -> int | None:
+        from .network import upsert_device
+        return upsert_device(self._get_conn(), self._lock, ip, mac=mac,
+                             hostname=hostname, vendor=vendor,
+                             open_ports=open_ports, discovered_by=discovered_by)
+
+    def list_network_devices(self) -> list[dict]:
+        from .network import list_devices
+        return list_devices(self._get_conn(), self._lock)
+
+    def get_network_device(self, device_id: int) -> dict | None:
+        from .network import get_device
+        return get_device(self._get_conn(), self._lock, device_id)
+
+    def delete_network_device(self, device_id: int) -> bool:
+        from .network import delete_device
+        return delete_device(self._get_conn(), self._lock, device_id)
+
+    # ── Webhook Endpoints (Feature 8) ────────────────────────────────────
+    def create_webhook(self, name: str, hook_id: str, secret: str,
+                       automation_id: str | None = None) -> int | None:
+        return _create_webhook(self._get_conn(), self._lock, name, hook_id, secret,
+                               automation_id=automation_id)
+
+    def list_webhooks(self) -> list[dict]:
+        return _list_webhooks(self._get_conn(), self._lock)
+
+    def get_webhook_by_hook_id(self, hook_id: str) -> dict | None:
+        return _get_webhook_by_hook_id(self._get_conn(), self._lock, hook_id)
+
+    def delete_webhook(self, webhook_id: int) -> bool:
+        return _delete_webhook(self._get_conn(), self._lock, webhook_id)
+
+    def record_webhook_trigger(self, webhook_id: int) -> None:
+        _record_trigger(self._get_conn(), self._lock, webhook_id)
+
+    # ── Backup Verification (Feature 4) ─────────────────────────────────
+    def record_backup_verification(
+        self, backup_path: str, hostname: str, verification_type: str,
+        status: str, details: str | None = None,
+    ) -> int | None:
+        return _record_verification(
+            self._get_conn(), self._lock, backup_path, hostname,
+            verification_type, status, details=details,
+        )
+
+    def list_backup_verifications(
+        self, hostname: str | None = None, limit: int = 100,
+    ) -> list[dict]:
+        return _list_verifications(
+            self._get_conn(), self._lock, hostname=hostname, limit=limit,
+        )
+
+    def get_backup_321_status(self) -> list[dict]:
+        return _get_321_status(self._get_conn(), self._lock)
+
+    def update_backup_321_status(
+        self, backup_name: str, *,
+        copies: int | None = None,
+        media_types: list[str] | None = None,
+        has_offsite: bool | None = None,
+        last_verified: int | None = None,
+    ) -> int | None:
+        return _update_321_status(
+            self._get_conn(), self._lock, backup_name,
+            copies=copies, media_types=media_types,
+            has_offsite=has_offsite, last_verified=last_verified,
+        )

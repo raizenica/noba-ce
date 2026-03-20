@@ -697,6 +697,18 @@ def api_system_health(auth=Depends(_get_auth)):
     }
 
 
+# ── /api/health-score — Infrastructure Health Score (Feature 7) ──────────────
+@router.get("/api/health-score")
+async def api_health_score(auth=Depends(_get_auth)):
+    """Compute infrastructure-wide health score (0-100) with category breakdown."""
+    from ..health_score import compute_health_score
+
+    stats = _deps.bg_collector.get() if _deps.bg_collector else {}
+    with _agent_data_lock:
+        agent_snapshot = dict(_agent_data)
+    return await compute_health_score(db, agent_snapshot, stats)
+
+
 @router.post("/api/system/cpu-governor")
 async def api_cpu_governor(request: Request, auth=Depends(_require_admin)):
     username, _ = auth
@@ -999,6 +1011,48 @@ async def ws_terminal(ws: WebSocket):
     await terminal_handler(ws, username)
 
 
+# ── IaC Export endpoints ─────────────────────────────────────────────────────
+
+@router.get("/api/export/ansible")
+async def api_export_ansible(request: Request, auth=Depends(_require_operator)):
+    """Generate an Ansible playbook from live agent data."""
+    from ..iac_export import generate_ansible
+
+    hostname = request.query_params.get("hostname") or None
+    output = generate_ansible(
+        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
+    )
+    return PlainTextResponse(output, media_type="text/yaml")
+
+
+@router.get("/api/export/docker-compose")
+async def api_export_docker_compose(request: Request, auth=Depends(_require_operator)):
+    """Generate a docker-compose.yml from live agent container data."""
+    from ..iac_export import generate_docker_compose
+
+    hostname = request.query_params.get("hostname") or None
+    if not hostname:
+        raise HTTPException(400, "hostname parameter is required")
+    output = generate_docker_compose(
+        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
+    )
+    return PlainTextResponse(output, media_type="text/yaml")
+
+
+@router.get("/api/export/shell")
+async def api_export_shell(request: Request, auth=Depends(_require_operator)):
+    """Generate a bash setup script from live agent data."""
+    from ..iac_export import generate_shell_script
+
+    hostname = request.query_params.get("hostname") or None
+    if not hostname:
+        raise HTTPException(400, "hostname parameter is required")
+    output = generate_shell_script(
+        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
+    )
+    return PlainTextResponse(output, media_type="text/x-shellscript")
+
+
 # ── Agent helpers ─────────────────────────────────────────────────────────────
 
 def _validate_agent_key(key: str) -> bool:
@@ -1036,6 +1090,42 @@ async def api_agent_report(request: Request):
             cr_id = cr.get("id", "")
             if cr_id:
                 db.complete_command(cr_id, cr)
+            # Auto-record security scan results
+            if cr.get("type") == "security_scan" and cr.get("status") == "ok":
+                try:
+                    db.record_security_scan(
+                        hostname,
+                        int(cr.get("score", 0)),
+                        cr.get("findings", []),
+                    )
+                except Exception:
+                    pass
+            # Persist discovered network devices
+            if cr.get("type") == "network_discover" and cr.get("status") == "ok":
+                for dev in cr.get("devices", []):
+                    try:
+                        db.upsert_network_device(
+                            ip=dev.get("ip", ""),
+                            mac=dev.get("mac"),
+                            hostname=dev.get("hostname"),
+                            open_ports=dev.get("open_ports"),
+                            discovered_by=hostname,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to persist discovered device: %s", e)
+            # Persist backup verification results
+            if cr.get("type") == "verify_backup":
+                try:
+                    details = cr.get("details")
+                    db.record_backup_verification(
+                        backup_path=cr.get("path", ""),
+                        hostname=hostname,
+                        verification_type=cr.get("verification_type", ""),
+                        status=cr.get("status", "error"),
+                        details=json.dumps(details) if details else None,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to persist backup verification: %s", e)
     # Store stream data if present
     stream_data = body.pop("_stream_data", None)
     if stream_data and isinstance(stream_data, dict):
@@ -1135,6 +1225,29 @@ async def agent_websocket(ws: WebSocket):
                     _agent_cmd_results.setdefault(hostname, []).append(msg)
                     if len(_agent_cmd_results[hostname]) > 50:
                         _agent_cmd_results[hostname] = _agent_cmd_results[hostname][-50:]
+                # Auto-record security scan results via WebSocket
+                if msg.get("cmd") == "security_scan" and msg.get("status") == "ok":
+                    try:
+                        db.record_security_scan(
+                            hostname,
+                            int(msg.get("score", 0)),
+                            msg.get("findings", []),
+                        )
+                    except Exception:
+                        pass
+                # Auto-record backup verification results via WebSocket
+                if msg.get("cmd") == "verify_backup":
+                    try:
+                        details = msg.get("details")
+                        db.record_backup_verification(
+                            backup_path=msg.get("path", ""),
+                            hostname=hostname,
+                            verification_type=msg.get("verification_type", ""),
+                            status=msg.get("status", "error"),
+                            details=json.dumps(details) if details else None,
+                        )
+                    except Exception:
+                        pass
 
             elif msg_type == "stream":
                 cmd_id = msg.get("id", "")
@@ -1344,6 +1457,87 @@ def api_agent_history(hostname: str, request: Request, auth=Depends(_get_auth)):
     metric = request.query_params.get("metric", "cpu")
     metric_key = f"agent_{hostname}_{metric}"
     return db.get_history(metric_key, range_hours=hours, resolution=120)
+
+
+# ── Network traffic analysis endpoint ─────────────────────────────────────────
+
+@router.get("/api/agents/{hostname}/network-stats")
+async def api_agent_network_stats(hostname: str, request: Request, auth=Depends(_get_auth)):
+    """Trigger network_stats command on an agent and return the results.
+
+    Sends the command via WebSocket if the agent is connected, otherwise
+    queues it for the next poll.  The endpoint also stores per-interface
+    byte counters as metrics for historical trending.
+    """
+    username, role = auth
+    ip = _client_ip(request)
+
+    risk = RISK_LEVELS.get("network_stats", "low")
+    if not check_role_permission(role, risk):
+        raise HTTPException(403, "Insufficient permissions")
+
+    # Check agent existence
+    with _agent_data_lock:
+        agent = _agent_data.get(hostname)
+    if not agent:
+        raise HTTPException(404, f"Agent '{hostname}' not found or offline")
+
+    version = agent.get("agent_version", "1.1.0")
+    caps = get_agent_capabilities(version)
+    if "network_stats" not in caps:
+        raise HTTPException(400, f"Agent v{version} does not support 'network_stats'")
+
+    cmd_id = secrets.token_hex(8)
+    cmd = {"id": cmd_id, "type": "network_stats", "params": {},
+           "queued_by": username, "queued_at": int(time.time())}
+
+    # Try WebSocket first for instant results
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            import asyncio
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": "network_stats", "params": {}})
+            delivered = True
+            # Wait for result (up to 5s)
+            for _ in range(50):
+                with _agent_cmd_lock:
+                    results = _agent_cmd_results.get(hostname, [])
+                    match = [r for r in results if r.get("id") == cmd_id]
+                    if match:
+                        result = match[0]
+                        # Store interface metrics for trending
+                        try:
+                            iface_metrics = []
+                            for iface in result.get("interfaces", []):
+                                iname = iface.get("name", "").replace(".", "_")
+                                iface_metrics.append(
+                                    (f"net_if_{hostname}_{iname}_rx", iface.get("rx_bytes", 0), "")
+                                )
+                                iface_metrics.append(
+                                    (f"net_if_{hostname}_{iname}_tx", iface.get("tx_bytes", 0), "")
+                                )
+                            if iface_metrics:
+                                db.insert_metrics(iface_metrics)
+                        except Exception:
+                            pass
+                        db.audit_log("agent_network_stats", username,
+                                     f"host={hostname} id={cmd_id}", ip)
+                        return result
+                await asyncio.sleep(0.1)
+        except Exception:
+            delivered = False
+
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, "network_stats", {}, username)
+    db.audit_log("agent_network_stats", username,
+                 f"host={hostname} id={cmd_id} ws={delivered}", ip)
+    return {"status": "queued", "id": cmd_id, "message": "Command queued; check results endpoint."}
 
 
 # ── Agent log streaming endpoints ────────────────────────────────────────────
@@ -1797,6 +1991,70 @@ def api_resolve_incident(incident_id: int, request: Request, auth=Depends(_requi
     return {"status": "ok"}
 
 
+# ── Network discovery endpoints ───────────────────────────────────────────────
+
+@router.get("/api/network/devices")
+def api_network_devices(auth=Depends(_get_auth)):
+    """List all discovered network devices."""
+    return db.list_network_devices()
+
+
+@router.post("/api/network/discover/{hostname}")
+async def api_network_discover(hostname: str, request: Request, auth=Depends(_require_operator)):
+    """Trigger network discovery on a specific agent."""
+    username, role = auth
+    ip = _client_ip(request)
+
+    risk = RISK_LEVELS.get("network_discover")
+    if not risk:
+        raise HTTPException(400, "Unknown command type: 'network_discover'")
+    if not check_role_permission(role, risk):
+        raise HTTPException(403, "Insufficient permissions for network_discover")
+
+    with _agent_data_lock:
+        agent = _agent_data.get(hostname)
+    if not agent:
+        raise HTTPException(404, f"Agent '{hostname}' not found or offline")
+
+    cmd_id = secrets.token_hex(8)
+    cmd = {"id": cmd_id, "type": "network_discover", "params": {},
+           "queued_by": username, "queued_at": int(time.time())}
+
+    # Try WebSocket first, fall back to queue
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": "network_discover", "params": {}})
+            delivered = True
+        except Exception:
+            with _agent_ws_lock:
+                _agent_websockets.pop(hostname, None)
+
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, "network_discover", {}, username)
+    db.audit_log("network_discover", username,
+                 f"host={hostname} id={cmd_id} ws={delivered}", ip)
+    return {"status": "sent" if delivered else "queued", "id": cmd_id, "websocket": delivered}
+
+
+@router.delete("/api/network/devices/{device_id}")
+def api_delete_network_device(device_id: int, request: Request, auth=Depends(_require_operator)):
+    """Remove a discovered network device."""
+    username, _ = auth
+    ok = db.delete_network_device(device_id)
+    if not ok:
+        raise HTTPException(404, f"Device {device_id} not found")
+    db.audit_log("network_device_delete", username,
+                 f"device_id={device_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
 # ── Status page endpoints ────────────────────────────────────────────────────
 @router.get("/status")
 def public_status_page():
@@ -1997,6 +2255,70 @@ def api_resolve_status_incident(incident_id: int, request: Request, auth=Depends
         raise HTTPException(404, "Incident not found")
     db.audit_log("status_incident_resolve", username, f"id={incident_id}", _client_ip(request))
     return {"status": "ok"}
+
+
+# ── Incident War Room endpoints ──────────────────────────────────────────────
+@router.get("/api/incidents/{incident_id}/messages")
+def api_get_incident_messages(incident_id: int, auth=Depends(_get_auth)):
+    """Get the war room message thread for a status incident."""
+    incident = db.get_status_incident(incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    messages = db.get_incident_messages(incident_id)
+    return {"incident_id": incident_id, "messages": messages}
+
+
+@router.post("/api/incidents/{incident_id}/messages")
+async def api_post_incident_message(
+    incident_id: int, request: Request, auth=Depends(_require_operator),
+):
+    """Post a message to the incident war room (operator+)."""
+    username, _ = auth
+    incident = db.get_status_incident(incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    body = await _read_body(request)
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+    msg_type = body.get("msg_type", "comment")
+    if msg_type not in ("comment", "system", "action", "note"):
+        raise HTTPException(400, "msg_type must be comment, system, action, or note")
+    msg_id = db.add_incident_message(incident_id, username, message, msg_type=msg_type)
+    if not msg_id:
+        raise HTTPException(500, "Failed to post message")
+    db.audit_log("incident_message", username, f"incident={incident_id}", _client_ip(request))
+    return {"id": msg_id, "status": "ok"}
+
+
+@router.put("/api/incidents/{incident_id}/assign")
+async def api_assign_incident(
+    incident_id: int, request: Request, auth=Depends(_require_operator),
+):
+    """Assign a status incident to a user (operator+)."""
+    username, _ = auth
+    incident = db.get_status_incident(incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    body = await _read_body(request)
+    assigned_to = (body.get("assigned_to") or "").strip()
+    if not assigned_to:
+        raise HTTPException(400, "assigned_to is required")
+    ok = db.assign_incident(incident_id, assigned_to)
+    if not ok:
+        raise HTTPException(500, "Failed to assign incident")
+    # Post system message about the assignment
+    db.add_incident_message(
+        incident_id, username,
+        f"Assigned incident to {assigned_to}",
+        msg_type="system",
+    )
+    db.audit_log(
+        "incident_assign", username,
+        f"incident={incident_id} assigned_to={assigned_to}",
+        _client_ip(request),
+    )
+    return {"status": "ok", "assigned_to": assigned_to}
 
 
 # ── Endpoint monitor endpoints ────────────────────────────────────────────────
@@ -2598,6 +2920,227 @@ async def api_ai_summarize_incident(incident_id: int, auth=Depends(_require_oper
     except Exception as e:
         logger.error("AI summarize-incident error: %s", e)
         raise HTTPException(502, f"LLM request failed: {e}")
+
+
+# ── Security Posture Scoring ──────────────────────────────────────────────────
+
+@router.get("/api/security/score")
+def api_security_score(auth=Depends(_get_auth)):
+    """Return aggregate security score + per-agent scores."""
+    return db.get_aggregate_security_score()
+
+
+@router.get("/api/security/findings")
+def api_security_findings(request: Request, auth=Depends(_get_auth)):
+    """Return security findings with optional hostname/severity filters."""
+    hostname = request.query_params.get("hostname", "") or None
+    severity = request.query_params.get("severity", "") or None
+    limit = min(_safe_int(request.query_params.get("limit", "200"), 200), 500)
+    return db.get_security_findings(hostname=hostname, severity=severity, limit=limit)
+
+
+@router.get("/api/security/history")
+def api_security_history(request: Request, auth=Depends(_get_auth)):
+    """Return historical security scores for charting."""
+    hostname = request.query_params.get("hostname", "") or None
+    limit = min(_safe_int(request.query_params.get("limit", "50"), 50), 200)
+    return db.get_security_score_history(hostname=hostname, limit=limit)
+
+
+@router.post("/api/security/scan/{hostname}")
+async def api_security_scan(hostname: str, request: Request, auth=Depends(_get_auth)):
+    """Trigger a security scan on a specific agent."""
+    username, role = auth
+    ip = _client_ip(request)
+    cmd_type = "security_scan"
+    risk = RISK_LEVELS.get(cmd_type, "low")
+    if not check_role_permission(role, risk):
+        raise HTTPException(403, "Insufficient permissions")
+
+    with _agent_data_lock:
+        agent = _agent_data.get(hostname)
+    if not agent:
+        raise HTTPException(404, f"Agent '{hostname}' not found")
+
+    cmd_id = secrets.token_hex(8)
+    cmd = {"id": cmd_id, "type": cmd_type, "params": {},
+           "queued_by": username, "queued_at": int(time.time())}
+
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": cmd_type, "params": {}})
+            delivered = True
+        except Exception:
+            with _agent_ws_lock:
+                _agent_websockets.pop(hostname, None)
+
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, cmd_type, {}, username)
+    db.audit_log("security_scan", username,
+                 f"host={hostname} id={cmd_id} ws={delivered}", ip)
+    return {"status": "sent" if delivered else "queued", "id": cmd_id, "hostname": hostname}
+
+
+@router.post("/api/security/scan-all")
+async def api_security_scan_all(request: Request, auth=Depends(_get_auth)):
+    """Trigger security scan on all online agents."""
+    username, role = auth
+    ip = _client_ip(request)
+    cmd_type = "security_scan"
+    risk = RISK_LEVELS.get(cmd_type, "low")
+    if not check_role_permission(role, risk):
+        raise HTTPException(403, "Insufficient permissions")
+
+    now = time.time()
+    results = {}
+    with _agent_data_lock:
+        online = [
+            h for h, d in _agent_data.items()
+            if (now - d.get("_received", 0)) < _AGENT_MAX_AGE
+        ]
+
+    for hostname in online:
+        cmd_id = secrets.token_hex(8)
+        cmd = {"id": cmd_id, "type": cmd_type, "params": {},
+               "queued_by": username, "queued_at": int(time.time())}
+
+        delivered = False
+        with _agent_ws_lock:
+            ws = _agent_websockets.get(hostname)
+        if ws:
+            try:
+                await ws.send_json({"type": "command", "id": cmd_id,
+                                    "cmd": cmd_type, "params": {}})
+                delivered = True
+            except Exception:
+                with _agent_ws_lock:
+                    _agent_websockets.pop(hostname, None)
+
+        if not delivered:
+            with _agent_cmd_lock:
+                _agent_commands.setdefault(hostname, []).append(cmd)
+
+        db.record_command(cmd_id, hostname, cmd_type, {}, username)
+        results[hostname] = {"id": cmd_id, "websocket": delivered}
+
+    db.audit_log("security_scan_all", username,
+                 f"targets={len(online)}", ip)
+    return {"status": "queued", "agents": results, "count": len(online)}
+
+
+@router.post("/api/security/record")
+async def api_security_record(request: Request, auth=Depends(_get_auth)):
+    """Record security scan results from an agent (called internally after scan completes)."""
+    body = await _read_body(request)
+    hostname = body.get("hostname", "")
+    score = body.get("score")
+    findings = body.get("findings", [])
+    if not hostname or score is None:
+        raise HTTPException(400, "hostname and score are required")
+    db.record_security_scan(hostname, int(score), findings)
+    return {"status": "ok"}
+
+
+# ── Backup Verification (Feature 4) ───────────────────────────────────────
+
+@router.get("/api/backup/verifications")
+def api_backup_verifications(request: Request, auth=Depends(_get_auth)):
+    """Return backup verification history."""
+    hostname = request.query_params.get("hostname", "") or None
+    limit = min(_safe_int(request.query_params.get("limit", "100"), 100), 500)
+    return db.list_backup_verifications(hostname=hostname, limit=limit)
+
+
+@router.post("/api/backup/verify")
+async def api_backup_verify(request: Request, auth=Depends(_require_operator)):
+    """Trigger a backup verification on a specific agent."""
+    username, role = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    hostname = body.get("hostname", "")
+    path = body.get("path", "")
+    vtype = body.get("verification_type", "checksum")
+
+    if not hostname:
+        raise HTTPException(400, "hostname is required")
+    if not path:
+        raise HTTPException(400, "path is required")
+    if vtype not in ("checksum", "restore_test", "db_integrity"):
+        raise HTTPException(400, f"Invalid verification_type: {vtype}")
+
+    cmd_type = "verify_backup"
+    risk = RISK_LEVELS.get(cmd_type)
+    if not risk:
+        raise HTTPException(400, f"Unknown command type: '{cmd_type}'")
+    if not check_role_permission(role, risk):
+        raise HTTPException(403, "Insufficient permissions for verify_backup")
+
+    with _agent_data_lock:
+        agent = _agent_data.get(hostname)
+    if not agent:
+        raise HTTPException(404, f"Agent '{hostname}' not found")
+
+    cmd_id = secrets.token_hex(8)
+    params = {"path": path, "verification_type": vtype}
+    cmd = {"id": cmd_id, "type": cmd_type, "params": params,
+           "queued_by": username, "queued_at": int(time.time())}
+
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": cmd_type, "params": params})
+            delivered = True
+        except Exception:
+            with _agent_ws_lock:
+                _agent_websockets.pop(hostname, None)
+
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, cmd_type, params, username)
+    db.audit_log("verify_backup", username,
+                 f"host={hostname} path={path} type={vtype} id={cmd_id} ws={delivered}", ip)
+    return {"status": "sent" if delivered else "queued", "id": cmd_id,
+            "hostname": hostname, "path": path, "verification_type": vtype}
+
+
+@router.get("/api/backup/321-status")
+def api_backup_321_status(auth=Depends(_get_auth)):
+    """Return 3-2-1 backup compliance status."""
+    return db.get_backup_321_status()
+
+
+@router.put("/api/backup/321-status")
+async def api_backup_321_update(request: Request, auth=Depends(_require_operator)):
+    """Update 3-2-1 backup compliance tracking for a backup."""
+    username, _ = auth
+    body = await _read_body(request)
+    backup_name = body.get("backup_name", "")
+    if not backup_name:
+        raise HTTPException(400, "backup_name is required")
+
+    row_id = db.update_backup_321_status(
+        backup_name,
+        copies=body.get("copies"),
+        media_types=body.get("media_types"),
+        has_offsite=body.get("has_offsite"),
+        last_verified=body.get("last_verified"),
+    )
+    if row_id is None:
+        raise HTTPException(500, "Failed to update 3-2-1 status")
+    db.audit_log("backup_321_update", username, f"name={backup_name}")
+    return {"status": "ok", "id": row_id}
 
 
 @router.post("/api/ai/test")

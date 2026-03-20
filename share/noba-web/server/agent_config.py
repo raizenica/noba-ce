@@ -24,12 +24,16 @@ RISK_LEVELS: dict[str, str] = {
     "container_logs":   "low",
     "dns_lookup":       "low",
     "network_config":   "low",
+    "network_stats":    "low",
     "endpoint_check":   "low",
     "follow_logs":      "low",
     "stop_stream":      "low",
     "get_stream":       "low",
     "discover_services": "low",
+    "network_discover": "low",
+    "security_scan":    "low",
     # Medium risk — controlled mutations with limited blast radius
+    "verify_backup":    "medium",
     "restart_service":  "medium",
     "set_interval":     "medium",
     "service_control":  "medium",
@@ -317,6 +321,17 @@ def validate_command_params(cmd_type: str, params: dict) -> str | None:  # noqa:
             return "Parameter 'url' must start with http:// or https://"
         if len(url) > 2048:
             return "URL exceeds maximum length of 2048 characters"
+
+    # ── Backup verification ─────────────────────────────────────────────────
+    elif cmd_type == "verify_backup":
+        path = params.get("path", "")
+        err = _validate_path(path)
+        if err:
+            return err
+        vtype = params.get("verification_type", "")
+        allowed_types = {"checksum", "restore_test", "db_integrity"}
+        if vtype and vtype not in allowed_types:
+            return f"Invalid verification_type '{vtype}' — must be one of {sorted(allowed_types)}"
 
     # ── uninstall_agent — requires explicit confirmation ───────────────────────
     elif cmd_type == "uninstall_agent":

@@ -564,3 +564,118 @@ async def api_run(request: Request, auth=Depends(_require_operator)):
 
     db.audit_log("script_run", username, f"{script} {args_in} -> run_id={run_id}", ip)
     return {"success": True, "status": "running", "script": script, "run_id": run_id}
+
+
+# ── Webhook Receiver endpoints (Feature 8) ───────────────────────────────────
+
+
+@router.get("/api/webhooks")
+def api_webhooks_list(auth=Depends(_require_admin)):
+    """List all webhook endpoints (admin only)."""
+    return db.list_webhooks()
+
+
+@router.post("/api/webhooks")
+async def api_webhooks_create(request: Request, auth=Depends(_require_admin)):
+    """Create a new webhook endpoint with auto-generated hook_id and secret."""
+    import secrets
+
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    automation_id = body.get("automation_id") or None
+    if not name:
+        raise HTTPException(400, "Name is required")
+    # Validate automation exists if provided
+    if automation_id:
+        auto = db.get_automation(automation_id)
+        if not auto:
+            raise HTTPException(400, "Linked automation not found")
+    hook_id = secrets.token_urlsafe(16)
+    secret = secrets.token_hex(32)
+    wh_id = db.create_webhook(name, hook_id, secret, automation_id=automation_id)
+    if wh_id is None:
+        raise HTTPException(500, "Failed to create webhook")
+    db.audit_log("webhook_create", username, f"Created webhook '{name}' (hook_id={hook_id})", ip)
+    return {
+        "id": wh_id,
+        "hook_id": hook_id,
+        "secret": secret,
+        "status": "ok",
+    }
+
+
+@router.delete("/api/webhooks/{webhook_id}")
+def api_webhooks_delete(webhook_id: int, request: Request, auth=Depends(_require_admin)):
+    """Delete a webhook endpoint."""
+    username, _ = auth
+    ip = _client_ip(request)
+    if not db.delete_webhook(webhook_id):
+        raise HTTPException(404, "Webhook not found")
+    db.audit_log("webhook_delete", username, f"Deleted webhook id={webhook_id}", ip)
+    return {"status": "ok"}
+
+
+@router.post("/api/webhooks/receive/{hook_id}")
+async def api_webhooks_receive(hook_id: str, request: Request):
+    """PUBLIC endpoint -- receive incoming webhook, validate HMAC, trigger automation."""
+    import hashlib
+    import hmac as _hmac
+
+    wh = db.get_webhook_by_hook_id(hook_id)
+    if not wh:
+        raise HTTPException(404, "Not found")
+    if not wh["enabled"]:
+        raise HTTPException(403, "Webhook is disabled")
+
+    # HMAC-SHA256 signature validation
+    raw_body = await request.body()
+    secret = wh["secret"]
+    expected = _hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    signature = request.headers.get("X-Hub-Signature-256", "").replace("sha256=", "")
+    if not signature or not _hmac.compare_digest(expected, signature):
+        raise HTTPException(401, "Invalid signature")
+
+    # Record the trigger
+    db.record_webhook_trigger(wh["id"])
+
+    # If linked to an automation, run it
+    automation_id = wh.get("automation_id")
+    if automation_id:
+        auto = db.get_automation(automation_id)
+        if auto:
+            config = auto["config"]
+
+            if auto["type"] == "workflow":
+                steps = config.get("steps", [])
+                if steps:
+                    wf_retries = _safe_int(config.get("retries", 0), 0)
+                    mode = config.get("mode", "sequential")
+                    if mode == "parallel":
+                        _run_parallel_workflow(automation_id, steps, "webhook")
+                    else:
+                        _run_workflow(automation_id, steps, "webhook", retries=wf_retries)
+                    db.audit_log("webhook_trigger", "webhook",
+                                 f"Webhook '{wh['name']}' triggered workflow '{auto['name']}'")
+                    return {"status": "ok", "automation": auto["name"], "workflow": True}
+
+            builder = _AUTO_BUILDERS.get(auto["type"])
+            if builder:
+                def make_process(_run_id: int) -> subprocess.Popen | None:
+                    return builder(config)
+
+                try:
+                    run_id = job_runner.submit(
+                        make_process, automation_id=automation_id,
+                        trigger=f"webhook:{wh['name']}",
+                        triggered_by="webhook",
+                    )
+                except RuntimeError:
+                    raise HTTPException(409, "Too many concurrent jobs")
+                db.audit_log("webhook_trigger", "webhook",
+                             f"Webhook '{wh['name']}' triggered '{auto['name']}' -> run_id={run_id}")
+                return {"status": "ok", "automation": auto["name"], "run_id": run_id}
+
+    db.audit_log("webhook_trigger", "webhook", f"Webhook '{wh['name']}' received (no automation linked)")
+    return {"status": "ok", "automation": None}

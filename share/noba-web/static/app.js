@@ -292,6 +292,13 @@ function dashboard() {
         driftExpandedId: null, driftResults: [],
         driftNewPath: '', driftNewGroup: '__all__',
         driftSetFromHost: '', driftCheckLoading: false,
+        // ── IaC Export state ──────────────────────────────────────────────────
+        iacFormat: 'ansible',
+        iacHostname: '',
+        iacOutput: '',
+        iacLoading: false,
+        // ── Network Discovery state ─────────────────────────────────────────
+        networkDevices: [], networkDiscoverHost: '', networkDiscoverLoading: false,
         logsTab: 'history',
 
         // ── Live log streaming state ─────────────────────────────────────────
@@ -466,6 +473,9 @@ function dashboard() {
         spComponents: [], spIncidents: [],
         spNewComp: { name: '', group_name: 'Default', service_key: '', display_order: 0 },
         spNewIncident: { title: '', severity: 'minor', message: '' },
+        // Incident War Room
+        warRoomIncident: null, warRoomMessages: [], warRoomLoading: false,
+        warRoomMsg: '', warRoomAssignTo: '',
         agentCmdTarget: '', agentCmdInput: '', agentCmdSending: false, agentCmdOutput: {},
         showSlaModal: false, slaData: null, slaLoading: false, slaPeriod: 720,
         agentHistoryHost: '', agentHistoryData: [], agentHistoryMetric: 'cpu',
@@ -505,6 +515,24 @@ function dashboard() {
         llmMaxTokens: 4096, llmTemperature: 0.3, llmEnabled: false,
         aiPanelOpen: false, aiMessages: [], aiInput: '', aiLoading: false,
         aiEnabled: false, aiTestLoading: false,
+
+        // ── Backup Verification (Feature 4) ─────────────────────────────────
+        backupVerifications: [], backupVerifLoading: false,
+        backup321Status: [], backup321Loading: false,
+        verifyForm: { hostname: '', path: '', verification_type: 'checksum' },
+        verifyLoading: false,
+        show321Modal: false,
+        form321: { backup_name: '', copies: 0, media_types: [], has_offsite: false },
+
+        // Mobile PWA state
+        offlineMode: false,
+        pullRefreshY: 0,
+        pullRefreshActive: false,
+        quickActionsOpen: false,
+
+        // Plugin management state
+        pluginList: [],
+        pluginLoading: false,
 
         // ── Live data ──────────────────────────────────────────────────────────
         timestamp: '--:--', uptime: '--', loadavg: '--', memory: '--',
@@ -696,6 +724,8 @@ function dashboard() {
 
             this.fetchNotifications();
             this.fetchAiStatus();
+            this.fetchHealthScore();
+            if (this.userRole === 'admin') this.fetchWebhooks();
 
             this.startJobNotifPoller();
 
@@ -750,6 +780,7 @@ function dashboard() {
                 { label: 'Infrastructure', icon: 'fa-server', action: () => this.navigateTo('infrastructure'), category: 'Page' },
                 { label: 'Automations', icon: 'fa-bolt', action: () => this.navigateTo('automations'), category: 'Page' },
                 { label: 'Logs', icon: 'fa-scroll', action: () => this.navigateTo('logs'), category: 'Page' },
+                { label: 'Security', icon: 'fa-shield-alt', action: () => this.navigateTo('security'), category: 'Page' },
                 { label: 'Settings — General', icon: 'fa-cog', action: () => this.navigateTo('settings/general'), category: 'Settings' },
                 { label: 'Settings — Visibility', icon: 'fa-eye', action: () => this.navigateTo('settings/visibility'), category: 'Settings' },
                 { label: 'Settings — Integrations', icon: 'fa-plug', action: () => this.navigateTo('settings/integrations'), category: 'Settings' },
@@ -946,26 +977,36 @@ function dashboard() {
 
         initTouch() {
             let startY = 0, startX = 0, pulling = false;
-            const grid = document.getElementById('sortable-grid');
-            if (!grid) return;
+            const content = document.querySelector('.app-content') || document.getElementById('sortable-grid');
+            if (!content) return;
 
-            // Pull-to-refresh
-            grid.addEventListener('touchstart', (e) => {
-                if (grid.scrollTop === 0 && e.touches.length === 1) {
+            // Pull-to-refresh with visual indicator
+            content.addEventListener('touchstart', (e) => {
+                if (content.scrollTop <= 0 && e.touches.length === 1) {
                     startY = e.touches[0].clientY;
                     pulling = true;
+                    this.pullRefreshY = 0;
+                    this.pullRefreshActive = false;
                 }
             }, { passive: true });
-            grid.addEventListener('touchmove', (e) => {
+            content.addEventListener('touchmove', (e) => {
                 if (!pulling) return;
                 const dy = e.touches[0].clientY - startY;
+                this.pullRefreshY = Math.min(dy, 120);
+                this.pullRefreshActive = dy > 60;
                 if (dy > 80 && !this.refreshing) {
                     pulling = false;
+                    this.pullRefreshY = 0;
+                    this.pullRefreshActive = false;
                     this.refreshStats();
                     this.addToast('Refreshing...', 'info');
                 }
             }, { passive: true });
-            grid.addEventListener('touchend', () => { pulling = false; }, { passive: true });
+            content.addEventListener('touchend', () => {
+                pulling = false;
+                this.pullRefreshY = 0;
+                this.pullRefreshActive = false;
+            }, { passive: true });
 
             // Swipe-to-dismiss alerts
             document.addEventListener('touchstart', (e) => {
@@ -1203,6 +1244,7 @@ function dashboard() {
 
             this._es.onopen = () => {
                 this.connStatus     = 'sse';
+                this.offlineMode    = false;
                 this._reconnecting  = false;
                 this._lastHeartbeat = Date.now();
                 this._stopCountdown();
@@ -1217,6 +1259,7 @@ function dashboard() {
 
             this._es.onerror = () => {
                 this._reconnecting = false;
+                this.offlineMode = true;
                 if (this._es) { this._es.close(); this._es = null; }
                 if (this._intervals['poll']) return;   // already fell back to polling
                 this.connStatus = 'polling';
@@ -1242,15 +1285,18 @@ function dashboard() {
                 });
                 if (res.ok) {
                     this._mergeLiveData(await res.json());
+                    this.offlineMode = false;
                     if (this.connStatus === 'offline') this.connStatus = 'polling';
                 } else if (res.status === 401) {
                     this.authenticated = false;
                     this.connStatus    = 'offline';
                 } else {
                     this.connStatus = 'offline';
+                    this.offlineMode = true;
                 }
             } catch {
                 this.connStatus = 'offline';
+                this.offlineMode = true;
             } finally {
                 this.refreshing = false;
             }
@@ -1877,6 +1923,58 @@ function dashboard() {
             if (this._termResizeObserver) {
                 this._termResizeObserver.disconnect();
                 this._termResizeObserver = null;
+            }
+        },
+
+        // ── Plugin Management ───────────────────────────────────────────────
+        async fetchPlugins() {
+            this.pluginLoading = true;
+            try {
+                const res = await fetch('/api/plugins/managed', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.pluginList = await res.json();
+            } catch (e) {
+                this.addToast('Failed to load plugins: ' + e.message, 'error');
+            } finally {
+                this.pluginLoading = false;
+            }
+        },
+
+        async togglePlugin(name, enable) {
+            const action = enable ? 'enable' : 'disable';
+            try {
+                const res = await fetch(`/api/plugins/${encodeURIComponent(name)}/${action}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast(`Plugin "${name}" ${action}d`, 'success');
+                    await this.fetchPlugins();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast(err.detail || `Failed to ${action} plugin`, 'error');
+                }
+            } catch (e) {
+                this.addToast('Plugin toggle failed: ' + e.message, 'error');
+            }
+        },
+
+        async reloadPlugins() {
+            try {
+                const res = await fetch('/api/plugins/reload', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Plugins reloaded', 'success');
+                    await this.fetchPlugins();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast(err.detail || 'Reload failed', 'error');
+                }
+            } catch (e) {
+                this.addToast('Plugin reload failed: ' + e.message, 'error');
             }
         },
 
