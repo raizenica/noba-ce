@@ -2593,7 +2593,11 @@ def _ws_thread(server: str, api_key: str, hostname: str, ctx: dict) -> None:
                     }
                     results = execute_commands([cmd_obj], cmd_ctx)
                     for r in results:
-                        ws.send_json({"type": "result", **r})
+                        # Rename r["type"] to "cmd" to avoid overwriting
+                        # the message type "result" with the command type
+                        payload = {"type": "result", "cmd": r.get("type", "")}
+                        payload.update({k: v for k, v in r.items() if k != "type"})
+                        ws.send_json(payload)
 
                 elif msg.get("type") == "pong":
                     pass
