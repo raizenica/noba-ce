@@ -116,6 +116,7 @@ function authMixin() {
                 } catch { /* best-effort */ }
             }
             localStorage.removeItem('noba-token');
+            location.hash = '#/dashboard';
             if (navigator.serviceWorker && navigator.serviceWorker.controller) {
                 navigator.serviceWorker.controller.postMessage({ type: 'LOGOUT' });
             }

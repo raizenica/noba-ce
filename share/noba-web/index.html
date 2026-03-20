@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="NOBA Command Center — Homelab automation dashboard">
     <meta name="theme-color" content="#060a10">
-    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <title>NOBA // Command Center</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,7 +24,7 @@
             const token = params.get('token');
             if (token) {
                 localStorage.setItem('noba-token', token);
-                window.history.replaceState({}, '', '/');
+                window.history.replaceState({}, '', '/' + window.location.hash);
             }
         })();
     </script>
@@ -48,156 +49,119 @@
     </style>
 </head>
 <body x-data="dashboard()" x-init="init()" :data-theme="theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'nord' : 'default') : theme">
-<div class="page">
-
-    <header class="header">
-        <div class="logo">
+<div class="app-layout" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'no-sidebar': !authenticated }">
+    <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+    <aside class="app-sidebar" :class="{ 'mobile-open': !sidebarCollapsed }" x-show="authenticated" x-cloak>
+        <div class="app-sidebar-logo">
             <div class="logo-mark" aria-hidden="true"><i class="fas fa-terminal"></i></div>
-            <div>
-                <div class="logo-name">NOBA <span class="logo-slash">//</span> COMMAND</div>
-                <div class="logo-tagline">Noba Automation Suite</div>
+            <div class="logo-text">
+                <div class="logo-name">NOBA</div>
+                <div class="logo-tagline">Command Center</div>
             </div>
         </div>
-        <div class="header-controls">
-
-            <div class="user-chip"
-                 x-show="authenticated && netHealth && netHealth.configured"
-                 x-cloak
-                 title="Network Health Watchdog"
-                 :style="netHealth.wan==='Down' && netHealth.lan==='Up'
-                     ? 'border-color:var(--warning);box-shadow:0 0 10px var(--warning-dim)' : ''">
-                <i class="fas"
-                   :class="netHealth.wan==='Up' ? 'fa-globe' : 'fa-globe-americas'"
-                   :style="netHealth.wan==='Up' ? 'color:var(--success)' : 'color:var(--danger)'"
-                   :aria-label="'WAN: ' + netHealth.wan"></i>
-                <template x-if="netHealth.lan !== 'Down' || lanTestIp">
-                    <span>
-                        <span style="margin:0 .2rem; color:var(--text-muted)" aria-hidden="true">|</span>
-                        <i class="fas fa-network-wired"
-                           :style="netHealth.lan==='Up' ? 'color:var(--success)' : 'color:var(--danger)'"
-                           :aria-label="'LAN: ' + netHealth.lan"></i>
-                    </span>
-                </template>
-                <span x-show="netHealth.wan==='Down' && netHealth.lan==='Up'"
-                      style="color:var(--warning);font-family:var(--font-ui);font-size:.7rem;font-weight:700;margin-left:.3rem">
-                    LOCAL ONLY
-                </span>
+        <nav class="app-sidebar-nav">
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'dashboard' }" @click="navigateTo('dashboard')">
+                <i class="fas fa-th-large nav-icon"></i><span class="nav-label">Dashboard</span>
             </div>
-
-            <div class="user-chip" x-show="authenticated && username" x-cloak>
-                <i class="fas fa-user-circle" style="color:var(--accent);font-size:.8rem" aria-hidden="true"></i>
-                <span x-text="username" style="color:var(--text);cursor:pointer" @click="showProfileModal=true; fetchProfile()"></span>
-                <span class="badge" :class="userRole==='admin'?'ba':userRole==='operator'?'bs':'bn'" x-text="userRole"></span>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'agents' }" @click="navigateTo('agents')">
+                <i class="fas fa-robot nav-icon"></i><span class="nav-label">Agents</span>
+                <span class="nav-badge" x-show="(agents||[]).filter(a=>a.online).length" x-text="(agents||[]).filter(a=>a.online).length"></span>
             </div>
-
-            <div class="user-chip" x-show="authenticated && nowPlayingCount > 0" x-cloak
-                 style="border-color:var(--accent);box-shadow:0 0 8px var(--accent-dim)">
-                <i class="fas fa-play-circle" style="color:var(--accent)" aria-hidden="true"></i>
-                <span x-text="nowPlayingCount + ' streaming'" style="font-size:.75rem"></span>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'monitoring' }" @click="navigateTo('monitoring')">
+                <i class="fas fa-chart-line nav-icon"></i><span class="nav-label">Monitoring</span>
             </div>
-
-            <label for="theme-selector" class="sr-only">Theme</label>
-            <select id="theme-selector" class="theme-select" x-model="theme" @change="localStorage.setItem('noba-theme', theme); if (userRole !== 'viewer') saveSettings()">
-                <option value="auto">System (Auto)</option>
-                <option value="default">Operator</option>
-                <option value="catppuccin">Catppuccin</option>
-                <option value="tokyo">Tokyo Night</option>
-                <option value="gruvbox">Gruvbox</option>
-                <option value="dracula">Dracula</option>
-                <option value="nord">Nord</option>
-            </select>
-
-            <select class="theme-select" x-model="selectedSite" x-show="authenticated && Object.keys(siteMap).length > 0" x-cloak style="margin-left:.4rem" title="Filter by site">
-                <option value="all">All Sites</option>
-                <template x-for="[key, name] in Object.entries(siteNames)" :key="key">
-                    <option :value="key" x-text="name"></option>
-                </template>
-            </select>
-
-            <button class="icon-btn" @click="refreshStats()" title="Refresh (r)" aria-label="Refresh stats">
-                <i class="fas fa-sync" :class="refreshing ? 'fa-spin' : ''" aria-hidden="true"></i>
-            </button>
-
-            <button class="icon-btn" @click="showMultiChartModal=true; fetchAvailableMetrics(); fetchMultiMetricChart()"
-                    title="Custom Dashboard" aria-label="Custom dashboard" x-show="authenticated" x-cloak>
-                <i class="fas fa-chart-line" aria-hidden="true"></i>
-            </button>
-
-            <button class="icon-btn" @click="showServiceMapModal=true; fetchServiceMap()" title="Service Map" x-show="authenticated" x-cloak>
-                <i class="fas fa-sitemap" aria-hidden="true"></i>
-            </button>
-
-            <button class="icon-btn" @click="showTailscaleModal=true" title="Tailscale Network" x-show="authenticated && tailscale" x-cloak>
-                <i class="fas fa-network-wired"></i>
-            </button>
-
-            <button class="icon-btn" @click="showInfluxModal=true" title="InfluxDB Query" x-show="authenticated && influxdbUrl" x-cloak>
-                <i class="fas fa-database"></i>
-            </button>
-            <button class="icon-btn" @click="showGraylogModal=true" title="Graylog Logs" x-show="authenticated && graylogUrl" x-cloak>
-                <i class="fas fa-scroll"></i>
-            </button>
-            <button class="icon-btn" @click="showIncidentModal=true; fetchIncidents()" title="Incident Timeline" x-show="authenticated" x-cloak>
-                <i class="fas fa-exclamation-triangle"></i>
-            </button>
-            <button class="icon-btn" @click="showCorrelateModal=true" title="Metrics Correlation" x-show="authenticated" x-cloak>
-                <i class="fas fa-chart-line"></i>
-            </button>
-            <button class="icon-btn" @click="showSlaModal=true; fetchSla()" title="SLA Dashboard" x-show="authenticated" x-cloak>
-                <i class="fas fa-tachometer-alt"></i>
-            </button>
-            <button class="icon-btn" @click="showSyncModal=true; fetchSyncStatus()" title="Cross-Site Status" x-show="authenticated && Object.keys(siteMap).length > 0" x-cloak>
-                <i class="fas fa-sync"></i>
-            </button>
-
-            <button class="icon-btn" @click="toggleNotifCenter()" title="Notifications" style="position:relative" aria-label="Notifications">
-                <i class="fas fa-bell" aria-hidden="true"></i>
-                <span x-show="unreadCount>0" class="notif-badge" x-text="unreadCount" x-cloak></span>
-            </button>
-
-            <button class="icon-btn" @click="glanceMode = !glanceMode" :title="glanceMode ? 'Expand cards' : 'Quick glance (g)'" x-show="authenticated" x-cloak>
-                <i class="fas" :class="glanceMode ? 'fa-th-large' : 'fa-th-list'"></i>
-            </button>
-
-            <button class="icon-btn" @click="_allCollapsed = !_allCollapsed; collapseAll(_allCollapsed)"
-                    :title="_allCollapsed ? 'Expand all' : 'Collapse all'"
-                    :aria-label="_allCollapsed ? 'Expand all cards' : 'Collapse all cards'">
-                <i class="fas" :class="_allCollapsed ? 'fa-expand-alt' : 'fa-compress-alt'" aria-hidden="true"></i>
-            </button>
-
-            <button class="icon-btn" @click="showTerminal=true" title="Terminal"
-                    x-show="userRole==='admin'" x-cloak aria-label="Open terminal">
-                <i class="fas fa-terminal" aria-hidden="true"></i>
-            </button>
-
-            <button class="icon-btn"
-                    @click="showSettings=true; settingsTab='visibility'"
-                    title="Settings (s)"
-                    aria-label="Open settings"
-                    aria-haspopup="dialog">
-                <i class="fas fa-sliders-h" aria-hidden="true"></i>
-            </button>
-
-            <div class="live-pill" :class="'conn-' + connStatus" aria-live="polite" aria-label="Connection status">
-                <div class="live-dot" :class="refreshing ? 'syncing' : connStatus" aria-hidden="true"></div>
-                <span x-text="livePillText"></span>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'infrastructure' }" @click="navigateTo('infrastructure')">
+                <i class="fas fa-server nav-icon"></i><span class="nav-label">Infrastructure</span>
             </div>
-
-            <button class="icon-btn" @click="logout()" title="Logout" aria-label="Log out"
-                    x-show="authenticated" x-cloak>
-                <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
-            </button>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'automations' }" @click="navigateTo('automations')">
+                <i class="fas fa-bolt nav-icon"></i><span class="nav-label">Automations</span>
+            </div>
+            <div class="sidebar-nav-item" :class="{ active: currentPage === 'logs' }" @click="navigateTo('logs')">
+                <i class="fas fa-scroll nav-icon"></i><span class="nav-label">Logs</span>
+            </div>
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-nav-item" :class="{ active: currentPage.startsWith('settings') }" @click="sidebarSettingsExpanded = !sidebarSettingsExpanded; if(!currentPage.startsWith('settings')) navigateTo('settings/general')">
+                <i class="fas fa-cog nav-icon"></i><span class="nav-label">Settings</span>
+                <i class="fas nav-label" :class="sidebarSettingsExpanded ? 'fa-chevron-down' : 'fa-chevron-right'" style="font-size:9px;opacity:.4;margin-left:auto"></i>
+            </div>
+            <div class="sidebar-sub-items" x-show="sidebarSettingsExpanded" x-transition>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/general' }" @click="navigateTo('settings/general')">General</span>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/visibility' }" @click="navigateTo('settings/visibility')">Visibility</span>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/integrations' }" @click="navigateTo('settings/integrations')">Integrations</span>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/backup' }" @click="navigateTo('settings/backup')">Backup</span>
+                <span class="sidebar-sub-item" x-show="userRole==='admin'" :class="{ active: currentPage === 'settings/users' }" @click="navigateTo('settings/users')">Users</span>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/alerts' }" @click="navigateTo('settings/alerts')">Alerts</span>
+                <span class="sidebar-sub-item" :class="{ active: currentPage === 'settings/shortcuts' }" @click="navigateTo('settings/shortcuts')">Shortcuts</span>
+            </div>
+        </nav>
+        <div class="sidebar-user">
+            <div class="sidebar-user-avatar" x-text="(username||'?')[0].toUpperCase()"></div>
+            <div class="sidebar-user-info">
+                <div class="sidebar-user-name" x-text="username"></div>
+                <div class="sidebar-user-role" x-text="userRole"></div>
+            </div>
+            <button class="icon-btn" style="opacity:.4" @click="logout()" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
         </div>
+        <!-- Mobile sidebar backdrop (position:fixed, inside aside to avoid grid interference) -->
+        <div class="sidebar-backdrop" :class="{ show: !sidebarCollapsed && authenticated }" @click="sidebarCollapsed = true"></div>
+    </aside>
+
+    <!-- ── Compact Header ──────────────────────────────────────────── -->
+    <header class="app-header" x-show="authenticated" x-cloak>
+        <button class="icon-btn" @click="sidebarCollapsed = !sidebarCollapsed" title="Toggle sidebar"><i class="fas fa-bars"></i></button>
+        <div class="header-search">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" placeholder="Search commands, agents, settings..." @focus="searchOpen = true" @click="searchOpen = true" readonly>
+            <span class="search-kbd">Ctrl+K</span>
+        </div>
+        <div style="flex:1"></div>
+        <button class="icon-btn" @click="refreshStats()" title="Refresh (r)"><i class="fas fa-sync-alt" :class="refreshing ? 'fa-spin' : ''"></i></button>
+        <button class="icon-btn" x-show="currentPage==='dashboard'" @click="glanceMode=!glanceMode" :title="glanceMode ? 'Expand cards' : 'Compact cards'"><i class="fas" :class="glanceMode ? 'fa-expand' : 'fa-compress'"></i></button>
+        <button class="icon-btn" x-show="currentPage==='dashboard'" @click="_allCollapsed = !_allCollapsed; collapseAll(_allCollapsed)" :title="_allCollapsed ? 'Expand all' : 'Collapse all'"><i class="fas" :class="_allCollapsed ? 'fa-expand-alt' : 'fa-compress-alt'"></i></button>
+        <button class="icon-btn" @click="showTerminal=true" title="Terminal (t)" x-show="userRole==='admin'" x-cloak><i class="fas fa-terminal"></i></button>
+        <select class="field-select" style="width:auto;font-size:11px;padding:3px 6px" x-model="theme" @change="localStorage.setItem('noba-theme', theme); if (userRole !== 'viewer') saveSettings()">
+            <option value="auto">System</option>
+            <option value="default">Operator</option>
+            <option value="catppuccin">Catppuccin</option>
+            <option value="tokyo">Tokyo</option>
+            <option value="gruvbox">Gruvbox</option>
+            <option value="dracula">Dracula</option>
+            <option value="nord">Nord</option>
+        </select>
+        <select class="field-select" x-model="selectedSite" x-show="Object.keys(siteMap).length > 0" x-cloak style="width:auto;font-size:11px;padding:3px 6px" title="Filter by site">
+            <option value="all">All Sites</option>
+            <template x-for="[key, name] in Object.entries(siteNames)" :key="key">
+                <option :value="key" x-text="name"></option>
+            </template>
+        </select>
+        <button class="icon-btn" @click="toggleNotifCenter()" title="Notifications" style="position:relative">
+            <i class="fas fa-bell"></i>
+            <span x-show="unreadCount>0" class="notif-badge" x-text="unreadCount" x-cloak></span>
+        </button>
+        <span class="live-pill" :class="'conn-' + connStatus"><span class="live-dot" :class="refreshing ? 'syncing' : connStatus"></span> <span x-text="livePillText"></span></span>
     </header>
 
-    <div class="health-bar" x-show="authenticated" x-cloak title="Service Health">
-        <div class="health-pip" :class="(services||[]).length ? ((services||[]).every(s=>s.running) ? 'ok' : 'warn') : 'off'" title="Services"></div>
-        <div class="health-pip" :class="scrutiny ? (scrutiny.failed > 0 ? 'warn' : 'ok') : 'off'" title="Disks"></div>
-        <div class="health-pip" :class="tailscale ? (tailscale?.onlineCount === tailscale?.totalCount ? 'ok' : 'warn') : 'off'" title="Tailscale"></div>
-        <div class="health-pip" :class="frigateUrl && frigate ? (frigate?.onlineCount > 0 ? 'ok' : 'warn') : 'off'" title="Cameras"></div>
-        <div class="health-pip" :class="radar && radar.length ? (radar.every(r=>r.status==='Up') ? 'ok' : 'warn') : 'off'" title="Network"></div>
-        <div class="health-pip" :class="piholeUrl && pihole ? 'ok' : piholeUrl ? 'warn' : 'off'" title="DNS"></div>
-        <div class="health-pip" :class="containers && containers.length ? 'ok' : 'off'" title="Containers"></div>
+    <!-- ── Content Area ────────────────────────────────────────────── -->
+    <main class="app-content">
+
+    <!-- Global Search -->
+    <div class="modal-overlay" x-show="searchOpen" @click.self="searchOpen=false" @keydown.escape.window="searchOpen=false" style="z-index:2000" x-cloak>
+        <div class="modal-box" style="max-width:540px;margin-top:15vh">
+            <input type="text" class="field-input" style="font-size:1rem;padding:.75rem 1rem"
+                   placeholder="Search commands, agents, settings..."
+                   x-model="searchQuery" @input.debounce.150ms="filterSearch()"
+                   x-ref="searchInput" x-init="$watch('searchOpen', v => { if(v) $nextTick(() => $refs.searchInput.focus()) })">
+            <div style="max-height:300px;overflow-y:auto;margin-top:.5rem">
+                <template x-for="result in searchResults" :key="result.id">
+                    <div class="sidebar-nav-item" @click="result.action(); searchOpen=false; searchQuery=''" style="cursor:pointer">
+                        <i class="fas nav-icon" :class="result.icon"></i>
+                        <span class="nav-label" x-text="result.label"></span>
+                        <span style="font-size:10px;opacity:.4;margin-left:auto" x-text="result.category"></span>
+                    </div>
+                </template>
+                <div x-show="searchQuery && searchResults.length === 0" style="padding:1rem;text-align:center;opacity:.4;font-size:.85rem">No results found</div>
+            </div>
+        </div>
     </div>
 
     <!-- Notification Center Panel -->
@@ -231,6 +195,19 @@
         </div>
     </div>
 
+    <!-- ── Dashboard Page ──────────────────────────────────────────── -->
+    <div x-show="currentPage === 'dashboard' && authenticated" x-cloak>
+
+    <div class="health-bar" x-show="authenticated" x-cloak title="Service Health">
+        <div class="health-pip" :class="(services||[]).length ? ((services||[]).every(s=>s.running) ? 'ok' : 'warn') : 'off'" title="Services"></div>
+        <div class="health-pip" :class="scrutiny ? (scrutiny.failed > 0 ? 'warn' : 'ok') : 'off'" title="Disks"></div>
+        <div class="health-pip" :class="tailscale ? (tailscale?.onlineCount === tailscale?.totalCount ? 'ok' : 'warn') : 'off'" title="Tailscale"></div>
+        <div class="health-pip" :class="frigateUrl && frigate ? (frigate?.onlineCount > 0 ? 'ok' : 'warn') : 'off'" title="Cameras"></div>
+        <div class="health-pip" :class="radar && radar.length ? (radar.every(r=>r.status==='Up') ? 'ok' : 'warn') : 'off'" title="Network"></div>
+        <div class="health-pip" :class="piholeUrl && pihole ? 'ok' : piholeUrl ? 'warn' : 'off'" title="DNS"></div>
+        <div class="health-pip" :class="containers && containers.length ? 'ok' : 'off'" title="Containers"></div>
+    </div>
+
     <div class="alerts" role="alert" x-show="visibleAlerts && visibleAlerts.length > 0" x-cloak style="display:flex;align-items:center;flex-wrap:wrap">
         <template x-for="a in visibleAlerts" :key="a.msg">
             <div class="alert" :class="a.level" :data-msg="a.msg" style="transition:transform .2s,opacity .2s">
@@ -245,7 +222,6 @@
         </button>
     </div>
 
-    <main>
     <div class="grid" :class="{'glance-mode': glanceMode}" id="sortable-grid" x-cloak>
 
         <div class="card" data-id="card-core" x-show="vis.core" :data-health="(cpuPercent||0) > 90 ? 'fail' : (cpuPercent||0) > 70 ? 'warn' : 'ok'" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
@@ -850,7 +826,7 @@
             <div class="card-hdr">
                 <i class="fas fa-satellite card-icon" style="color:#ab47bc" aria-hidden="true"></i>
                 <span class="card-title">Remote Agents</span>
-                <button class="icon-btn" @click="showAgentsModal=true" title="Agent details"><i class="fas fa-expand"></i></button>
+                <button class="icon-btn" @click="navigateTo('agents')" title="Agent details"><i class="fas fa-expand"></i></button>
                 <button class="collapse-btn fas fa-chevron-down" :class="collapsed.agents ? 'is-collapsed' : ''" @click="toggleCollapse('agents')" :aria-expanded="!collapsed.agents" aria-controls="body-agents" aria-label="Toggle Agents"></button>
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
@@ -2057,7 +2033,7 @@
                             ">
                                 <i class="fas fa-play" aria-hidden="true"></i> Execute Job
                             </button>
-                            <button class="btn btn-sm" @click="showSettings=true; settingsTab='backup'" title="Configure in Settings">
+                            <button class="btn btn-sm" @click="navigateTo('settings/backup')" title="Configure in Settings">
                                 <i class="fas fa-cog" aria-hidden="true"></i>
                             </button>
                         </div>
@@ -2121,7 +2097,546 @@
             </div>
         </template>
 
-    </div></main>
+    </div><!-- /sortable-grid -->
+    </div><!-- /dashboard page -->
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Agents Page ─────────────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'agents' && authenticated" x-cloak>
+        <h2 style="margin-bottom:1rem"><i class="fas fa-satellite" style="margin-right:.5rem"></i> Remote Agents</h2>
+            <template x-if="agents && agents.length > 0">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.8rem">
+                    <template x-for="a in agents" :key="a.hostname">
+                        <div class="agent-card" :class="a.online?'agent-online':'agent-offline'" style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);cursor:pointer" @click="openAgentDetail(a.hostname)">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
+                                <a href="#" class="agent-hostname-link" @click.prevent.stop="openAgentDetail(a.hostname)" style="font-weight:700" x-text="a.hostname"></a>
+                                <span class="badge" :class="a.online?'bs':'bd'" x-text="a.online?'online':'offline'" style="font-size:.55rem"></span>
+                            </div>
+                            <div style="font-size:.7rem;color:var(--text-muted)">
+                                <div class="agent-meters">
+                                    <div class="agent-meter"><span class="agent-meter-label">CPU</span><div class="prog-track" style="flex:1;height:5px"><div class="prog-fill" :class="(a.cpu_percent||0)>90?'f-danger':(a.cpu_percent||0)>70?'f-warning':'f-accent'" :style="'width:'+(a.cpu_percent||0)+'%'"></div></div><span class="agent-meter-val" x-text="(a.cpu_percent||0)+'%'"></span></div>
+                                    <div class="agent-meter"><span class="agent-meter-label">RAM</span><div class="prog-track" style="flex:1;height:5px"><div class="prog-fill" :class="(a.mem_percent||0)>90?'f-danger':(a.mem_percent||0)>70?'f-warning':'f-success'" :style="'width:'+(a.mem_percent||0)+'%'"></div></div><span class="agent-meter-val" x-text="(a.mem_percent||0)+'%'"></span></div>
+                                </div>
+                                <div x-text="a.platform + ' \u00b7 ' + (a.arch||'')"></div>
+                                <div x-text="'Uptime: ' + Math.floor((a.uptime_s||0)/3600) + 'h'"></div>
+                                <div x-show="a.online && userRole!=='viewer'" style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.3rem" @click.stop>
+                                    <button class="btn btn-xs" @click="fetchAgentHistory(a.hostname,'cpu')" title="History"><i class="fas fa-chart-area"></i></button>
+                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'ping')" title="Ping"><i class="fas fa-heartbeat"></i></button>
+                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'exec',{command:'df -h'})" title="Disk usage"><i class="fas fa-hdd"></i></button>
+                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'package_updates')" title="Check updates"><i class="fas fa-download"></i></button>
+                                </div>
+                                <div x-show="agentCmdOutput[a.hostname]" class="agent-cmd-output" x-text="agentCmdOutput[a.hostname]" @click.stop></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <!-- Command Palette -->
+            <div x-show="agents && agents.length > 0 && userRole!=='viewer'" class="cmd-palette">
+                <div class="cmd-palette-hdr"><i class="fas fa-terminal" style="margin-right:.4rem"></i>Command Palette</div>
+                <div class="cmd-palette-body">
+                    <div class="cmd-palette-topbar">
+                        <select class="field-select cmd-palette-target" x-model="cmdPaletteTarget">
+                            <option value="">Target agent...</option>
+                            <template x-for="a in (agents||[]).filter(a=>a.online)" :key="a.hostname">
+                                <option :value="a.hostname" x-text="a.hostname"></option>
+                            </template>
+                            <option value="__all__">All online agents</option>
+                        </select>
+                        <div class="cmd-cat-tabs">
+                            <template x-for="(catLabel, catKey) in CMD_CATEGORIES" :key="catKey">
+                                <button class="cmd-cat-tab"
+                                        :class="{ active: CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.cat===catKey }"
+                                        @click="cmdPaletteType = CMD_CATALOG.find(c=>c.cat===catKey)?.type || cmdPaletteType; cmdPaletteParams={}"
+                                        x-text="catLabel"></button>
+                            </template>
+                        </div>
+                    </div>
+                    <div class="cmd-type-grid">
+                        <template x-for="c in CMD_CATALOG.filter(c=>c.cat===(CMD_CATALOG.find(cc=>cc.type===cmdPaletteType)?.cat||'system'))" :key="c.type">
+                            <button class="cmd-type-btn" :class="{ active: cmdPaletteType===c.type, 'risk-high': c.risk==='high' }"
+                                    @click="cmdPaletteType=c.type; cmdPaletteParams={}"
+                                    :title="c.label + ' (' + c.risk + ' risk)'">
+                                <i class="fas" :class="c.icon"></i>
+                                <span class="cmd-type-label" x-text="c.label"></span>
+                                <span class="cmd-risk-dot" :class="'dot-'+c.risk"></span>
+                            </button>
+                        </template>
+                    </div>
+                    <div class="cmd-params-area" x-show="CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.params?.length > 0">
+                        <template x-for="p in (CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.params||[])" :key="p.key">
+                            <div class="cmd-param-field" :class="{ wide: p.wide, 'full-width': p.textarea }">
+                                <label x-text="p.label"></label>
+                                <template x-if="p.options">
+                                    <select class="field-select" x-model="cmdPaletteParams[p.key]">
+                                        <option value="">Select...</option>
+                                        <template x-for="o in p.options" :key="o">
+                                            <option :value="o" x-text="o || '(any)'"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                                <template x-if="p.textarea">
+                                    <textarea class="field-input cmd-textarea" :placeholder="p.placeholder" rows="3" x-model="cmdPaletteParams[p.key]"></textarea>
+                                </template>
+                                <template x-if="!p.options && !p.textarea">
+                                    <input class="field-input" :type="p.numeric ? 'number' : 'text'" :placeholder="p.placeholder" x-model="cmdPaletteParams[p.key]">
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="cmd-palette-footer">
+                        <div class="cmd-selected-info" x-show="cmdPaletteType">
+                            <span class="cmd-risk-pill" :class="'pill-'+(CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.risk||'low')"
+                                  x-text="(CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.risk||'').toUpperCase() + ' RISK'"></span>
+                            <span style="opacity:.5;font-size:.7rem" x-text="cmdPaletteType"></span>
+                        </div>
+                        <button class="btn btn-primary btn-sm" @click="runPaletteCommand()" :disabled="!cmdPaletteTarget || !cmdPaletteType || agentCmdSending">
+                            <i class="fas" :class="agentCmdSending ? 'fa-spinner fa-spin' : 'fa-play'"></i>
+                            <span x-text="agentCmdSending ? 'Sending...' : 'Run'"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Output Panel with tabs per host -->
+            <div x-show="Object.keys(cmdOutputTabs).length > 0" class="cmd-output-panel">
+                <div class="cmd-output-tabs">
+                    <template x-for="(output, host) in cmdOutputTabs" :key="host">
+                        <button class="btn btn-xs" :class="cmdOutputActiveTab===host ? 'btn-primary' : ''" @click="cmdOutputActiveTab=host" x-text="host"></button>
+                    </template>
+                </div>
+                <pre class="cmd-output-pre" x-text="cmdOutputTabs[cmdOutputActiveTab] || 'Waiting for result...'"></pre>
+            </div>
+
+            <!-- Command History -->
+            <div x-show="agents && agents.length > 0" style="margin-top:1rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+                    <span style="font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted)"><i class="fas fa-history" style="margin-right:.3rem"></i>Command History</span>
+                    <button class="btn btn-xs" @click="fetchCommandHistory()" :disabled="cmdHistoryLoading"><i class="fas" :class="cmdHistoryLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'"></i></button>
+                </div>
+                <div x-show="cmdHistory.length > 0" class="cmd-history-table-wrap">
+                    <table class="cmd-history-table">
+                        <thead><tr><th>Time</th><th>Host</th><th>Command</th><th>User</th><th>Status</th><th>Duration</th></tr></thead>
+                        <tbody>
+                            <template x-for="h in cmdHistory" :key="h.id">
+                                <tr>
+                                    <td x-text="new Date((h.queued_at||0)*1000).toLocaleString()" style="white-space:nowrap"></td>
+                                    <td><a href="#" class="agent-hostname-link" @click.prevent="openAgentDetail(h.hostname)" x-text="h.hostname"></a></td>
+                                    <td><span class="badge ba" x-text="h.cmd_type" style="font-size:.55rem"></span></td>
+                                    <td x-text="h.queued_by"></td>
+                                    <td><span class="badge" :class="h.status==='ok'?'bs':h.status==='error'?'bd':h.status==='queued'?'bn':'bw'" x-text="h.status"></span></td>
+                                    <td x-text="h.finished_at ? ((h.finished_at - h.queued_at) + 's') : '--'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <div x-show="cmdHistory.length === 0 && !cmdHistoryLoading" class="empty-msg">No command history yet.</div>
+            </div>
+
+            <div x-show="!agents || agents.length===0" class="empty-msg">No agents reporting. Deploy an agent to get started.</div>
+            <!-- Deploy new agent section -->
+            <div x-show="userRole==='admin'" style="margin-top:1rem;padding:.8rem;border:1px solid var(--accent);border-radius:6px;background:color-mix(in srgb, var(--accent) 5%, var(--surface))">
+                <div style="font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem"><i class="fas fa-rocket" style="margin-right:.4rem"></i>Deploy Agent</div>
+                <div x-data="{deployTab:'remote', deployHost:'', deployUser:'kevin', deployPass:'', deployPort:22, deploying:false, deployResult:'', installCmd:''}">
+                    <div style="display:flex;gap:.3rem;margin-bottom:.6rem">
+                        <button class="btn btn-xs" :class="deployTab==='remote'?'btn-primary':''" @click="deployTab='remote'">SSH Deploy</button>
+                        <button class="btn btn-xs" :class="deployTab==='script'?'btn-primary':''" @click="deployTab='script'; generateInstallCmd()">Install Script</button>
+                    </div>
+                    <div x-show="deployTab==='remote'">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">
+                            <div><label class="field-label">Host / IP</label><input class="field-input" type="text" x-model="deployHost" placeholder="100.74.147.100" style="font-size:.75rem"></div>
+                            <div><label class="field-label">SSH User</label><input class="field-input" type="text" x-model="deployUser" placeholder="kevin" style="font-size:.75rem"></div>
+                            <div><label class="field-label">SSH Password</label><input class="field-input" type="password" x-model="deployPass" style="font-size:.75rem"></div>
+                            <div><label class="field-label">Port</label><input class="field-input" type="number" x-model.number="deployPort" style="font-size:.75rem"></div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" style="margin-top:.5rem;width:100%" @click="deployAgent(deployHost, deployUser, deployPass, deployPort)" :disabled="deploying || !deployHost || !deployUser">
+                            <i class="fas" :class="deploying?'fa-spinner fa-spin':'fa-satellite-dish'"></i>
+                            <span x-text="deploying ? 'Deploying...' : 'Deploy Agent'"></span>
+                        </button>
+                    </div>
+                    <div x-show="deployTab==='script'" x-data="{scriptOS:'linux'}">
+                        <div style="display:flex;gap:.3rem;margin-bottom:.4rem">
+                            <button class="btn btn-xs" :class="scriptOS==='linux'?'btn-primary':''" @click="scriptOS='linux'; generateInstallCmd()"><i class="fab fa-linux"></i> Linux</button>
+                            <button class="btn btn-xs" :class="scriptOS==='windows'?'btn-primary':''" @click="scriptOS='windows'; generateWinCmd()"><i class="fab fa-windows"></i> Windows</button>
+                        </div>
+                        <p style="font-size:.7rem;color:var(--text-muted);margin-bottom:.4rem" x-text="scriptOS==='linux' ? 'Paste in any Linux terminal:' : 'Run in PowerShell (Admin):'"></p>
+                        <div style="position:relative">
+                            <pre style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.5rem;font-size:.65rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:100px" x-text="installCmd || 'Generating...'"></pre>
+                            <button class="btn btn-xs" style="position:absolute;top:4px;right:4px" @click="navigator.clipboard.writeText(installCmd); addToast('Copied!','success')"><i class="fas fa-copy"></i></button>
+                        </div>
+                    </div>
+                    <div x-show="deployResult" style="margin-top:.4rem;font-size:.7rem;padding:.3rem .5rem;border-radius:4px" :style="deployResult.includes('error')?'background:rgba(255,23,68,.1);color:var(--danger)':'background:rgba(0,230,118,.1);color:var(--success)'" x-text="deployResult"></div>
+                </div>
+            </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Monitoring Page ─────────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'monitoring' && authenticated" x-cloak>
+        <h2 style="margin-bottom:1rem"><i class="fas fa-chart-line" style="margin-right:.5rem"></i> Monitoring</h2>
+        <div class="tab-bar" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.3rem">
+            <button class="btn btn-xs" :class="{'btn-primary': !monitoringTab || monitoringTab==='sla'}" @click="monitoringTab='sla'; fetchSla()">SLA</button>
+            <button class="btn btn-xs" :class="{'btn-primary': monitoringTab==='incidents'}" @click="monitoringTab='incidents'; fetchIncidents()">Incidents</button>
+            <button class="btn btn-xs" :class="{'btn-primary': monitoringTab==='correlation'}" @click="monitoringTab='correlation'">Correlation</button>
+            <button class="btn btn-xs" :class="{'btn-primary': monitoringTab==='graylog'}" @click="monitoringTab='graylog'">Graylog</button>
+            <button class="btn btn-xs" :class="{'btn-primary': monitoringTab==='influxdb'}" @click="monitoringTab='influxdb'">InfluxDB</button>
+            <button class="btn btn-xs" :class="{'btn-primary': monitoringTab==='charts'}" @click="monitoringTab='charts'; fetchAvailableMetrics()">Custom Charts</button>
+        </div>
+        <!-- Tab contents will be moved here from their respective modals -->
+        <!-- SLA Tab -->
+        <div x-show="!monitoringTab || monitoringTab==='sla'">
+            <div style="display:flex;gap:.4rem;margin-bottom:1rem">
+                <button class="btn btn-xs" :class="slaPeriod===168?'btn-primary':''" @click="slaPeriod=168; fetchSla(168)">7d</button>
+                <button class="btn btn-xs" :class="slaPeriod===720?'btn-primary':''" @click="slaPeriod=720; fetchSla(720)">30d</button>
+                <button class="btn btn-xs" :class="slaPeriod===2160?'btn-primary':''" @click="slaPeriod=2160; fetchSla(2160)">90d</button>
+            </div>
+            <div x-show="slaLoading" class="empty-msg">Calculating...</div>
+            <template x-if="slaData && !slaLoading">
+                <div>
+                    <template x-for="s in slaData.sla" :key="s.name">
+                        <div style="display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-bottom:1px solid var(--border)">
+                            <div style="flex:1">
+                                <div style="font-weight:600;font-size:.85rem" x-text="s.name"></div>
+                                <div style="font-size:.65rem;color:var(--text-muted)" x-text="s.type + ' · ' + s.incidents + ' incident(s)'"></div>
+                            </div>
+                            <div style="text-align:right">
+                                <div style="font-size:1.1rem;font-weight:700;font-family:var(--font-data)" :style="s.uptime_pct >= 99.9 ? 'color:var(--success)' : s.uptime_pct >= 99 ? 'color:var(--warning)' : 'color:var(--danger)'" x-text="s.uptime_pct + '%'"></div>
+                                <div style="width:120px;height:4px;background:var(--surface-2);border-radius:2px;margin-top:3px">
+                                    <div style="height:100%;border-radius:2px;transition:width .3s" :style="'width:' + s.uptime_pct + '%;background:' + (s.uptime_pct >= 99.9 ? 'var(--success)' : s.uptime_pct >= 99 ? 'var(--warning)' : 'var(--danger)')"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="slaData.sla.length === 0" class="empty-msg">No SLA data yet. Incidents will populate this over time.</div>
+                </div>
+            </template>
+        </div>
+        <!-- Incidents Tab -->
+        <div x-show="monitoringTab==='incidents'">
+            <div x-show="incidentLoading" class="empty-msg">Loading...</div>
+            <template x-if="incidents.length > 0 && !incidentLoading">
+                <div>
+                    <template x-for="inc in incidents" :key="inc.id">
+                        <div style="display:flex;gap:.6rem;margin-bottom:.8rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0" :style="inc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':inc.severity==='warning'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'">
+                            <div style="flex:1">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <span style="font-weight:600;font-size:.85rem" x-text="inc.title"></span>
+                                    <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date(inc.timestamp*1000).toLocaleString()"></span>
+                                </div>
+                                <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem" x-text="inc.source + (inc.details ? ' \u2014 ' + inc.details : '')"></div>
+                                <div style="margin-top:.3rem" x-show="!inc.resolved_at">
+                                    <button class="btn btn-xs" @click="resolveIncident(inc.id)"><i class="fas fa-check"></i> Resolve</button>
+                                </div>
+                                <div x-show="inc.resolved_at" style="font-size:.65rem;color:var(--success);margin-top:.2rem">Resolved <span x-text="new Date(inc.resolved_at*1000).toLocaleTimeString()"></span></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <div x-show="!incidentLoading && incidents.length===0" class="empty-msg">No incidents in the last 24 hours.</div>
+        </div>
+        <!-- Correlation Tab -->
+        <div x-show="monitoringTab==='correlation'">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+                <input class="field-input" x-model="correlateMetrics" placeholder="cpu_percent,mem_percent,net_rx_bytes (comma-separated)" style="flex:1;font-size:.8rem">
+                <select class="field-select" x-model.number="correlateHours" style="width:80px">
+                    <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option><option value="72">3d</option><option value="168">7d</option>
+                </select>
+                <button class="btn btn-primary btn-sm" @click="fetchCorrelation()" :disabled="correlateLoading"><i class="fas fa-play"></i></button>
+            </div>
+            <canvas id="correlate-chart" height="300"></canvas>
+        </div>
+        <!-- Graylog Tab -->
+        <div x-show="monitoringTab==='graylog'">
+            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+                <input class="field-input" x-model="graylogQuery" placeholder="Search query..." @keyup.enter="searchGraylog()" style="flex:1;font-size:.8rem">
+                <button class="btn btn-primary btn-sm" @click="searchGraylog()" :disabled="graylogLoading"><i class="fas fa-search"></i></button>
+            </div>
+            <div x-show="graylogLoading" class="empty-msg">Searching...</div>
+            <template x-if="graylogResults && !graylogLoading">
+                <div>
+                    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.5rem" x-text="(graylogResults.total||0) + ' results'"></div>
+                    <div style="max-height:400px;overflow-y:auto">
+                        <template x-for="(msg,i) in (graylogResults.messages||[])" :key="i">
+                            <div style="padding:.4rem;border-bottom:1px solid var(--border);font-size:.75rem">
+                                <div style="display:flex;justify-content:space-between">
+                                    <span style="color:var(--accent)" x-text="msg.source"></span>
+                                    <span style="color:var(--text-muted);font-size:.65rem" x-text="msg.timestamp"></span>
+                                </div>
+                                <div style="margin-top:.2rem;word-break:break-word" x-text="msg.message"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <!-- InfluxDB Tab -->
+        <div x-show="monitoringTab==='influxdb'">
+            <textarea class="field-input" x-model="influxQuery" rows="4" placeholder="from(bucket:&quot;default&quot;) |> range(start: -1h) |> filter(fn: (r) => r._measurement == &quot;cpu&quot;)" style="font-family:monospace;font-size:.8rem;resize:vertical"></textarea>
+            <div style="margin-top:.5rem;display:flex;gap:.5rem">
+                <button class="btn btn-primary btn-sm" @click="runInfluxQuery()" :disabled="influxLoading || !influxQuery.trim()">
+                    <i class="fas fa-play"></i> <span x-text="influxLoading ? 'Running...' : 'Run Query'"></span>
+                </button>
+                <span style="font-size:.7rem;color:var(--text-muted);align-self:center" x-show="influxResults.length" x-text="influxResults.length + ' rows'"></span>
+            </div>
+            <div style="margin-top:.8rem"><canvas id="influx-chart" height="200"></canvas></div>
+            <div x-show="influxResults.length > 0" style="margin-top:.5rem;max-height:200px;overflow:auto;font-size:.7rem">
+                <table style="width:100%;border-collapse:collapse">
+                    <thead><tr style="border-bottom:1px solid var(--border)">
+                        <template x-for="key in Object.keys(influxResults[0]||{})" :key="key"><th style="padding:.2rem .4rem;text-align:left" x-text="key"></th></template>
+                    </tr></thead>
+                    <tbody>
+                        <template x-for="(row,i) in influxResults.slice(0,50)" :key="i">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <template x-for="key in Object.keys(influxResults[0]||{})" :key="key"><td style="padding:.2rem .4rem" x-text="row[key]"></td></template>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <!-- Custom Charts Tab -->
+        <div x-show="monitoringTab==='charts'">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem">
+                <template x-for="m in multiMetrics" :key="m">
+                    <span class="badge bs" style="cursor:pointer" @click="removeMultiMetric(m)">
+                        <span x-text="m"></span> <i class="fas fa-times" style="margin-left:4px;font-size:.6rem"></i>
+                    </span>
+                </template>
+                <select style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.8rem"
+                        @change="addMultiMetric($event.target.value); $event.target.value=''">
+                    <option value="">+ Add metric</option>
+                    <template x-for="m in availableMetrics.filter(x => x.type==='history' || x.type==='number')" :key="m.name">
+                        <option :value="m.name" x-text="m.name"></option>
+                    </template>
+                </select>
+                <select x-model.number="historyRange" @change="fetchMultiMetricChart()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px">
+                    <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option>
+                    <option value="168">7d</option><option value="720">30d</option>
+                </select>
+                <button class="btn-sm" @click="fetchMultiMetricChart()"><i class="fas fa-sync"></i> Refresh</button>
+            </div>
+            <div style="position:relative;height:400px">
+                <canvas id="multi-chart-canvas" style="width:100%;height:100%"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Infrastructure Page ─────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'infrastructure' && authenticated" x-cloak>
+        <h2 style="margin-bottom:1rem"><i class="fas fa-server" style="margin-right:.5rem"></i> Infrastructure</h2>
+        <div class="tab-bar" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.3rem">
+            <button class="btn btn-xs" :class="{'btn-primary': !infrastructureTab || infrastructureTab==='servicemap'}" @click="infrastructureTab='servicemap'; fetchServiceMap()">Service Map</button>
+            <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='tailscale'}" @click="infrastructureTab='tailscale'">Tailscale</button>
+            <button class="btn btn-xs" :class="{'btn-primary': infrastructureTab==='sync'}" @click="infrastructureTab='sync'; fetchSyncStatus()">Cross-Site Sync</button>
+        </div>
+        <!-- Tab contents will be moved here -->
+        <!-- Service Map Tab -->
+        <div x-show="!infrastructureTab || infrastructureTab==='servicemap'">
+            <template x-if="serviceMap">
+                <div>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center">
+                        <template x-for="node in serviceMap.nodes" :key="node.id">
+                            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:100px"
+                                 :style="node.id==='noba' ? 'border-color:var(--accent);box-shadow:0 0 12px var(--accent-dim)' : ''">
+                                <div style="font-weight:600;font-size:.85rem" x-text="node.label"></div>
+                                <span class="badge" :class="(node.status==='online'||node.status==='active')?'bs':node.status==='configured'?'bn':node.status==='inactive'?'bw':'bd'" x-text="node.status" style="font-size:.6rem;margin-top:4px"></span>
+                                <div style="font-size:.6rem;color:var(--text-dim);margin-top:2px" x-text="node.type"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            <div x-show="!serviceMap" class="empty-msg">No service map data. Configure integrations to populate.</div>
+        </div>
+        <!-- Tailscale Tab -->
+        <div x-show="infrastructureTab==='tailscale'">
+            <template x-if="tailscale">
+                <div>
+                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale?.tailnet"></span></div>
+                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">This Node</span><span class="row-val" x-text="(tailscale?.self?.hostname||'') + ' (' + (tailscale?.self?.ip||'') + ')'"></span></div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.6rem">
+                        <template x-for="p in (tailscale?.peers||[]).sort((a,b)=>b.online-a.online)" :key="p.hostname + '-' + (p.ip||'')">
+                            <div style="padding:.6rem;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+                                    <span style="font-weight:600;font-size:.85rem" x-text="p.hostname"></span>
+                                    <span :class="p.online?'dot-up':'dot-down'" style="font-size:.5rem">&#9679;</span>
+                                </div>
+                                <div style="font-size:.7rem;color:var(--text-muted)">
+                                    <div x-text="p.ip"></div>
+                                    <div x-text="p.os"></div>
+                                    <div x-show="p.online && p.curAddr" x-text="(p.direct?'Direct':'Relay') + ': ' + p.curAddr"></div>
+                                    <div x-show="p.subnets && p.subnets.length" x-text="'Routes: ' + (p.subnets||[]).join(', ')"></div>
+                                    <div x-show="!p.online && p.lastSeen" x-text="'Last seen: ' + new Date(p.lastSeen).toLocaleDateString()"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            <template x-if="!tailscale"><div class="empty-msg">Tailscale not available</div></template>
+        </div>
+        <!-- Cross-Site Sync Tab -->
+        <div x-show="infrastructureTab==='sync'">
+            <div x-show="syncLoading" class="empty-msg">Loading...</div>
+            <template x-if="syncStatus && !syncLoading">
+                <div>
+                    <template x-if="syncStatus.services && syncStatus.services.length">
+                        <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+                            <thead><tr style="border-bottom:1px solid var(--border)"><th style="padding:.4rem;text-align:left">Service</th><th style="padding:.4rem">Sites</th><th style="padding:.4rem">Status</th></tr></thead>
+                            <tbody>
+                                <template x-for="s in syncStatus.services" :key="s.key">
+                                    <tr style="border-bottom:1px solid var(--border)">
+                                        <td style="padding:.4rem" x-text="s.key"></td>
+                                        <td style="padding:.4rem;font-size:.7rem" x-text="Object.entries(s.sites||{}).map(([k,v])=>k).join(', ')"></td>
+                                        <td style="padding:.4rem"><span class="badge" :class="s.online?'bs':'bd'" x-text="s.online?'online':'offline'"></span></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </template>
+                    <div x-show="syncStatus.message" class="empty-msg" x-text="syncStatus.message"></div>
+                </div>
+            </template>
+            <div x-show="!syncStatus && !syncLoading" class="empty-msg">No cross-site data available. Configure multiple sites first.</div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Automations Page ────────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'automations' && authenticated" x-cloak>
+        <h2 style="margin-bottom:1rem"><i class="fas fa-bolt" style="margin-right:.5rem"></i> Automations</h2>
+        <div style="display:flex;gap:.5rem;margin-bottom:1rem" x-show="userRole!=='viewer'">
+            <button class="btn btn-sm btn-primary" @click="openAutoCreate()"><i class="fas fa-plus"></i> New Automation</button>
+            <button class="btn btn-sm" @click="fetchAutoList()"><i class="fas fa-sync-alt" :class="autoListLoading?'fa-spin':''"></i> Refresh</button>
+        </div>
+        <div x-show="autoListLoading" class="empty-msg">Loading...</div>
+        <div x-show="!autoListLoading && autoList.length === 0" class="empty-msg">No automations defined yet.</div>
+        <div x-show="!autoListLoading && autoList.length > 0" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.8rem">
+            <template x-for="a in autoList" :key="a.id">
+                <div style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+                        <span style="font-weight:600;font-size:.85rem" x-text="a.name"></span>
+                        <div style="display:flex;gap:.3rem;align-items:center">
+                            <span class="badge" :class="a.enabled?'bs':'bw'" x-text="a.enabled?'on':'off'" style="font-size:.55rem"></span>
+                            <span class="badge bn" x-text="a.type" style="font-size:.55rem"></span>
+                        </div>
+                    </div>
+                    <div style="font-size:.7rem;color:var(--text-muted)">
+                        <div x-show="a.schedule" x-text="'Schedule: ' + a.schedule"></div>
+                        <div x-show="a.last_run" x-text="'Last run: ' + new Date(a.last_run*1000).toLocaleString()"></div>
+                    </div>
+                    <div style="margin-top:.5rem;display:flex;gap:.3rem" x-show="userRole!=='viewer'">
+                        <button class="btn btn-xs" @click="runAutomation(a.id)" :disabled="!a.enabled" title="Run now"><i class="fas fa-play"></i></button>
+                        <button class="btn btn-xs" @click="openAutoEdit(a)" title="Edit"><i class="fas fa-pen"></i></button>
+                        <button class="btn btn-xs btn-danger" @click="deleteAutomation(a.id)" title="Delete"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Logs Page ───────────────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <div x-show="currentPage === 'logs' && authenticated" x-cloak>
+        <h2 style="margin-bottom:1rem"><i class="fas fa-scroll" style="margin-right:.5rem"></i> Logs</h2>
+        <div class="tab-bar" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.3rem">
+            <button class="btn btn-xs" :class="{'btn-primary': !logsTab || logsTab==='history'}" @click="logsTab='history'; fetchCommandHistory()">Command History</button>
+            <button class="btn btn-xs" :class="{'btn-primary': logsTab==='audit'}" @click="logsTab='audit'; fetchAuditLog()">Audit Log</button>
+            <button class="btn btn-xs" :class="{'btn-primary': logsTab==='journal'}" @click="logsTab='journal'">Journal</button>
+        </div>
+        <!-- Tab contents placeholder -->
+        <!-- Command History Tab -->
+        <div x-show="!logsTab || logsTab==='history'">
+            <div x-show="cmdHistory.length > 0" class="cmd-history-table-wrap">
+                <table class="cmd-history-table">
+                    <thead><tr><th>Time</th><th>Host</th><th>Command</th><th>User</th><th>Status</th><th>Duration</th></tr></thead>
+                    <tbody>
+                        <template x-for="h in cmdHistory" :key="h.id">
+                            <tr>
+                                <td x-text="new Date((h.queued_at||0)*1000).toLocaleString()" style="white-space:nowrap"></td>
+                                <td><a href="#" class="agent-hostname-link" @click.prevent="openAgentDetail(h.hostname)" x-text="h.hostname"></a></td>
+                                <td><span class="badge ba" x-text="h.cmd_type" style="font-size:.55rem"></span></td>
+                                <td x-text="h.queued_by"></td>
+                                <td><span class="badge" :class="h.status==='ok'?'bs':h.status==='error'?'bd':h.status==='queued'?'bn':'bw'" x-text="h.status"></span></td>
+                                <td x-text="h.finished_at ? ((h.finished_at - h.queued_at) + 's') : '--'"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            <div x-show="cmdHistory.length === 0 && !cmdHistoryLoading" class="empty-msg">No command history yet.</div>
+            <button class="btn btn-xs" style="margin-top:.5rem" @click="fetchCommandHistory()" :disabled="cmdHistoryLoading"><i class="fas" :class="cmdHistoryLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'"></i> Refresh</button>
+        </div>
+        <!-- Audit Log Tab -->
+        <div x-show="logsTab==='audit'">
+            <div x-show="auditLog && auditLog.length > 0" style="max-height:600px;overflow-y:auto">
+                <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+                    <thead><tr style="border-bottom:1px solid var(--border)"><th style="padding:.4rem;text-align:left">Time</th><th style="padding:.4rem">User</th><th style="padding:.4rem">Action</th><th style="padding:.4rem">Detail</th></tr></thead>
+                    <tbody>
+                        <template x-for="e in auditLog" :key="e.id || e.timestamp">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:.4rem;white-space:nowrap" x-text="new Date(e.timestamp*1000).toLocaleString()"></td>
+                                <td style="padding:.4rem" x-text="e.username"></td>
+                                <td style="padding:.4rem"><span class="badge ba" x-text="e.action" style="font-size:.55rem"></span></td>
+                                <td style="padding:.4rem;font-size:.7rem;max-width:300px;overflow:hidden;text-overflow:ellipsis" x-text="e.detail"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            <div x-show="!auditLog || auditLog.length === 0" class="empty-msg">No audit log entries.</div>
+            <button class="btn btn-xs" style="margin-top:.5rem" @click="fetchAuditLog()"><i class="fas fa-sync-alt"></i> Refresh</button>
+        </div>
+        <!-- Journal Tab -->
+        <div x-show="logsTab==='journal'">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;font-size:.8rem">
+                <select x-model="journalUnit" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                    <option value="">All units</option>
+                    <template x-for="u in journalUnits" :key="u.name"><option :value="u.name" x-text="u.name"></option></template>
+                </select>
+                <select x-model="journalPriority" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                    <option value="">All priorities</option>
+                    <option value="0">Emergency</option><option value="1">Alert</option><option value="2">Critical</option>
+                    <option value="3">Error</option><option value="4">Warning</option><option value="5">Notice</option>
+                    <option value="6">Info</option><option value="7">Debug</option>
+                </select>
+                <input type="text" x-model="journalGrep" placeholder="grep..." style="width:120px;padding:3px 6px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:4px">
+                <select x-model.number="journalLines" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
+                    <option value="50">50 lines</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
+                </select>
+                <button class="btn-sm" @click="fetchJournal()"><i class="fas fa-search"></i> Query</button>
+            </div>
+            <pre class="log-pre" style="max-height:500px;overflow:auto;margin:0;padding:12px;font-size:.75rem" x-text="journalOutput"></pre>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Settings Sub-Pages ──────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- ── Settings Pages (rendered inline, mapped from currentPage to settingsTab) ── -->
+    <div x-show="currentPage.startsWith('settings/') && authenticated" x-cloak
+         x-effect="if(currentPage==='settings/general') settingsTab='data';
+                    else if(currentPage==='settings/visibility') settingsTab='visibility';
+                    else if(currentPage==='settings/integrations') settingsTab='integrations';
+                    else if(currentPage==='settings/backup') { settingsTab='backup'; fetchCloudRemotes(); fetchBackupStatus(); }
+                    else if(currentPage==='settings/users') { settingsTab='users'; fetchUsers(); }
+                    else if(currentPage==='settings/alerts') settingsTab='alerts';
+                    else if(currentPage==='settings/shortcuts') settingsTab='shortcuts';">
+        <h2 style="margin-bottom:1rem">
+            <i class="fas" :class="currentPage==='settings/general'?'fa-database':currentPage==='settings/visibility'?'fa-eye':currentPage==='settings/integrations'?'fa-plug':currentPage==='settings/backup'?'fa-archive':currentPage==='settings/users'?'fa-users':currentPage==='settings/alerts'?'fa-bell':'fa-keyboard'" style="margin-right:.5rem"></i>
+            Settings &mdash; <span x-text="currentPage.split('/')[1]?.charAt(0).toUpperCase() + currentPage.split('/')[1]?.slice(1)"></span>
+        </h2>
+        <!-- Settings content is rendered from the existing settingsTab blocks below -->
+    </div>
 
 <!-- Terminal Modal -->
 <div class="modal-overlay" x-show="showTerminal" x-cloak @keydown.escape.window="showTerminal=false">
@@ -2136,21 +2651,21 @@
 
 <!-- Mobile bottom nav -->
 <nav class="mobile-nav" x-show="authenticated" x-cloak>
-    <div class="mobile-nav-item" :class="!showSettings && !showAutoModal ? 'active' : ''" @click="showSettings=false">
-        <i class="fas fa-tachometer-alt"></i><span>Dashboard</span>
-    </div>
-    <div class="mobile-nav-item" @click="showSettings=true; settingsTab='automations'">
-        <i class="fas fa-robot"></i><span>Automations</span>
-    </div>
-    <div class="mobile-nav-item" @click="toggleNotifCenter()">
-        <i class="fas fa-bell"></i><span>Alerts</span>
-    </div>
-    <div class="mobile-nav-item" @click="showSettings=true; settingsTab='visibility'">
+    <a class="mobile-nav-item" :class="{ active: currentPage === 'dashboard' }" @click="navigateTo('dashboard')">
+        <i class="fas fa-th-large"></i><span>Dashboard</span>
+    </a>
+    <a class="mobile-nav-item" :class="{ active: currentPage === 'agents' }" @click="navigateTo('agents')">
+        <i class="fas fa-robot"></i><span>Agents</span>
+    </a>
+    <a class="mobile-nav-item" :class="{ active: currentPage === 'monitoring' || currentPage === 'infrastructure' }" @click="navigateTo('monitoring')">
+        <i class="fas fa-chart-line"></i><span>Monitor</span>
+    </a>
+    <a class="mobile-nav-item" :class="{ active: currentPage.startsWith('settings') }" @click="navigateTo('settings/general')">
         <i class="fas fa-cog"></i><span>Settings</span>
-    </div>
+    </a>
 </nav>
 
-</div><div x-show="showHistoryModal"
+<div x-show="showHistoryModal"
      class="modal-overlay"
      style="display:none"
      @click.self="showHistoryModal=false"
@@ -2653,42 +3168,8 @@
     </div>
 </div>
 
-<div x-show="showSettings"
-     class="modal-overlay"
-     style="display:none"
-     @click.self="showSettings=false"
-     role="dialog"
-     aria-modal="true"
-     aria-labelledby="settings-title"
-     x-cloak>
-    <div class="modal-box">
-        <div class="modal-title" id="settings-title">
-            <i class="fas fa-sliders-h" style="color:var(--accent)" aria-hidden="true"></i> Settings
-        </div>
-
-        <div class="settings-tabs" role="tablist">
-            <button class="stab" role="tab" :aria-selected="settingsTab==='visibility'" :class="settingsTab==='visibility'?'active':''" @click="settingsTab='visibility'">
-                <i class="fas fa-eye" aria-hidden="true"></i> Visibility
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='data'" :class="settingsTab==='data'?'active':''" @click="settingsTab='data'">
-                <i class="fas fa-database" aria-hidden="true"></i> General
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='backup'" :class="settingsTab==='backup'?'active':''" @click="settingsTab='backup'; fetchCloudRemotes(); fetchBackupStatus()">
-                <i class="fas fa-archive" aria-hidden="true"></i> Backup
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='integrations'" :class="settingsTab==='integrations'?'active':''" @click="settingsTab='integrations'">
-                <i class="fas fa-plug" aria-hidden="true"></i> Integrations
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='users'" :class="settingsTab==='users'?'active':''" @click="settingsTab='users'; fetchUsers()" x-show="userRole==='admin'">
-                <i class="fas fa-users" aria-hidden="true"></i> Users
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='alerts'" :class="settingsTab==='alerts'?'active':''" @click="settingsTab='alerts'" x-show="userRole==='admin'||userRole==='operator'">
-                <i class="fas fa-bell" aria-hidden="true"></i> Alerts
-            </button>
-            <button class="stab" role="tab" :aria-selected="settingsTab==='shortcuts'" :class="settingsTab==='shortcuts'?'active':''" @click="settingsTab='shortcuts'">
-                <i class="fas fa-keyboard" aria-hidden="true"></i> Shortcuts
-            </button>
-        </div>
+<!-- Settings content panels (shown inline when currentPage starts with settings/) -->
+<div x-show="currentPage.startsWith('settings/') && authenticated" x-cloak>
 
         <div x-show="settingsTab==='visibility'" role="tabpanel">
             <div class="s-section">
@@ -4010,19 +4491,20 @@
             </div>
         </div>
 
-        <div class="settings-footer">
+        <div class="settings-footer" style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
             <button class="btn btn-sm" @click="showChangelogModal=true; fetchConfigChangelog()" style="margin-right:auto"><i class="fas fa-history"></i> History</button>
-            <button class="btn btn-sm" @click="showSettings=false">Cancel</button>
             <button class="btn btn-sm btn-primary" @click="applySettings()" :disabled="userRole!=='admin'" :title="userRole!=='admin'?'Admin role required':'Save and apply settings'">
                 <i class="fas fa-check" aria-hidden="true"></i> Save &amp; Apply
             </button>
         </div>
-    </div>
 </div>
+
+    </main><!-- /app-content -->
+</div><!-- /app-layout -->
 
 
 <div x-show="!authenticated"
-     class="modal-overlay"
+     class="modal-overlay login-fullscreen"
      style="display:none"
      role="dialog"
      aria-modal="true"
@@ -4558,39 +5040,7 @@
     </div>
 </div>
 
-<!-- Multi-Metric Dashboard Modal -->
-<div class="modal-overlay" x-show="showMultiChartModal" x-cloak @keydown.escape.window="showMultiChartModal=false">
-    <div class="modal-box" style="max-width:1000px;height:85vh;display:flex;flex-direction:column">
-        <div class="modal-title">
-            <i class="fas fa-chart-line"></i> Custom Dashboard
-            <button class="modal-close" @click="showMultiChartModal=false">&times;</button>
-        </div>
-        <div style="padding:8px 16px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)">
-            <template x-for="m in multiMetrics" :key="m">
-                <span class="badge bs" style="cursor:pointer" @click="removeMultiMetric(m)">
-                    <span x-text="m"></span> <i class="fas fa-times" style="margin-left:4px;font-size:.6rem"></i>
-                </span>
-            </template>
-            <select style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:.8rem"
-                    @change="addMultiMetric($event.target.value); $event.target.value=''">
-                <option value="">+ Add metric</option>
-                <template x-for="m in availableMetrics.filter(x => x.type==='history' || x.type==='number')" :key="m.name">
-                    <option :value="m.name" x-text="m.name"></option>
-                </template>
-            </select>
-        </div>
-        <div style="flex:1;padding:16px;position:relative">
-            <canvas id="multi-chart-canvas" style="width:100%;height:100%"></canvas>
-        </div>
-        <div class="modal-footer" style="display:flex;gap:8px">
-            <select x-model.number="historyRange" @change="fetchMultiMetricChart()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px">
-                <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option>
-                <option value="168">7d</option><option value="720">30d</option>
-            </select>
-            <button class="btn-sm" @click="fetchMultiMetricChart()"><i class="fas fa-sync"></i> Refresh</button>
-        </div>
-    </div>
-</div>
+<!-- Multi-chart modal removed — content moved to monitoring page -->
 
 <!-- Alert Rule Builder Modal -->
 <div class="modal-overlay" x-show="showAlertRuleModal" x-cloak @keydown.escape.window="showAlertRuleModal=false">
@@ -4826,59 +5276,9 @@
     </div>
 </div>
 
-<!-- Service Map Modal -->
-<div class="modal-overlay" x-show="showServiceMapModal" x-cloak @keydown.escape.window="showServiceMapModal=false">
-    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title">
-            <i class="fas fa-sitemap"></i> Service Map
-            <button class="modal-close" @click="showServiceMapModal=false">&times;</button>
-        </div>
-        <div style="padding:16px">
-            <template x-if="serviceMap">
-                <div>
-                    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center">
-                        <template x-for="node in serviceMap.nodes" :key="node.id">
-                            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:100px"
-                                 :style="node.id==='noba' ? 'border-color:var(--accent);box-shadow:0 0 12px var(--accent-dim)' : ''">
-                                <div style="font-weight:600;font-size:.85rem" x-text="node.label"></div>
-                                <span class="badge" :class="(node.status==='online'||node.status==='active')?'bs':node.status==='configured'?'bn':node.status==='inactive'?'bw':'bd'" x-text="node.status" style="font-size:.6rem;margin-top:4px"></span>
-                                <div style="font-size:.6rem;color:var(--text-dim);margin-top:2px" x-text="node.type"></div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </template>
-        </div>
-    </div>
-</div>
+<!-- Service Map modal removed — content moved to infrastructure page -->
 
-<!-- Journal Viewer Modal -->
-<div class="modal-overlay" x-show="showJournalModal" x-cloak @keydown.escape.window="showJournalModal=false">
-    <div class="modal-box" style="max-width:1000px;height:85vh;display:flex;flex-direction:column">
-        <div class="modal-title">
-            <i class="fas fa-file-alt"></i> System Journal
-            <button class="modal-close" @click="showJournalModal=false">&times;</button>
-        </div>
-        <div style="padding:8px 16px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border);font-size:.8rem">
-            <select x-model="journalUnit" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
-                <option value="">All units</option>
-                <template x-for="u in journalUnits" :key="u.name"><option :value="u.name" x-text="u.name"></option></template>
-            </select>
-            <select x-model="journalPriority" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
-                <option value="">All priorities</option>
-                <option value="0">Emergency</option><option value="1">Alert</option><option value="2">Critical</option>
-                <option value="3">Error</option><option value="4">Warning</option><option value="5">Notice</option>
-                <option value="6">Info</option><option value="7">Debug</option>
-            </select>
-            <input type="text" x-model="journalGrep" placeholder="grep..." style="width:120px;padding:3px 6px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:4px">
-            <select x-model.number="journalLines" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px">
-                <option value="50">50 lines</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
-            </select>
-            <button class="btn-sm" @click="fetchJournal()"><i class="fas fa-search"></i> Query</button>
-        </div>
-        <pre class="log-pre" style="flex:1;overflow:auto;margin:0;padding:12px;font-size:.75rem" x-text="journalOutput"></pre>
-    </div>
-</div>
+<!-- Journal modal removed — content moved to logs page -->
 
 <!-- System Info Modal -->
 <div class="modal-overlay" x-show="showSystemInfoModal" x-cloak @keydown.escape.window="showSystemInfoModal=false">
@@ -4906,38 +5306,7 @@
     </div>
 </div>
 
-<!-- ── Tailscale Network Modal ──────────────────────────────────── -->
-<div class="modal-overlay" x-show="showTailscaleModal" x-cloak @keydown.escape.window="showTailscaleModal=false" @click.self="showTailscaleModal=false">
-    <div class="modal-box" style="max-width:800px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-network-wired"></i> Tailscale Network <span x-show="tailscale" style="font-size:.8rem;opacity:.7" x-text="'(' + (tailscale?.onlineCount||0) + '/' + (tailscale?.totalCount||0) + ' online)'"></span><button class="modal-close" @click="showTailscaleModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <template x-if="tailscale">
-                <div>
-                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale?.tailnet"></span></div>
-                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">This Node</span><span class="row-val" x-text="(tailscale?.self?.hostname||'') + ' (' + (tailscale?.self?.ip||'') + ')'"></span></div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.6rem">
-                        <template x-for="p in (tailscale?.peers||[]).sort((a,b)=>b.online-a.online)" :key="p.hostname + '-' + (p.ip||'')">
-                            <div style="padding:.6rem;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
-                                    <span style="font-weight:600;font-size:.85rem" x-text="p.hostname"></span>
-                                    <span :class="p.online?'dot-up':'dot-down'" style="font-size:.5rem">●</span>
-                                </div>
-                                <div style="font-size:.7rem;color:var(--text-muted)">
-                                    <div x-text="p.ip"></div>
-                                    <div x-text="p.os"></div>
-                                    <div x-show="p.online && p.curAddr" x-text="(p.direct?'Direct':'Relay') + ': ' + p.curAddr"></div>
-                                    <div x-show="p.subnets && p.subnets.length" x-text="'Routes: ' + (p.subnets||[]).join(', ')"></div>
-                                    <div x-show="!p.online && p.lastSeen" x-text="'Last seen: ' + new Date(p.lastSeen).toLocaleDateString()"></div>
-                                </div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </template>
-            <template x-if="!tailscale"><div class="empty-msg">Tailscale not available</div></template>
-        </div>
-    </div>
-</div>
+<!-- Tailscale modal removed — content moved to infrastructure page -->
 
 <!-- ── Disk Intelligence Modal ──────────────────────────────────── -->
 <div class="modal-overlay" x-show="showDiskIntelModal" x-cloak @keydown.escape.window="showDiskIntelModal=false" @click.self="showDiskIntelModal=false">
@@ -4972,36 +5341,7 @@
     </div>
 </div>
 
-<!-- ── InfluxDB Query Modal ─────────────────────────────────────── -->
-<div class="modal-overlay" x-show="showInfluxModal" x-cloak @keydown.escape.window="showInfluxModal=false" @click.self="showInfluxModal=false">
-    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-database"></i> InfluxDB Query<button class="modal-close" @click="showInfluxModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <textarea class="field-input" x-model="influxQuery" rows="4" placeholder="from(bucket:&quot;default&quot;) |> range(start: -1h) |> filter(fn: (r) => r._measurement == &quot;cpu&quot;)" style="font-family:monospace;font-size:.8rem;resize:vertical"></textarea>
-            <div style="margin-top:.5rem;display:flex;gap:.5rem">
-                <button class="btn btn-primary btn-sm" @click="runInfluxQuery()" :disabled="influxLoading || !influxQuery.trim()">
-                    <i class="fas fa-play"></i> <span x-text="influxLoading ? 'Running...' : 'Run Query'"></span>
-                </button>
-                <span style="font-size:.7rem;color:var(--text-muted);align-self:center" x-show="influxResults.length" x-text="influxResults.length + ' rows'"></span>
-            </div>
-            <div style="margin-top:.8rem"><canvas id="influx-chart" height="200"></canvas></div>
-            <div x-show="influxResults.length > 0" style="margin-top:.5rem;max-height:200px;overflow:auto;font-size:.7rem">
-                <table style="width:100%;border-collapse:collapse">
-                    <thead><tr style="border-bottom:1px solid var(--border)">
-                        <template x-for="key in Object.keys(influxResults[0]||{})" :key="key"><th style="padding:.2rem .4rem;text-align:left" x-text="key"></th></template>
-                    </tr></thead>
-                    <tbody>
-                        <template x-for="(row,i) in influxResults.slice(0,50)" :key="i">
-                            <tr style="border-bottom:1px solid var(--border)">
-                                <template x-for="key in Object.keys(influxResults[0]||{})" :key="key"><td style="padding:.2rem .4rem" x-text="row[key]"></td></template>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- InfluxDB modal removed — content moved to monitoring page -->
 
 <!-- ── Config Changelog Modal ───────────────────────────────────── -->
 <div class="modal-overlay" x-show="showChangelogModal" x-cloak @keydown.escape.window="showChangelogModal=false" @click.self="showChangelogModal=false">
@@ -5033,217 +5373,9 @@
     </div>
 </div>
 
-<!-- ── Sync Status Modal ────────────────────────────────────────── -->
-<div class="modal-overlay" x-show="showSyncModal" x-cloak @keydown.escape.window="showSyncModal=false" @click.self="showSyncModal=false">
-    <div class="modal-box" style="max-width:600px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-sync"></i> Cross-Site Status<button class="modal-close" @click="showSyncModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <div x-show="syncLoading" class="empty-msg">Loading...</div>
-            <template x-if="syncStatus && !syncLoading">
-                <div>
-                    <template x-if="syncStatus.services && syncStatus.services.length">
-                        <table style="width:100%;font-size:.8rem;border-collapse:collapse">
-                            <thead><tr style="border-bottom:1px solid var(--border)"><th style="padding:.4rem;text-align:left">Service</th><th style="padding:.4rem">Sites</th><th style="padding:.4rem">Status</th></tr></thead>
-                            <tbody>
-                                <template x-for="s in syncStatus.services" :key="s.key">
-                                    <tr style="border-bottom:1px solid var(--border)">
-                                        <td style="padding:.4rem" x-text="s.key"></td>
-                                        <td style="padding:.4rem;font-size:.7rem" x-text="Object.entries(s.sites||{}).map(([k,v])=>k).join(', ')"></td>
-                                        <td style="padding:.4rem"><span class="badge" :class="s.online?'bs':'bd'" x-text="s.online?'online':'offline'"></span></td>
-                                    </tr>
-                                </template>
-                            </tbody>
-                        </table>
-                    </template>
-                    <div x-show="syncStatus.message" class="empty-msg" x-text="syncStatus.message"></div>
-                </div>
-            </template>
-        </div>
-    </div>
-</div>
+<!-- Sync modal removed — content moved to infrastructure page -->
 
-<!-- ── Agents Modal ──────────────────────────────────────────────── -->
-<div class="modal-overlay" x-show="showAgentsModal" x-cloak @keydown.escape.window="showAgentsModal=false" @click.self="showAgentsModal=false">
-    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-satellite"></i> Remote Agents<button class="modal-close" @click="showAgentsModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <template x-if="agents && agents.length > 0">
-                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.8rem">
-                    <template x-for="a in agents" :key="a.hostname">
-                        <div class="agent-card" :class="a.online?'agent-online':'agent-offline'" style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);cursor:pointer" @click="openAgentDetail(a.hostname)">
-                            <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
-                                <a href="#" class="agent-hostname-link" @click.prevent.stop="openAgentDetail(a.hostname)" style="font-weight:700" x-text="a.hostname"></a>
-                                <span class="badge" :class="a.online?'bs':'bd'" x-text="a.online?'online':'offline'" style="font-size:.55rem"></span>
-                            </div>
-                            <div style="font-size:.7rem;color:var(--text-muted)">
-                                <div class="agent-meters">
-                                    <div class="agent-meter"><span class="agent-meter-label">CPU</span><div class="prog-track" style="flex:1;height:5px"><div class="prog-fill" :class="(a.cpu_percent||0)>90?'f-danger':(a.cpu_percent||0)>70?'f-warning':'f-accent'" :style="'width:'+(a.cpu_percent||0)+'%'"></div></div><span class="agent-meter-val" x-text="(a.cpu_percent||0)+'%'"></span></div>
-                                    <div class="agent-meter"><span class="agent-meter-label">RAM</span><div class="prog-track" style="flex:1;height:5px"><div class="prog-fill" :class="(a.mem_percent||0)>90?'f-danger':(a.mem_percent||0)>70?'f-warning':'f-success'" :style="'width:'+(a.mem_percent||0)+'%'"></div></div><span class="agent-meter-val" x-text="(a.mem_percent||0)+'%'"></span></div>
-                                </div>
-                                <div x-text="a.platform + ' \u00b7 ' + (a.arch||'')"></div>
-                                <div x-text="'Uptime: ' + Math.floor((a.uptime_s||0)/3600) + 'h'"></div>
-                                <!-- Quick command buttons -->
-                                <div x-show="a.online && userRole!=='viewer'" style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.3rem" @click.stop>
-                                    <button class="btn btn-xs" @click="fetchAgentHistory(a.hostname,'cpu')" title="History"><i class="fas fa-chart-area"></i></button>
-                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'ping')" title="Ping"><i class="fas fa-heartbeat"></i></button>
-                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'exec',{command:'df -h'})" title="Disk usage"><i class="fas fa-hdd"></i></button>
-                                    <button class="btn btn-xs" @click="runPaletteCommandDirect(a.hostname,'package_updates')" title="Check updates"><i class="fas fa-download"></i></button>
-                                </div>
-                                <!-- Command result display -->
-                                <div x-show="agentCmdOutput[a.hostname]" class="agent-cmd-output" x-text="agentCmdOutput[a.hostname]" @click.stop></div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </template>
-
-            <!-- Command Palette -->
-            <div x-show="agents && agents.length > 0 && userRole!=='viewer'" class="cmd-palette">
-                <div class="cmd-palette-hdr"><i class="fas fa-terminal" style="margin-right:.4rem"></i>Command Palette</div>
-                <div class="cmd-palette-body">
-                    <!-- Row 1: Target + Category tabs -->
-                    <div class="cmd-palette-topbar">
-                        <select class="field-select cmd-palette-target" x-model="cmdPaletteTarget">
-                            <option value="">Target agent...</option>
-                            <template x-for="a in (agents||[]).filter(a=>a.online)" :key="a.hostname">
-                                <option :value="a.hostname" x-text="a.hostname"></option>
-                            </template>
-                            <option value="__all__">All online agents</option>
-                        </select>
-                        <div class="cmd-cat-tabs">
-                            <template x-for="(catLabel, catKey) in CMD_CATEGORIES" :key="catKey">
-                                <button class="cmd-cat-tab"
-                                        :class="{ active: CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.cat===catKey }"
-                                        @click="cmdPaletteType = CMD_CATALOG.find(c=>c.cat===catKey)?.type || cmdPaletteType; cmdPaletteParams={}"
-                                        x-text="catLabel"></button>
-                            </template>
-                        </div>
-                    </div>
-                    <!-- Row 2: Commands in active category -->
-                    <div class="cmd-type-grid">
-                        <template x-for="c in CMD_CATALOG.filter(c=>c.cat===(CMD_CATALOG.find(cc=>cc.type===cmdPaletteType)?.cat||'system'))" :key="c.type">
-                            <button class="cmd-type-btn" :class="{ active: cmdPaletteType===c.type, 'risk-high': c.risk==='high' }"
-                                    @click="cmdPaletteType=c.type; cmdPaletteParams={}"
-                                    :title="c.label + ' (' + c.risk + ' risk)'">
-                                <i class="fas" :class="c.icon"></i>
-                                <span class="cmd-type-label" x-text="c.label"></span>
-                                <span class="cmd-risk-dot" :class="'dot-'+c.risk"></span>
-                            </button>
-                        </template>
-                    </div>
-                    <!-- Row 3: Dynamic parameters (always visible when command selected) -->
-                    <div class="cmd-params-area" x-show="CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.params?.length > 0">
-                        <template x-for="p in (CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.params||[])" :key="p.key">
-                            <div class="cmd-param-field" :class="{ wide: p.wide, 'full-width': p.textarea }">
-                                <label x-text="p.label"></label>
-                                <template x-if="p.options">
-                                    <select class="field-select" x-model="cmdPaletteParams[p.key]">
-                                        <option value="">Select...</option>
-                                        <template x-for="o in p.options" :key="o">
-                                            <option :value="o" x-text="o || '(any)'"></option>
-                                        </template>
-                                    </select>
-                                </template>
-                                <template x-if="p.textarea">
-                                    <textarea class="field-input cmd-textarea" :placeholder="p.placeholder" rows="3" x-model="cmdPaletteParams[p.key]"></textarea>
-                                </template>
-                                <template x-if="!p.options && !p.textarea">
-                                    <input class="field-input" :type="p.numeric ? 'number' : 'text'" :placeholder="p.placeholder" x-model="cmdPaletteParams[p.key]">
-                                </template>
-                            </div>
-                        </template>
-                    </div>
-                    <!-- Row 4: Run button -->
-                    <div class="cmd-palette-footer">
-                        <div class="cmd-selected-info" x-show="cmdPaletteType">
-                            <span class="cmd-risk-pill" :class="'pill-'+(CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.risk||'low')"
-                                  x-text="(CMD_CATALOG.find(c=>c.type===cmdPaletteType)?.risk||'').toUpperCase() + ' RISK'"></span>
-                            <span style="opacity:.5;font-size:.7rem" x-text="cmdPaletteType"></span>
-                        </div>
-                        <button class="btn btn-primary btn-sm" @click="runPaletteCommand()" :disabled="!cmdPaletteTarget || !cmdPaletteType || agentCmdSending">
-                            <i class="fas" :class="agentCmdSending ? 'fa-spinner fa-spin' : 'fa-play'"></i>
-                            <span x-text="agentCmdSending ? 'Sending...' : 'Run'"></span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Output Panel with tabs per host -->
-            <div x-show="Object.keys(cmdOutputTabs).length > 0" class="cmd-output-panel">
-                <div class="cmd-output-tabs">
-                    <template x-for="(output, host) in cmdOutputTabs" :key="host">
-                        <button class="btn btn-xs" :class="cmdOutputActiveTab===host ? 'btn-primary' : ''" @click="cmdOutputActiveTab=host" x-text="host"></button>
-                    </template>
-                </div>
-                <pre class="cmd-output-pre" x-text="cmdOutputTabs[cmdOutputActiveTab] || 'Waiting for result...'"></pre>
-            </div>
-
-            <!-- Command History -->
-            <div x-show="agents && agents.length > 0" style="margin-top:1rem">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
-                    <span style="font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted)"><i class="fas fa-history" style="margin-right:.3rem"></i>Command History</span>
-                    <button class="btn btn-xs" @click="fetchCommandHistory()" :disabled="cmdHistoryLoading"><i class="fas" :class="cmdHistoryLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'"></i></button>
-                </div>
-                <div x-show="cmdHistory.length > 0" class="cmd-history-table-wrap">
-                    <table class="cmd-history-table">
-                        <thead><tr><th>Time</th><th>Host</th><th>Command</th><th>User</th><th>Status</th><th>Duration</th></tr></thead>
-                        <tbody>
-                            <template x-for="h in cmdHistory" :key="h.id">
-                                <tr>
-                                    <td x-text="new Date((h.queued_at||0)*1000).toLocaleString()" style="white-space:nowrap"></td>
-                                    <td><a href="#" class="agent-hostname-link" @click.prevent="openAgentDetail(h.hostname)" x-text="h.hostname"></a></td>
-                                    <td><span class="badge ba" x-text="h.cmd_type" style="font-size:.55rem"></span></td>
-                                    <td x-text="h.queued_by"></td>
-                                    <td><span class="badge" :class="h.status==='ok'?'bs':h.status==='error'?'bd':h.status==='queued'?'bn':'bw'" x-text="h.status"></span></td>
-                                    <td x-text="h.finished_at ? ((h.finished_at - h.queued_at) + 's') : '--'"></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </div>
-                <div x-show="cmdHistory.length === 0 && !cmdHistoryLoading" class="empty-msg">No command history yet.</div>
-            </div>
-
-            <div x-show="!agents || agents.length===0" class="empty-msg">No agents reporting. Deploy an agent to get started.</div>
-            <!-- Deploy new agent section -->
-            <div x-show="userRole==='admin'" style="margin-top:1rem;padding:.8rem;border:1px solid var(--accent);border-radius:6px;background:color-mix(in srgb, var(--accent) 5%, var(--surface))">
-                <div style="font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem"><i class="fas fa-rocket" style="margin-right:.4rem"></i>Deploy Agent</div>
-                <div x-data="{deployTab:'remote', deployHost:'', deployUser:'kevin', deployPass:'', deployPort:22, deploying:false, deployResult:'', installCmd:''}">
-                    <div style="display:flex;gap:.3rem;margin-bottom:.6rem">
-                        <button class="btn btn-xs" :class="deployTab==='remote'?'btn-primary':''" @click="deployTab='remote'">SSH Deploy</button>
-                        <button class="btn btn-xs" :class="deployTab==='script'?'btn-primary':''" @click="deployTab='script'; generateInstallCmd()">Install Script</button>
-                    </div>
-                    <!-- SSH Deploy -->
-                    <div x-show="deployTab==='remote'">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">
-                            <div><label class="field-label">Host / IP</label><input class="field-input" type="text" x-model="deployHost" placeholder="100.74.147.100" style="font-size:.75rem"></div>
-                            <div><label class="field-label">SSH User</label><input class="field-input" type="text" x-model="deployUser" placeholder="kevin" style="font-size:.75rem"></div>
-                            <div><label class="field-label">SSH Password</label><input class="field-input" type="password" x-model="deployPass" style="font-size:.75rem"></div>
-                            <div><label class="field-label">Port</label><input class="field-input" type="number" x-model.number="deployPort" style="font-size:.75rem"></div>
-                        </div>
-                        <button class="btn btn-primary btn-sm" style="margin-top:.5rem;width:100%" @click="deployAgent(deployHost, deployUser, deployPass, deployPort)" :disabled="deploying || !deployHost || !deployUser">
-                            <i class="fas" :class="deploying?'fa-spinner fa-spin':'fa-satellite-dish'"></i>
-                            <span x-text="deploying ? 'Deploying...' : 'Deploy Agent'"></span>
-                        </button>
-                    </div>
-                    <!-- Install Script -->
-                    <div x-show="deployTab==='script'" x-data="{scriptOS:'linux'}">
-                        <div style="display:flex;gap:.3rem;margin-bottom:.4rem">
-                            <button class="btn btn-xs" :class="scriptOS==='linux'?'btn-primary':''" @click="scriptOS='linux'; generateInstallCmd()"><i class="fab fa-linux"></i> Linux</button>
-                            <button class="btn btn-xs" :class="scriptOS==='windows'?'btn-primary':''" @click="scriptOS='windows'; generateWinCmd()"><i class="fab fa-windows"></i> Windows</button>
-                        </div>
-                        <p style="font-size:.7rem;color:var(--text-muted);margin-bottom:.4rem" x-text="scriptOS==='linux' ? 'Paste in any Linux terminal:' : 'Run in PowerShell (Admin):'"></p>
-                        <div style="position:relative">
-                            <pre style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.5rem;font-size:.65rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:100px" x-text="installCmd || 'Generating...'"></pre>
-                            <button class="btn btn-xs" style="position:absolute;top:4px;right:4px" @click="navigator.clipboard.writeText(installCmd); addToast('Copied!','success')"><i class="fas fa-copy"></i></button>
-                        </div>
-                    </div>
-                    <div x-show="deployResult" style="margin-top:.4rem;font-size:.7rem;padding:.3rem .5rem;border-radius:4px" :style="deployResult.includes('error')?'background:rgba(255,23,68,.1);color:var(--danger)':'background:rgba(0,230,118,.1);color:var(--success)'" x-text="deployResult"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Agents modal removed — content moved to agents page -->
 
 <!-- ── Agent Detail Modal (Phase 1d) ─────────────────────────────── -->
 <div class="modal-overlay" x-show="agentDetailHost" x-cloak @keydown.escape.window="agentDetailHost=''" @click.self="agentDetailHost=''">
@@ -5344,116 +5476,13 @@
     </div>
 </div>
 
-<!-- ── Incident Timeline Modal ──────────────────────────────────── -->
-<div class="modal-overlay" x-show="showIncidentModal" x-cloak @keydown.escape.window="showIncidentModal=false" @click.self="showIncidentModal=false">
-    <div class="modal-box" style="max-width:700px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-exclamation-triangle"></i> Incident Timeline<button class="modal-close" @click="showIncidentModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <div x-show="incidentLoading" class="empty-msg">Loading...</div>
-            <template x-if="incidents.length > 0 && !incidentLoading">
-                <div>
-                    <template x-for="inc in incidents" :key="inc.id">
-                        <div style="display:flex;gap:.6rem;margin-bottom:.8rem;padding:.5rem;border-left:3px solid;border-radius:0 4px 4px 0" :style="inc.severity==='critical'?'border-color:var(--danger);background:rgba(255,23,68,.05)':inc.severity==='warning'?'border-color:var(--warning);background:rgba(255,179,0,.05)':'border-color:var(--accent);background:rgba(0,200,255,.05)'">
-                            <div style="flex:1">
-                                <div style="display:flex;justify-content:space-between;align-items:center">
-                                    <span style="font-weight:600;font-size:.85rem" x-text="inc.title"></span>
-                                    <span style="font-size:.65rem;color:var(--text-muted)" x-text="new Date(inc.timestamp*1000).toLocaleString()"></span>
-                                </div>
-                                <div style="font-size:.7rem;color:var(--text-muted);margin-top:.2rem" x-text="inc.source + (inc.details ? ' \u2014 ' + inc.details : '')"></div>
-                                <div style="margin-top:.3rem" x-show="!inc.resolved_at">
-                                    <button class="btn btn-xs" @click="resolveIncident(inc.id)"><i class="fas fa-check"></i> Resolve</button>
-                                </div>
-                                <div x-show="inc.resolved_at" style="font-size:.65rem;color:var(--success);margin-top:.2rem">Resolved <span x-text="new Date(inc.resolved_at*1000).toLocaleTimeString()"></span></div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </template>
-            <div x-show="!incidentLoading && incidents.length===0" class="empty-msg">No incidents in the last 24 hours.</div>
-        </div>
-    </div>
-</div>
+<!-- Incident modal removed — content moved to monitoring page -->
 
-<!-- ── Metrics Correlation Modal ─────────────────────────────────── -->
-<div class="modal-overlay" x-show="showCorrelateModal" x-cloak @keydown.escape.window="showCorrelateModal=false" @click.self="showCorrelateModal=false">
-    <div class="modal-box" style="max-width:900px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-chart-line"></i> Metrics Correlation<button class="modal-close" @click="showCorrelateModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
-                <input class="field-input" x-model="correlateMetrics" placeholder="cpu_percent,mem_percent,net_rx_bytes (comma-separated)" style="flex:1;font-size:.8rem">
-                <select class="field-select" x-model.number="correlateHours" style="width:80px">
-                    <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option><option value="72">3d</option><option value="168">7d</option>
-                </select>
-                <button class="btn btn-primary btn-sm" @click="fetchCorrelation()" :disabled="correlateLoading"><i class="fas fa-play"></i></button>
-            </div>
-            <canvas id="correlate-chart" height="300"></canvas>
-        </div>
-    </div>
-</div>
+<!-- Correlation modal removed — content moved to monitoring page -->
 
-<!-- ── Graylog Modal ─────────────────────────────────────────────── -->
-<div class="modal-overlay" x-show="showGraylogModal" x-cloak @keydown.escape.window="showGraylogModal=false" @click.self="showGraylogModal=false">
-    <div class="modal-box" style="max-width:800px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-scroll"></i> Graylog Search<button class="modal-close" @click="showGraylogModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <div style="display:flex;gap:.5rem;margin-bottom:1rem">
-                <input class="field-input" x-model="graylogQuery" placeholder="Search query..." @keyup.enter="searchGraylog()" style="flex:1;font-size:.8rem">
-                <button class="btn btn-primary btn-sm" @click="searchGraylog()" :disabled="graylogLoading"><i class="fas fa-search"></i></button>
-            </div>
-            <div x-show="graylogLoading" class="empty-msg">Searching...</div>
-            <template x-if="graylogResults && !graylogLoading">
-                <div>
-                    <div style="font-size:.7rem;color:var(--text-muted);margin-bottom:.5rem" x-text="(graylogResults.total||0) + ' results'"></div>
-                    <div style="max-height:400px;overflow-y:auto">
-                        <template x-for="(msg,i) in (graylogResults.messages||[])" :key="i">
-                            <div style="padding:.4rem;border-bottom:1px solid var(--border);font-size:.75rem">
-                                <div style="display:flex;justify-content:space-between">
-                                    <span style="color:var(--accent)" x-text="msg.source"></span>
-                                    <span style="color:var(--text-muted);font-size:.65rem" x-text="msg.timestamp"></span>
-                                </div>
-                                <div style="margin-top:.2rem;word-break:break-word" x-text="msg.message"></div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </template>
-        </div>
-    </div>
-</div>
+<!-- Graylog modal removed — content moved to monitoring page -->
 
-<!-- ── SLA Dashboard Modal ───────────────────────────────────────── -->
-<div class="modal-overlay" x-show="showSlaModal" x-cloak @keydown.escape.window="showSlaModal=false" @click.self="showSlaModal=false">
-    <div class="modal-box" style="max-width:700px;max-height:85vh;overflow-y:auto">
-        <div class="modal-title"><i class="fas fa-tachometer-alt"></i> SLA Dashboard<button class="modal-close" @click="showSlaModal=false">&times;</button></div>
-        <div style="padding:16px">
-            <div style="display:flex;gap:.4rem;margin-bottom:1rem">
-                <button class="btn btn-xs" :class="slaPeriod===168?'btn-primary':''" @click="slaPeriod=168; fetchSla(168)">7d</button>
-                <button class="btn btn-xs" :class="slaPeriod===720?'btn-primary':''" @click="slaPeriod=720; fetchSla(720)">30d</button>
-                <button class="btn btn-xs" :class="slaPeriod===2160?'btn-primary':''" @click="slaPeriod=2160; fetchSla(2160)">90d</button>
-            </div>
-            <div x-show="slaLoading" class="empty-msg">Calculating...</div>
-            <template x-if="slaData && !slaLoading">
-                <div>
-                    <template x-for="s in slaData.sla" :key="s.name">
-                        <div style="display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-bottom:1px solid var(--border)">
-                            <div style="flex:1">
-                                <div style="font-weight:600;font-size:.85rem" x-text="s.name"></div>
-                                <div style="font-size:.65rem;color:var(--text-muted)" x-text="s.type + ' · ' + s.incidents + ' incident(s)'"></div>
-                            </div>
-                            <div style="text-align:right">
-                                <div style="font-size:1.1rem;font-weight:700;font-family:var(--font-data)" :style="s.uptime_pct >= 99.9 ? 'color:var(--success)' : s.uptime_pct >= 99 ? 'color:var(--warning)' : 'color:var(--danger)'" x-text="s.uptime_pct + '%'"></div>
-                                <div style="width:120px;height:4px;background:var(--surface-2);border-radius:2px;margin-top:3px">
-                                    <div style="height:100%;border-radius:2px;transition:width .3s" :style="'width:' + s.uptime_pct + '%;background:' + (s.uptime_pct >= 99.9 ? 'var(--success)' : s.uptime_pct >= 99 ? 'var(--warning)' : 'var(--danger)')"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-                    <div x-show="slaData.sla.length === 0" class="empty-msg">No SLA data yet. Incidents will populate this over time.</div>
-                </div>
-            </template>
-        </div>
-    </div>
-</div>
+<!-- SLA modal removed — content moved to monitoring page -->
 
 <!-- ── Agent History Modal ──────────────────────────────────────── -->
 <div class="modal-overlay" x-show="agentHistoryHost" x-cloak @keydown.escape.window="agentHistoryHost=''" @click.self="agentHistoryHost=''">

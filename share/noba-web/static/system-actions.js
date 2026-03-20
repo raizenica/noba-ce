@@ -326,10 +326,10 @@ function systemActionsMixin() {
             if (this.auditPage > 1) { this.auditPage--; this.fetchAuditLog(); }
         },
 
-        /** Open the audit log modal. */
+        /** Open the audit log page. */
         openAuditModal() {
             if (this.userRole !== 'admin') return;
-            this.showAuditModal = true;
+            this.navigateTo('logs'); this.logsTab = 'audit';
             this.fetchAuditLog();
         },
 
@@ -1088,7 +1088,7 @@ function systemActionsMixin() {
         },
 
         openJournal() {
-            this.showJournalModal = true;
+            this.navigateTo('logs'); this.logsTab = 'journal';
             this.fetchJournalUnits();
             this.fetchJournal();
         },

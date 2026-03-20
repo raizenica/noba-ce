@@ -1,10 +1,10 @@
 #!/bin/bash
 # install.sh – Smart installer for Noba Automation Suite
-# Version: 3.4.0
+# Version: 3.5.0
 
 set -euo pipefail
 
-readonly INSTALLER_VERSION="3.4.0"
+readonly INSTALLER_VERSION="3.5.0"
 
 # ── Safety ─────────────────────────────────────────────────────────────────────
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -574,18 +574,37 @@ if [[ -d "$server_pkg_src" ]]; then
     fi
 fi
 
-for f in style.css app.js auth-mixin.js actions-mixin.js integration-actions.js automation-actions.js system-actions.js favicon.ico; do
-    src="$SCRIPT_DIR/share/noba-web/static/$f"
-    dst="$LIBEXEC_DIR/web/static/$f"
-    if [[ -f "$src" ]]; then
+# Deploy all static assets (auto-discover instead of hardcoded list)
+_static_src="$SCRIPT_DIR/share/noba-web/static"
+_static_dst="$LIBEXEC_DIR/web/static"
+if [[ -d "$_static_src" ]]; then
+    _static_count=0
+    mkdir -p "$_static_dst"
+    for f in "$_static_src"/*; do
+        [[ -f "$f" ]] || continue
+        fname=$(basename "$f")
+        [[ "$fname" == *.map ]] && continue  # skip source maps
         if [[ "$DRY_RUN" == true ]]; then
-            dry "install $src → $dst"
+            dry "install $f → $_static_dst/$fname"
         else
-            install_file "$src" "$dst" 644
-            say_ok "Web static asset: $f"
+            install_file "$f" "$_static_dst/$fname" 644
+            _static_count=$(( _static_count + 1 ))
         fi
+    done
+    [[ "$DRY_RUN" != true ]] && say_ok "Web static assets ($_static_count files)"
+fi
+
+# Deploy agent script (served via /api/agent/update for remote agent self-update)
+_agent_src="$SCRIPT_DIR/share/noba-agent/agent.py"
+_agent_dst="$LIBEXEC_DIR/noba-agent/agent.py"
+if [[ -f "$_agent_src" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+        dry "install $_agent_src → $_agent_dst"
+    else
+        install_file "$_agent_src" "$_agent_dst" 755
+        say_ok "Agent script (for remote update)"
     fi
-done
+fi
 
 src="$SCRIPT_DIR/lib/noba-web-functions.sh"
 dst="$LIBEXEC_DIR/lib/noba-web-functions.sh"

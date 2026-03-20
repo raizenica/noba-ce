@@ -273,6 +273,17 @@ function dashboard() {
         svcFilter:  '',
         settingsTab: 'visibility',
 
+        // Sidebar navigation (Phase: sidebar-nav)
+        currentPage: location.hash.replace('#/', '') || 'dashboard',
+        sidebarCollapsed: localStorage.getItem('noba-sidebar-collapsed') === 'true',
+        sidebarSettingsExpanded: false,
+        searchOpen: false,
+        searchQuery: '',
+        searchResults: [],
+        monitoringTab: 'sla',
+        infrastructureTab: 'servicemap',
+        logsTab: 'history',
+
         // ── Core integration settings ──────────────────────────────────────────
         piholeUrl:         localStorage.getItem('noba-pihole')       || '',
         piholeToken:       '',   // sensitive — loaded from backend after login
@@ -603,6 +614,21 @@ function dashboard() {
             this.$watch('showTerminal', (val) => { if (val) this.openTerminal(); });
             document.addEventListener('click', () => { this.ctxMenu.show = false; });
 
+            // Hash-based page routing
+            window.addEventListener('hashchange', () => {
+                this.currentPage = location.hash.replace('#/', '') || 'dashboard';
+            });
+            // Sidebar collapse persistence
+            this.$watch('sidebarCollapsed', (val) => {
+                localStorage.setItem('noba-sidebar-collapsed', val);
+            });
+            // Re-trigger masonry when navigating back to dashboard
+            this.$watch('currentPage', (page) => {
+                if (page === 'dashboard') {
+                    this.$nextTick(() => { try { this.initMasonry(); } catch(e) {} });
+                }
+            });
+
             if (!this.authenticated) return;
 
             // Validate the stored token first. fetchUserInfo() sets authenticated=false
@@ -656,6 +682,51 @@ function dashboard() {
 
 
         // ── 4. Layout & UI Logic ───────────────────────────────────────────────
+
+        navigateTo(page) {
+            location.hash = '#/' + page;
+            // Auto-close sidebar on mobile
+            if (window.innerWidth < 640) this.sidebarCollapsed = true;
+        },
+
+        filterSearch() {
+            const q = (this.searchQuery || '').toLowerCase().trim();
+            if (!q) { this.searchResults = []; return; }
+            const results = [];
+
+            // Pages
+            const pages = [
+                { label: 'Dashboard', icon: 'fa-th-large', action: () => this.navigateTo('dashboard'), category: 'Page' },
+                { label: 'Agents', icon: 'fa-robot', action: () => this.navigateTo('agents'), category: 'Page' },
+                { label: 'Monitoring', icon: 'fa-chart-line', action: () => this.navigateTo('monitoring'), category: 'Page' },
+                { label: 'Infrastructure', icon: 'fa-server', action: () => this.navigateTo('infrastructure'), category: 'Page' },
+                { label: 'Automations', icon: 'fa-bolt', action: () => this.navigateTo('automations'), category: 'Page' },
+                { label: 'Logs', icon: 'fa-scroll', action: () => this.navigateTo('logs'), category: 'Page' },
+                { label: 'Settings — General', icon: 'fa-cog', action: () => this.navigateTo('settings/general'), category: 'Settings' },
+                { label: 'Settings — Visibility', icon: 'fa-eye', action: () => this.navigateTo('settings/visibility'), category: 'Settings' },
+                { label: 'Settings — Integrations', icon: 'fa-plug', action: () => this.navigateTo('settings/integrations'), category: 'Settings' },
+                { label: 'Settings — Backup', icon: 'fa-archive', action: () => this.navigateTo('settings/backup'), category: 'Settings' },
+                { label: 'Settings — Users', icon: 'fa-users', action: () => this.navigateTo('settings/users'), category: 'Settings' },
+                { label: 'Settings — Alerts', icon: 'fa-bell', action: () => this.navigateTo('settings/alerts'), category: 'Settings' },
+            ];
+            pages.forEach(p => { if (p.label.toLowerCase().includes(q)) results.push({ ...p, id: 'p_' + p.label }); });
+
+            // Commands
+            (this.CMD_CATALOG || []).forEach(c => {
+                if (c.label.toLowerCase().includes(q) || c.type.includes(q)) {
+                    results.push({ label: c.label, icon: c.icon, action: () => { this.navigateTo('agents'); this.cmdPaletteType = c.type; }, category: 'Command', id: 'c_' + c.type });
+                }
+            });
+
+            // Agents
+            (this.agents || []).forEach(a => {
+                if (a.hostname.toLowerCase().includes(q)) {
+                    results.push({ label: a.hostname, icon: 'fa-robot', action: () => { this.navigateTo('agents'); this.openAgentDetail(a.hostname); }, category: 'Agent', id: 'a_' + a.hostname });
+                }
+            });
+
+            this.searchResults = results.slice(0, 15);
+        },
 
         initMasonry() {
             this._masonryObserver = new ResizeObserver(entries => {
@@ -711,6 +782,14 @@ function dashboard() {
             const kb = this.keyBindings;
             this._keydownHandler = (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+                // Global search: Ctrl+K
+                if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                    e.preventDefault();
+                    this.searchOpen = !this.searchOpen;
+                    return;
+                }
+
                 if (e.ctrlKey || e.altKey || e.metaKey) return;
 
                 const key = e.key;
@@ -737,11 +816,11 @@ function dashboard() {
                 if (this.showSettings || this.showModal || this.showTerminal) return;
 
                 if (key === kb.shortcuts) { e.preventDefault(); this.showShortcutsModal = !this.showShortcutsModal; }
-                else if (key === kb.settings) this.showSettings = true;
+                else if (key === kb.settings) this.navigateTo('settings/general');
                 else if (key === kb.refresh && this.authenticated) this.refreshStats();
                 else if (key === kb.notifications) this.toggleNotifCenter();
                 else if (key === kb.history && this.authenticated) { this.showHistoryModal = true; }
-                else if (key === kb.audit && this.userRole === 'admin') { this.showAuditModal = true; this.fetchAuditLog(); }
+                else if (key === kb.audit && this.userRole === 'admin') { this.navigateTo('logs'); this.logsTab = 'audit'; this.fetchAuditLog(); }
                 else if (key === kb.filter) { e.preventDefault(); const el = document.querySelector('.svc-filter'); if (el) el.focus(); }
                 else if (key === kb.terminal && this.userRole === 'admin') { this.showTerminal = true; }
                 else if (key === 'g') { this.glanceMode = !this.glanceMode; }
@@ -860,8 +939,7 @@ function dashboard() {
                 this.fetchHistory('cpu_percent');
             }
             else if (action === 'settings') {
-                this.showSettings = true;
-                this.settingsTab = 'integrations';
+                this.navigateTo('settings/integrations');
             }
         },
 

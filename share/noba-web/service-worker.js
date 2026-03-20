@@ -9,6 +9,7 @@ const STATIC_ASSETS = [
     '/static/auth-mixin.js',
     '/static/actions-mixin.js',
     '/static/favicon.ico',
+    '/static/favicon.svg',
     '/manifest.json',
 ];
 
