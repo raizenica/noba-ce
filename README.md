@@ -14,18 +14,23 @@ A full-featured operations center for homelab and multi-site infrastructure mana
 - **Health Bar** — Color-coded status pips for instant infrastructure overview
 - **Anomaly Detection** — Automatic flagging of unusual resource patterns
 
-### Remote Agents
+### Remote Agents (v2.0)
 - **Zero-dependency agent** — Standalone Python script, works on any Linux (reads /proc directly), optional psutil for cross-platform
-- **Bidirectional commands** — 9 command types: exec, restart_service, get_logs, check_service, network_test, package_updates, update_agent, set_interval, ping
+- **32 command types** — System, services, network, files, users, containers, packages, and agent management
+- **WebSocket real-time** — Instant command delivery via RFC 6455 client, with HTTP polling fallback
+- **Streaming output** — Long-running commands stream output line-by-line via WebSocket
+- **File transfer** — Push/pull files up to 50MB with chunked upload and SHA256 verification
+- **Risk-tiered auth** — Low (viewer), medium (operator), high (admin-only) command classification
 - **Agent metric persistence** — CPU/RAM/disk history stored in SQLite, queryable per-agent
 - **One-click deployment** — Deploy from the dashboard via SSH, or copy-paste a one-liner (Linux/Windows)
 - **Self-update** — Agents pull updates from the NOBA server and restart
-- **Exponential backoff** — Graceful retry on connection failures
 
 ### Alerting & Incidents
 - **Composite alert rules** — AND/OR conditions with escalation policies
+- **Self-healing actions** — Alerts can trigger agent commands (restart service, run script, webhook)
+- **Anomaly detection** — Moving-window Z-score detection against historical baselines
 - **Incident timeline** — Auto-generated from fired alerts, with resolve actions
-- **Notification channels** — Pushover, Gotify, Slack, email, voice alerts
+- **Notification channels** — Pushover, Gotify, Slack, email, voice alerts, browser push (PWA)
 - **Maintenance windows** — Suppress alerts during planned downtime
 - **SLA Dashboard** — Uptime percentages per agent/service (7d/30d/90d)
 
@@ -43,20 +48,32 @@ A full-featured operations center for homelab and multi-site infrastructure mana
 
 ### Operations Center
 - **Multi-site awareness** — Site A/B toggle filters the entire dashboard
+- **Endpoint monitoring** — Scheduled HTTP health checks with TLS certificate expiry tracking
+- **Service dependency topology** — SVG force-directed graph with transitive impact analysis
+- **Configuration drift detection** — Baseline file checksums across agents, alert on changes
+- **Real-time log streaming** — Live tail from agents via WebSocket, color-coded by priority
+- **Saved custom dashboards** — Build and save metric views, share between users
 - **Tailscale network map** — Visual node grid with online/offline, direct/relay, subnet routes
 - **Predictive disk intelligence** — SMART attribute trend analysis with failure prediction
-- **Dependency map** — Service dependency graph with blast radius calculation
-- **Recovery actions** — One-click Tailscale reconnect, DNS flush, service restart (admin-only, audit-logged)
 - **Graylog integration** — Search centralized logs from the dashboard
 - **InfluxDB query panel** — Flux query editor with Chart.js visualization
 - **Config changelog** — Tracks every settings change with old→new diffs
-- **Runbooks** — JSON-defined playbooks linked to alert triggers
 - **Metrics correlation** — Overlay multiple metrics on a single timeline
-- **Public status page** — No-auth HTML page at `/status` with auto-refresh
+- **Public status page** — Component groups, manual incidents, 90-day uptime history, no-auth
+
+### AI Ops Assistant
+- **Multi-provider LLM** — Anthropic (Claude), OpenAI, Ollama (local), or any OpenAI-compatible endpoint
+- **Infrastructure-aware chat** — System prompt includes live agent status, alerts, metrics
+- **Alert analysis** — "Explain this alert" with suggested remediation steps
+- **Log analysis** — Send log excerpts for AI-powered issue identification
+- **Incident summarization** — Auto-generate post-mortem reports
+- **Action buttons** — AI suggests agent commands rendered as one-click buttons
+- **Completely optional** — Everything works without LLM configured
 
 ### Automation Engine
-- **8 automation types** — Script, webhook, service, workflow, condition, delay, notify, HTTP
+- **9 automation types** — Script, webhook, service, workflow, condition, delay, notify, HTTP, **agent_command**
 - **Workflow engine** — Sequential/parallel steps with retry and exponential backoff
+- **Agent command actions** — Workflows and alerts can trigger commands on remote agents
 - **Triggers** — Cron schedule, file system changes, RSS feeds, webhooks (HMAC validated), HA events
 - **Approval gates** — Require manual approval before execution
 
@@ -68,14 +85,17 @@ A full-featured operations center for homelab and multi-site infrastructure mana
 - **Rate limiting** — Per-IP and per-user with lockout
 
 ### UI/UX
-- **6 themes** — Nord, dark, light, and more
-- **Glassmorphism modals** — Backdrop blur with accent glow
+- **Sidebar navigation** — Persistent left sidebar with icon-only collapse, hash-based page routing
+- **Global search** — `Ctrl+K` command palette searches pages, commands, agents, settings
+- **6 themes** — Default, Nord, Dracula, Tokyo, Catppuccin, Gruvbox
+- **Per-user layouts** — Card visibility and order synced to server per user
 - **Quick glance mode** — Press `g` to collapse all cards to headers
 - **Context menus** — Right-click cards for quick actions
-- **Mobile responsive** — Bottom nav on mobile viewports
+- **Mobile responsive** — Bottom nav + slide-over sidebar on mobile
 - **Keyboard shortcuts** — Customizable hotkeys
-- **Notification center** — Bell icon with unread count
+- **Notification center** — Bell icon with unread count + PWA push notifications
 - **Embedded terminal** — WebSocket PTY via xterm.js (admin-only)
+- **API documentation** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc`
 
 ## Quick Start
 
@@ -131,7 +151,7 @@ share/noba-web/status.html → Public status page
 share/noba-agent/        → Remote agent + installers (Linux, Windows)
 libexec/                 → Shell scripts (backup, disk check, cloud sync)
 dev/                     → Developer toolkit (8 tools)
-tests/                   → pytest test suite (344 tests)
+tests/                   → pytest test suite (622 tests)
 ```
 
 ## Developer Toolkit
