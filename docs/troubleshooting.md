@@ -12,8 +12,11 @@
 8. [Systemd timers not firing](#8-systemd-timers-not-firing)
 9. [Temperature not showing](#9-temperature-not-showing)
 10. [Docker-specific issues](#10-docker-specific-issues)
-11. [Log analysis tips](#11-log-analysis-tips)
-12. [Resetting to defaults](#12-resetting-to-defaults)
+11. [Agent commands stuck in "queued"](#11-agent-commands-stuck-in-queued)
+12. [Dashboard layout corruption after navigation](#12-dashboard-layout-corruption-after-navigation)
+13. [Browser shows stale UI after update](#13-browser-shows-stale-ui-after-update)
+14. [Log analysis tips](#14-log-analysis-tips)
+15. [Resetting to defaults](#15-resetting-to-defaults)
 
 ---
 
@@ -393,7 +396,87 @@ The config directory inside the container is `/app/config/`.
 
 ---
 
-## 11. Log analysis tips
+## 11. Agent commands stuck in "queued"
+
+### Symptom
+Commands sent from the dashboard (command palette or agent detail panel) stay "queued" in command history and never complete.
+
+### Steps
+
+**1. Check agent connectivity:**
+```bash
+# From the dashboard, verify agents show "online" in the Agents page
+# Or via API:
+curl -H "Authorization: Bearer <token>" http://localhost:8080/api/agents
+```
+
+**2. Check the agent version:**
+Agents must be running v2.1.0+ for reliable WebSocket command delivery. The agent version is shown in the agent detail panel.
+
+**3. Update agents:**
+Send an `update_agent` command from the dashboard, or manually update:
+```bash
+# On the agent host:
+curl -sf http://noba-server:8080/api/agent/update?key=YOUR_KEY -o /opt/noba-agent/agent.py
+sudo systemctl restart noba-agent
+```
+
+### Common causes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| All commands stuck | Agent < v2.1.0 has WebSocket result type collision | Update agent to v2.1.0+ |
+| Some commands work (via HTTP) but not WebSocket ones | Server doesn't recognize old-format results | Update server (v2.1.0+ has backward compatibility shim) |
+| "Sending..." button never clears | Frontend JS error (stale cached files) | Hard refresh: Ctrl+Shift+R |
+
+---
+
+## 12. Dashboard layout corruption after navigation
+
+### Symptom
+Navigating from another page (e.g., Security) to the Dashboard shows a large blank area at the top, with cards pushed down.
+
+### Steps
+
+**1. Hard refresh the browser:**
+```
+Ctrl+Shift+R (or Cmd+Shift+R on macOS)
+```
+
+This forces the browser to fetch fresh static files and resolves most layout issues caused by stale cached JavaScript.
+
+**2. Check browser console for errors:**
+Open DevTools (F12) → Console tab. Look for ResizeObserver or Alpine.js errors.
+
+### Common causes
+
+This was caused by a masonry layout bug where the ResizeObserver leaked across page navigations. Fixed in v2.1.0 — the observer now disconnects before recreating and is scoped to dashboard cards only.
+
+---
+
+## 13. Browser shows stale UI after update
+
+### Symptom
+After updating NOBA (via `install.sh`, `git pull`, or Docker rebuild), the dashboard still shows old behavior or old bugs.
+
+### Fix
+
+Static files (JS, CSS) are cached by the browser for up to 1 hour. After any update:
+
+```
+Ctrl+Shift+R  (hard refresh — bypasses cache)
+```
+
+Or clear the browser cache manually: Settings → Clear browsing data → Cached images and files.
+
+In Docker, rebuild with `--no-cache`:
+```bash
+docker compose build --no-cache && docker compose up -d
+```
+
+---
+
+## 14. Log analysis tips
 
 ### Key log files
 
@@ -438,7 +521,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:8080/api/audit?limit=50
 
 ---
 
-## 12. Resetting to defaults
+## 15. Resetting to defaults
 
 ### Reset just the web dashboard users
 

@@ -682,16 +682,16 @@ class Database:
     # ── Agent Registry ────────────────────────────────────────────────────────
     def upsert_agent(self, hostname: str, ip: str, platform_name: str,
                      arch: str, agent_version: str) -> None:
-        _upsert_agent(self._conn, self._lock, hostname, ip, platform_name, arch, agent_version)
+        _upsert_agent(self._get_conn(), self._lock, hostname, ip, platform_name, arch, agent_version)
 
     def get_all_agents(self) -> list[dict]:
-        return _get_all_agents(self._conn, self._lock)
+        return _get_all_agents(self._get_conn(), self._lock)
 
     def delete_agent(self, hostname: str) -> None:
-        _delete_agent(self._conn, self._lock, hostname)
+        _delete_agent(self._get_conn(), self._lock, hostname)
 
     def update_agent_config(self, hostname: str, config: dict) -> None:
-        _update_agent_config(self._conn, self._lock, hostname, config)
+        _update_agent_config(self._get_conn(), self._lock, hostname, config)
 
     # ── Agent Command History (Phase 1d) ─────────────────────────────────────
     def record_command(self, cmd_id: str, hostname: str, cmd_type: str,

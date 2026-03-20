@@ -5,6 +5,9 @@ __pycache__/
 *.swp
 *~
 .DS_Store
+.claude/worktrees/
+.claude/agents/
+.claude/skills/
 personal_secrets.txt
 whisper.cpp/
 *.deb

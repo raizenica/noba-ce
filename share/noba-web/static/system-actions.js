@@ -895,9 +895,10 @@ function systemActionsMixin() {
         },
 
         renderMultiChart() {
+            if (typeof Chart === 'undefined') return;
             const canvas = document.getElementById('multi-chart-canvas');
             if (!canvas) return;
-            if (this._multiChart) this._multiChart.destroy();
+            if (this._multiChart && this._multiChart.destroy) this._multiChart.destroy();
             const colors = ['#7aa2f7','#f7768e','#9ece6a','#e0af68','#bb9af7','#7dcfff','#ff9e64','#c0caf5','#73daca','#b4f9f8'];
             const datasets = [];
             let i = 0;

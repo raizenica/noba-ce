@@ -1175,7 +1175,7 @@ async def api_agent_report(request: Request):
 
 # ── Agent WebSocket (Phase 1b) ───────────────────────────────────────────────
 
-logger = logging.getLogger("noba.agent.ws")
+_ws_logger = logging.getLogger("noba.agent.ws")
 
 
 @router.websocket("/api/agent/ws")
@@ -1207,7 +1207,7 @@ async def agent_websocket(ws: WebSocket):
             except Exception:
                 pass
 
-        logger.info("[ws] Agent %s connected via WebSocket", hostname)
+        _ws_logger.info("[ws] Agent %s connected via WebSocket", hostname)
 
         # Send any queued commands immediately
         with _agent_cmd_lock:
@@ -1273,7 +1273,10 @@ async def agent_websocket(ws: WebSocket):
                 cmd_id = msg.get("id", "")
                 with _agent_cmd_lock:
                     stream_key = f"_stream_{hostname}_{cmd_id}"
-                    _agent_cmd_results.setdefault(stream_key, []).append(msg)
+                    buf = _agent_cmd_results.setdefault(stream_key, [])
+                    buf.append(msg)
+                    if len(buf) > 500:
+                        _agent_cmd_results[stream_key] = buf[-500:]
 
             elif msg_type == "ping":
                 await ws.send_json({"type": "pong"})
@@ -1281,13 +1284,13 @@ async def agent_websocket(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        logger.warning("[ws] Error for %s: %s", hostname, exc)
+        _ws_logger.warning("[ws] Error for %s: %s", hostname, exc)
     finally:
         if hostname:
             with _agent_ws_lock:
                 if _agent_websockets.get(hostname) is ws:
                     del _agent_websockets[hostname]
-            logger.info("[ws] Agent %s disconnected", hostname)
+            _ws_logger.info("[ws] Agent %s disconnected", hostname)
 
 
 @router.get("/api/agents/{hostname}/stream/{cmd_id}")

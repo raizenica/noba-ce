@@ -854,17 +854,19 @@ function dashboard() {
         },
 
         initMasonry() {
+            if (this._masonryObserver) this._masonryObserver.disconnect();
             this._masonryObserver = new ResizeObserver(entries => {
                 for (const entry of entries) {
                     const card = entry.target;
-                    if (card.style.display === 'none') continue;
+                    if (card.offsetParent === null) continue;
                     const height   = card.getBoundingClientRect().height;
                     const rowSpan  = Math.ceil((height + 18) / 10);
                     card.style.gridRowEnd = `span ${rowSpan}`;
                 }
             });
             requestAnimationFrame(() => requestAnimationFrame(() => {
-                document.querySelectorAll('.card').forEach(c => this._masonryObserver.observe(c));
+                var grid = document.getElementById('sortable-grid');
+                if (grid) grid.querySelectorAll('.card').forEach(c => this._masonryObserver.observe(c));
             }));
         },
 
