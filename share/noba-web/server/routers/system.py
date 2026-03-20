@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ from ..agent_config import (
 from ..agent_store import (
     _agent_cmd_lock, _agent_cmd_results, _agent_commands,
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
+    _agent_stream_lines, _agent_stream_lines_lock, _STREAM_LINES_MAX,
+    _agent_streams, _agent_streams_lock,
     _agent_websockets, _agent_ws_lock,
     _CHUNK_SIZE, _MAX_TRANSFER_SIZE, _TRANSFER_DIR,
     _transfer_lock, _transfers,
@@ -1033,6 +1036,17 @@ async def api_agent_report(request: Request):
             cr_id = cr.get("id", "")
             if cr_id:
                 db.complete_command(cr_id, cr)
+    # Store stream data if present
+    stream_data = body.pop("_stream_data", None)
+    if stream_data and isinstance(stream_data, dict):
+        with _agent_stream_lines_lock:
+            for stream_id, lines in stream_data.items():
+                if isinstance(lines, list):
+                    buf = _agent_stream_lines.setdefault(stream_id, [])
+                    buf.extend(lines)
+                    # Trim to max size
+                    if len(buf) > _STREAM_LINES_MAX:
+                        _agent_stream_lines[stream_id] = buf[-_STREAM_LINES_MAX:]
     with _agent_data_lock:
         stale = [h for h, d in _agent_data.items() if time.time() - d.get("_received", 0) > 86400]
         for h in stale:
@@ -1144,8 +1158,27 @@ async def agent_websocket(ws: WebSocket):
 
 
 @router.get("/api/agents/{hostname}/stream/{cmd_id}")
-def api_agent_stream(hostname: str, cmd_id: str, auth=Depends(_get_auth)):
-    """Get streaming output lines for a command sent via WebSocket."""
+def api_agent_stream(hostname: str, cmd_id: str, request: Request, auth=Depends(_get_auth)):
+    """Poll for new log stream lines (or WebSocket stream output).
+
+    Supports cursor-based polling via ``?after=N`` query parameter.
+    Returns only new lines since cursor position and the updated cursor.
+    """
+    # First check if this is a live log stream
+    after = _safe_int(request.query_params.get("after", "0"), 0)
+    with _agent_stream_lines_lock:
+        all_lines = _agent_stream_lines.get(cmd_id)
+    if all_lines is not None:
+        with _agent_stream_lines_lock:
+            all_lines = _agent_stream_lines.get(cmd_id, [])
+            new_lines = all_lines[after:]
+            total = len(all_lines)
+        # Check if stream is still tracked as active
+        with _agent_streams_lock:
+            host_streams = _agent_streams.get(hostname, {})
+            active = cmd_id in host_streams
+        return {"lines": new_lines, "cursor": total, "active": active}
+    # Fall back to WebSocket command stream output
     stream_key = f"_stream_{hostname}_{cmd_id}"
     with _agent_cmd_lock:
         return _agent_cmd_results.get(stream_key, [])
@@ -1196,7 +1229,6 @@ def api_agent_detail(hostname: str, auth=Depends(_get_auth)):
 @router.post("/api/agents/bulk-command")
 async def api_bulk_command(request: Request, auth=Depends(_get_auth)):
     """Send a command to multiple agents at once."""
-    import secrets
     username, role = auth
     ip = _client_ip(request)
     body = await _read_body(request)
@@ -1233,7 +1265,6 @@ async def api_bulk_command(request: Request, auth=Depends(_get_auth)):
 @router.post("/api/agents/{hostname}/command")
 async def api_agent_command(hostname: str, request: Request, auth=Depends(_get_auth)):
     """Queue a command for an agent. Risk-tiered authorization."""
-    import secrets
     username, role = auth
     ip = _client_ip(request)
     body = await _read_body(request)
@@ -1288,7 +1319,6 @@ async def api_agent_command(hostname: str, request: Request, auth=Depends(_get_a
 @router.post("/api/agents/{hostname}/uninstall")
 async def api_agent_uninstall(hostname: str, request: Request, auth=Depends(_require_admin)):
     """Queue uninstall command and mark agent for removal."""
-    import secrets
     username, _ = auth
     ip = _client_ip(request)
     cmd_id = secrets.token_hex(8)
@@ -1314,6 +1344,60 @@ def api_agent_history(hostname: str, request: Request, auth=Depends(_get_auth)):
     metric = request.query_params.get("metric", "cpu")
     metric_key = f"agent_{hostname}_{metric}"
     return db.get_history(metric_key, range_hours=hours, resolution=120)
+
+
+# ── Agent log streaming endpoints ────────────────────────────────────────────
+
+@router.post("/api/agents/{hostname}/stream-logs")
+async def api_agent_stream_logs(hostname: str, request: Request, auth=Depends(_require_admin)):
+    """Start a live log stream on a remote agent via follow_logs command."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    unit = body.get("unit", "")
+    priority = body.get("priority", "")
+    lines = _safe_int(body.get("lines", 50), 50)
+    cmd_id = secrets.token_hex(8)
+    cmd = {
+        "id": cmd_id, "type": "follow_logs",
+        "params": {"unit": unit, "priority": priority, "lines": lines},
+        "queued_by": username, "queued_at": int(time.time()),
+    }
+    with _agent_cmd_lock:
+        _agent_commands.setdefault(hostname, []).append(cmd)
+    with _agent_streams_lock:
+        _agent_streams.setdefault(hostname, {})[cmd_id] = {"started": int(time.time())}
+    db.audit_log("agent_stream_logs", username, f"host={hostname} id={cmd_id} unit={unit}", ip)
+    return {"status": "queued", "stream_id": cmd_id}
+
+
+@router.delete("/api/agents/{hostname}/stream-logs/{cmd_id}")
+async def api_agent_stop_stream(hostname: str, cmd_id: str, auth=Depends(_require_admin)):
+    """Stop a running log stream on a remote agent."""
+    username, _ = auth
+    stop_id = secrets.token_hex(8)
+    cmd = {
+        "id": stop_id, "type": "stop_stream",
+        "params": {"stream_id": cmd_id},
+        "queued_by": username, "queued_at": int(time.time()),
+    }
+    with _agent_cmd_lock:
+        _agent_commands.setdefault(hostname, []).append(cmd)
+    with _agent_streams_lock:
+        host_streams = _agent_streams.get(hostname, {})
+        host_streams.pop(cmd_id, None)
+    # Clean up server-side line buffer
+    with _agent_stream_lines_lock:
+        _agent_stream_lines.pop(cmd_id, None)
+    return {"status": "queued", "id": stop_id}
+
+
+@router.get("/api/agents/{hostname}/streams")
+def api_agent_active_streams(hostname: str, auth=Depends(_get_auth)):
+    """List active log streams for an agent."""
+    with _agent_streams_lock:
+        streams = _agent_streams.get(hostname, {})
+    return {"streams": [{"stream_id": sid, **info} for sid, info in streams.items()]}
 
 
 @router.get("/api/sla/summary")
@@ -1638,7 +1722,6 @@ async def api_agent_file_download(transfer_id: str, request: Request):
 @router.post("/api/agents/{hostname}/transfer")
 async def api_agent_transfer(hostname: str, request: Request, auth=Depends(_require_admin)):
     """Initiate a file push to an agent. Admin uploads the file first."""
-    import secrets
     username, _ = auth
     ip = _client_ip(request)
 
@@ -1723,30 +1806,814 @@ def public_status_page():
 
 @router.get("/api/status/public")
 def api_public_status():
-    """Public status data -- no auth required.  Only exposes configured services."""
-    cfg = read_yaml_settings()
-    status_services = [s.strip() for s in cfg.get("statusPageServices", "").split(",") if s.strip()]
-    if not status_services:
-        return {"services": [], "overall": "operational", "message": "No services configured for status page"}
+    """Public status data -- no auth required.
 
-    data = _deps.bg_collector.get() or {}
-    services = []
-    for svc in status_services:
-        val = data.get(svc)
-        if val is None:
-            status = "unknown"
-        elif isinstance(val, dict) and val.get("status"):
-            status = "operational" if val["status"] in ("online", "enabled", "ok") else "degraded"
-        elif isinstance(val, list) and len(val) > 0:
-            status = "operational"
-        else:
-            status = "operational" if val else "unknown"
-        services.append({"name": svc, "status": status})
+    Returns components with live status, active incidents, and 90-day uptime history.
+    Falls back to legacy metric-driven services when no components are configured.
+    """
+    # Components from the DB
+    components = db.list_status_components()
+    collector_data = (_deps.bg_collector.get() if _deps.bg_collector else None) or {}
 
+    # Enrich components with live status from collector
+    enriched: list[dict] = []
+    for comp in components:
+        if not comp["enabled"]:
+            continue
+        status = "operational"
+        if comp["service_key"]:
+            val = collector_data.get(comp["service_key"])
+            if val is None:
+                status = "unknown"
+            elif isinstance(val, dict) and val.get("status"):
+                status = "operational" if val["status"] in ("online", "enabled", "ok") else "degraded"
+            elif isinstance(val, list) and len(val) > 0:
+                status = "operational"
+            else:
+                status = "operational" if val else "unknown"
+        enriched.append({
+            "id": comp["id"], "name": comp["name"],
+            "group_name": comp["group_name"], "status": status,
+        })
+
+    # Legacy fallback: if no components configured, use statusPageServices from YAML
+    if not enriched:
+        cfg = read_yaml_settings()
+        status_services = [s.strip() for s in cfg.get("statusPageServices", "").split(",") if s.strip()]
+        for svc in status_services:
+            val = collector_data.get(svc)
+            if val is None:
+                status = "unknown"
+            elif isinstance(val, dict) and val.get("status"):
+                status = "operational" if val["status"] in ("online", "enabled", "ok") else "degraded"
+            elif isinstance(val, list) and len(val) > 0:
+                status = "operational"
+            else:
+                status = "operational" if val else "unknown"
+            enriched.append({"name": svc, "group_name": "Default", "status": status})
+
+    # Active incidents
+    active_incidents = db.list_status_incidents(limit=20, include_resolved=False)
+    # Enrich with updates
+    for inc in active_incidents:
+        detail = db.get_status_incident(inc["id"])
+        inc["updates"] = detail["updates"] if detail else []
+
+    # Determine overall status
     overall = "operational"
-    if any(s["status"] == "degraded" for s in services):
-        overall = "degraded"
-    if all(s["status"] in ("unknown", "degraded") for s in services):
+    has_active = len(active_incidents) > 0
+    any_critical = any(i["severity"] == "critical" for i in active_incidents)
+    any_major = any(i["severity"] == "major" for i in active_incidents)
+    if any_critical:
         overall = "major_outage"
+    elif any_major or any(s["status"] == "degraded" for s in enriched):
+        overall = "degraded"
+    elif has_active:
+        overall = "degraded"
 
-    return {"services": services, "overall": overall, "timestamp": int(time.time())}
+    # 90-day uptime history
+    uptime_history = db.get_status_uptime_history(days=90)
+
+    return {
+        "components": enriched,
+        "services": enriched,  # backward compat
+        "active_incidents": active_incidents,
+        "uptime_history": uptime_history,
+        "overall": overall,
+        "timestamp": int(time.time()),
+    }
+
+
+@router.get("/api/status/incidents")
+def api_public_status_incidents():
+    """Public: list recent status incidents with their updates."""
+    incidents = db.list_status_incidents(limit=50, include_resolved=True)
+    for inc in incidents:
+        detail = db.get_status_incident(inc["id"])
+        inc["updates"] = detail["updates"] if detail else []
+    return {"incidents": incidents}
+
+
+# ── Status page admin endpoints ──────────────────────────────────────────────
+@router.post("/api/status/components")
+async def api_create_status_component(request: Request, auth=Depends(_require_admin)):
+    """Admin: create a status page component."""
+    username, _ = auth
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    comp_id = db.create_status_component(
+        name=name,
+        group_name=body.get("group_name", "Default"),
+        service_key=body.get("service_key"),
+        display_order=int(body.get("display_order", 0)),
+    )
+    if not comp_id:
+        raise HTTPException(500, "Failed to create component")
+    db.audit_log("status_component_create", username, f"id={comp_id} name={name}", _client_ip(request))
+    return {"id": comp_id, "status": "ok"}
+
+
+@router.put("/api/status/components/{comp_id}")
+async def api_update_status_component(comp_id: int, request: Request, auth=Depends(_require_admin)):
+    """Admin: update a status page component."""
+    username, _ = auth
+    body = await _read_body(request)
+    ok = db.update_status_component(comp_id, **{
+        k: v for k, v in body.items()
+        if k in ("name", "group_name", "service_key", "display_order", "enabled")
+    })
+    if not ok:
+        raise HTTPException(404, "Component not found or no changes")
+    db.audit_log("status_component_update", username, f"id={comp_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+@router.delete("/api/status/components/{comp_id}")
+def api_delete_status_component(comp_id: int, request: Request, auth=Depends(_require_admin)):
+    """Admin: delete a status page component."""
+    username, _ = auth
+    ok = db.delete_status_component(comp_id)
+    if not ok:
+        raise HTTPException(404, "Component not found")
+    db.audit_log("status_component_delete", username, f"id={comp_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+@router.get("/api/status/components")
+def api_list_status_components(auth=Depends(_get_auth)):
+    """Authenticated: list all status components (for admin UI)."""
+    return {"components": db.list_status_components()}
+
+
+@router.post("/api/status/incidents/create")
+async def api_create_status_incident(request: Request, auth=Depends(_require_admin)):
+    """Admin: create a status page incident."""
+    username, _ = auth
+    body = await _read_body(request)
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    severity = body.get("severity", "minor")
+    if severity not in ("minor", "major", "critical"):
+        raise HTTPException(400, "severity must be minor, major, or critical")
+    message = (body.get("message") or "").strip()
+    incident_id = db.create_status_incident(
+        title=title, severity=severity, message=message, created_by=username,
+    )
+    if not incident_id:
+        raise HTTPException(500, "Failed to create incident")
+    db.audit_log("status_incident_create", username, f"id={incident_id} title={title}", _client_ip(request))
+    return {"id": incident_id, "status": "ok"}
+
+
+@router.post("/api/status/incidents/{incident_id}/update")
+async def api_add_status_update(incident_id: int, request: Request, auth=Depends(_require_admin)):
+    """Admin: add an update to a status incident."""
+    username, _ = auth
+    body = await _read_body(request)
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+    status = body.get("status", "investigating")
+    if status not in ("investigating", "identified", "monitoring", "resolved"):
+        raise HTTPException(400, "status must be investigating, identified, monitoring, or resolved")
+    update_id = db.add_status_update(
+        incident_id=incident_id, message=message, status=status, created_by=username,
+    )
+    if not update_id:
+        raise HTTPException(404, "Incident not found or failed to add update")
+    db.audit_log("status_incident_update", username, f"incident={incident_id} status={status}", _client_ip(request))
+    return {"id": update_id, "status": "ok"}
+
+
+@router.put("/api/status/incidents/{incident_id}/resolve")
+def api_resolve_status_incident(incident_id: int, request: Request, auth=Depends(_require_admin)):
+    """Admin: resolve a status incident."""
+    username, _ = auth
+    ok = db.resolve_status_incident(incident_id, created_by=username)
+    if not ok:
+        raise HTTPException(404, "Incident not found")
+    db.audit_log("status_incident_resolve", username, f"id={incident_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+# ── Endpoint monitor endpoints ────────────────────────────────────────────────
+@router.get("/api/endpoints")
+def api_list_endpoints(auth=Depends(_get_auth)):
+    """List all endpoint monitors with latest status."""
+    return db.get_endpoint_monitors()
+
+
+@router.post("/api/endpoints")
+async def api_create_endpoint(request: Request, auth=Depends(_require_admin)):
+    """Create a new endpoint monitor."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not name or not url:
+        raise HTTPException(400, "Name and URL are required")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "URL must start with http:// or https://")
+    kwargs = {}
+    if "method" in body:
+        m = str(body["method"]).upper()
+        if m in ("GET", "HEAD"):
+            kwargs["method"] = m
+    for int_field in ("expected_status", "check_interval", "timeout", "notify_cert_days"):
+        if int_field in body:
+            try:
+                kwargs[int_field] = int(body[int_field])
+            except (TypeError, ValueError):
+                pass
+    if "agent_hostname" in body:
+        kwargs["agent_hostname"] = body["agent_hostname"] or None
+    if "enabled" in body:
+        kwargs["enabled"] = bool(body["enabled"])
+    monitor_id = db.create_endpoint_monitor(name, url, **kwargs)
+    if monitor_id is None:
+        raise HTTPException(500, "Failed to create monitor")
+    db.audit_log("endpoint_create", username, f"id={monitor_id} name={name} url={url}", ip)
+    return {"status": "ok", "id": monitor_id}
+
+
+@router.put("/api/endpoints/{monitor_id}")
+async def api_update_endpoint(monitor_id: int, request: Request, auth=Depends(_require_admin)):
+    """Update an endpoint monitor."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    kwargs = {}
+    if "name" in body:
+        kwargs["name"] = str(body["name"]).strip()
+    if "url" in body:
+        u = str(body["url"]).strip()
+        if not u.startswith(("http://", "https://")):
+            raise HTTPException(400, "URL must start with http:// or https://")
+        kwargs["url"] = u
+    if "method" in body:
+        m = str(body["method"]).upper()
+        if m in ("GET", "HEAD"):
+            kwargs["method"] = m
+    for int_field in ("expected_status", "check_interval", "timeout", "notify_cert_days"):
+        if int_field in body:
+            try:
+                kwargs[int_field] = int(body[int_field])
+            except (TypeError, ValueError):
+                pass
+    if "agent_hostname" in body:
+        kwargs["agent_hostname"] = body["agent_hostname"] or None
+    if "enabled" in body:
+        kwargs["enabled"] = bool(body["enabled"])
+    ok = db.update_endpoint_monitor(monitor_id, **kwargs)
+    if not ok:
+        raise HTTPException(404, "Monitor not found or no changes")
+    db.audit_log("endpoint_update", username, f"id={monitor_id}", ip)
+    return {"status": "ok"}
+
+
+@router.delete("/api/endpoints/{monitor_id}")
+async def api_delete_endpoint(monitor_id: int, request: Request, auth=Depends(_require_admin)):
+    """Delete an endpoint monitor."""
+    username, _ = auth
+    ip = _client_ip(request)
+    ok = db.delete_endpoint_monitor(monitor_id)
+    if not ok:
+        raise HTTPException(404, "Monitor not found")
+    db.audit_log("endpoint_delete", username, f"id={monitor_id}", ip)
+    return {"status": "ok"}
+
+
+@router.post("/api/endpoints/{monitor_id}/check")
+async def api_check_endpoint_now(monitor_id: int, request: Request, auth=Depends(_require_operator)):
+    """Trigger an immediate endpoint check."""
+    username, _ = auth
+    ip = _client_ip(request)
+    monitor = db.get_endpoint_monitor(monitor_id)
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    from ..scheduler import _run_endpoint_check
+    result = _run_endpoint_check(monitor)
+    db.audit_log("endpoint_check_now", username,
+                 f"id={monitor_id} name={monitor['name']} result={result.get('last_status', '?')}", ip)
+    return result
+
+
+# ── Custom dashboard endpoints ─────────────────────────────────────────────────
+@router.get("/api/dashboards")
+def api_list_dashboards(auth=Depends(_get_auth)):
+    """List dashboards visible to the current user (own + shared)."""
+    username, _ = auth
+    return db.get_dashboards(owner=username)
+
+
+@router.post("/api/dashboards")
+async def api_create_dashboard(request: Request, auth=Depends(_get_auth)):
+    """Create a new custom dashboard."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    name = (body.get("name") or "").strip()
+    config_json = body.get("config_json", "")
+    if not name:
+        raise HTTPException(400, "Dashboard name is required")
+    if not config_json:
+        raise HTTPException(400, "Dashboard config is required")
+    # Validate that config_json is valid JSON
+    try:
+        json.loads(config_json) if isinstance(config_json, str) else None
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(400, "config_json must be valid JSON")
+    if isinstance(config_json, (dict, list)):
+        config_json = json.dumps(config_json)
+    shared = bool(body.get("shared", False))
+    dashboard_id = db.create_dashboard(name, username, config_json, shared=shared)
+    if dashboard_id is None:
+        raise HTTPException(500, "Failed to create dashboard")
+    db.audit_log("dashboard_create", username, f"id={dashboard_id} name={name}", ip)
+    return {"status": "ok", "id": dashboard_id}
+
+
+@router.put("/api/dashboards/{dashboard_id}")
+async def api_update_dashboard(dashboard_id: int, request: Request, auth=Depends(_get_auth)):
+    """Update a custom dashboard (owner or admin only)."""
+    username, role = auth
+    ip = _client_ip(request)
+    existing = db.get_dashboard(dashboard_id)
+    if not existing:
+        raise HTTPException(404, "Dashboard not found")
+    if existing["owner"] != username and role != "admin":
+        raise HTTPException(403, "Only the owner or an admin can update this dashboard")
+    body = await _read_body(request)
+    kwargs = {}
+    if "name" in body:
+        n = str(body["name"]).strip()
+        if n:
+            kwargs["name"] = n
+    if "config_json" in body:
+        cj = body["config_json"]
+        if isinstance(cj, (dict, list)):
+            cj = json.dumps(cj)
+        try:
+            json.loads(cj)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(400, "config_json must be valid JSON")
+        kwargs["config_json"] = cj
+    if "shared" in body:
+        kwargs["shared"] = bool(body["shared"])
+    ok = db.update_dashboard(dashboard_id, **kwargs)
+    if not ok:
+        raise HTTPException(404, "Dashboard not found or no changes")
+    db.audit_log("dashboard_update", username, f"id={dashboard_id}", ip)
+    return {"status": "ok"}
+
+
+@router.delete("/api/dashboards/{dashboard_id}")
+async def api_delete_dashboard(dashboard_id: int, request: Request, auth=Depends(_get_auth)):
+    """Delete a custom dashboard (owner or admin only)."""
+    username, role = auth
+    ip = _client_ip(request)
+    existing = db.get_dashboard(dashboard_id)
+    if not existing:
+        raise HTTPException(404, "Dashboard not found")
+    if existing["owner"] != username and role != "admin":
+        raise HTTPException(403, "Only the owner or an admin can delete this dashboard")
+    ok = db.delete_dashboard(dashboard_id)
+    if not ok:
+        raise HTTPException(404, "Dashboard not found")
+    db.audit_log("dashboard_delete", username, f"id={dashboard_id}", ip)
+    return {"status": "ok"}
+
+
+# ── Service dependency topology endpoints ──────────────────────────────────────
+@router.get("/api/dependencies")
+def api_list_dependencies(auth=Depends(_get_auth)):
+    """List all service dependencies as graph data (nodes + edges)."""
+    deps = db.list_dependencies()
+    # Build node set from all mentioned services
+    node_set: set[str] = set()
+    edges = []
+    for d in deps:
+        node_set.add(d["source_service"])
+        node_set.add(d["target_service"])
+        edges.append({
+            "id": d["id"],
+            "source": d["source_service"],
+            "target": d["target_service"],
+            "type": d["dependency_type"],
+            "auto_discovered": d["auto_discovered"],
+        })
+    # Determine node health from agent data
+    nodes = []
+    for name in sorted(node_set):
+        health = "unknown"
+        with _agent_data_lock:
+            agent = _agent_data.get(name)
+        if agent:
+            age = time.time() - agent.get("last_seen", 0)
+            if age < _AGENT_MAX_AGE:
+                cpu = agent.get("cpu_percent", 0) or 0
+                mem = agent.get("mem_percent", 0) or 0
+                if cpu > 90 or mem > 95:
+                    health = "critical"
+                elif cpu > 70 or mem > 80:
+                    health = "warning"
+                else:
+                    health = "healthy"
+            else:
+                health = "offline"
+        nodes.append({"id": name, "label": name, "health": health})
+    return {"nodes": nodes, "edges": edges, "dependencies": deps}
+
+
+@router.post("/api/dependencies")
+async def api_create_dependency(request: Request, auth=Depends(_require_admin)):
+    """Create a manual service dependency."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    source = (body.get("source") or "").strip()
+    target = (body.get("target") or "").strip()
+    dep_type = (body.get("type") or "requires").strip()
+    if not source or not target:
+        raise HTTPException(400, "Both 'source' and 'target' are required")
+    if source == target:
+        raise HTTPException(400, "A service cannot depend on itself")
+    if dep_type not in ("requires", "optional", "network"):
+        raise HTTPException(400, "Invalid dependency type")
+    dep_id = db.create_dependency(source, target, dependency_type=dep_type)
+    if dep_id is None:
+        raise HTTPException(500, "Failed to create dependency")
+    db.audit_log("dependency_create", username,
+                 f"id={dep_id} {source}->{target} type={dep_type}", ip)
+    return {"status": "ok", "id": dep_id}
+
+
+@router.delete("/api/dependencies/{dep_id}")
+def api_delete_dependency(dep_id: int, request: Request, auth=Depends(_require_admin)):
+    """Delete a service dependency."""
+    username, _ = auth
+    ip = _client_ip(request)
+    ok = db.delete_dependency(dep_id)
+    if not ok:
+        raise HTTPException(404, "Dependency not found")
+    db.audit_log("dependency_delete", username, f"id={dep_id}", ip)
+    return {"status": "ok"}
+
+
+@router.get("/api/dependencies/impact/{service}")
+def api_impact_analysis(service: str, auth=Depends(_get_auth)):
+    """Return all services transitively dependent on the given service."""
+    affected = db.get_impact_analysis(service)
+    return {"service": service, "affected": affected, "count": len(affected)}
+
+
+@router.post("/api/dependencies/discover/{hostname}")
+async def api_discover_services(hostname: str, request: Request,
+                                auth=Depends(_require_admin)):
+    """Trigger discover_services command on a remote agent."""
+    username, _ = auth
+    ip = _client_ip(request)
+    cmd_id = secrets.token_hex(8)
+    cmd = {"id": cmd_id, "type": "discover_services", "params": {}}
+    # Try WebSocket delivery first
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            await ws.send_json({"commands": [cmd]})
+            delivered = True
+        except Exception:
+            pass
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+    db.record_command(cmd_id, hostname, "discover_services", {}, username)
+    db.audit_log("discover_services", username,
+                 f"host={hostname} id={cmd_id} ws={delivered}", ip)
+    return {"status": "sent" if delivered else "queued", "id": cmd_id}
+
+
+# ── Config drift / baseline endpoints ─────────────────────────────────────────
+@router.get("/api/baselines")
+def api_list_baselines(auth=Depends(_get_auth)):
+    """List all config baselines with latest drift status summary."""
+    return db.list_baselines()
+
+
+@router.post("/api/baselines")
+async def api_create_baseline(request: Request, auth=Depends(_require_admin)):
+    """Create a new config baseline."""
+    username, _ = auth
+    ip = _client_ip(request)
+    body = await _read_body(request)
+    path = (body.get("path") or "").strip()
+    expected_hash = (body.get("expected_hash") or "").strip()
+    agent_group = (body.get("agent_group") or "__all__").strip()
+    if not path:
+        raise HTTPException(400, "File path is required")
+    if not expected_hash:
+        raise HTTPException(400, "Expected hash is required")
+    baseline_id = db.create_baseline(path, expected_hash, agent_group=agent_group)
+    if baseline_id is None:
+        raise HTTPException(500, "Failed to create baseline")
+    db.audit_log("baseline_create", username,
+                 f"id={baseline_id} path={path} group={agent_group}", ip)
+    return {"status": "ok", "id": baseline_id}
+
+
+@router.delete("/api/baselines/{baseline_id}")
+async def api_delete_baseline(baseline_id: int, request: Request,
+                              auth=Depends(_require_admin)):
+    """Delete a config baseline and all its drift check history."""
+    username, _ = auth
+    ip = _client_ip(request)
+    ok = db.delete_baseline(baseline_id)
+    if not ok:
+        raise HTTPException(404, "Baseline not found")
+    db.audit_log("baseline_delete", username, f"id={baseline_id}", ip)
+    return {"status": "ok"}
+
+
+@router.post("/api/baselines/{baseline_id}/set-from/{hostname}")
+async def api_baseline_set_from_agent(baseline_id: int, hostname: str,
+                                      request: Request,
+                                      auth=Depends(_require_admin)):
+    """Set a baseline's expected hash from an agent's current file checksum.
+
+    Sends a file_checksum command to the agent and waits for the result,
+    then updates the baseline with the hash.
+    """
+    username, _ = auth
+    ip = _client_ip(request)
+    baseline = db.get_baseline(baseline_id)
+    if not baseline:
+        raise HTTPException(404, "Baseline not found")
+    # Send file_checksum command to the agent
+    cmd_id = secrets.token_hex(8)
+    cmd = {
+        "id": cmd_id,
+        "type": "file_checksum",
+        "params": {"path": baseline["path"], "algorithm": "sha256"},
+    }
+    delivered = False
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if ws:
+        try:
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": "file_checksum",
+                                "params": cmd["params"]})
+            delivered = True
+        except Exception:
+            pass
+    if not delivered:
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+    db.record_command(cmd_id, hostname, "file_checksum", cmd["params"], username)
+    # Poll for result (up to 15s)
+    import asyncio
+    deadline = time.time() + 15
+    agent_result = None
+    while time.time() < deadline:
+        with _agent_cmd_lock:
+            results = _agent_cmd_results.get(hostname, [])
+            for i, r in enumerate(results):
+                if isinstance(r, dict) and r.get("id") == cmd_id:
+                    agent_result = results.pop(i)
+                    break
+        if agent_result is not None:
+            break
+        await asyncio.sleep(0.5)
+    if agent_result is None:
+        raise HTTPException(504, "Agent did not respond in time")
+    if agent_result.get("status") != "ok":
+        raise HTTPException(502, agent_result.get("error", "Agent error"))
+    new_hash = agent_result.get("checksum", "")
+    if not new_hash:
+        raise HTTPException(502, "Agent returned empty checksum")
+    db.complete_command(cmd_id, agent_result)
+    db.update_baseline(baseline_id, new_hash)
+    db.audit_log("baseline_set_from_agent", username,
+                 f"id={baseline_id} host={hostname} hash={new_hash[:16]}...", ip)
+    return {"status": "ok", "expected_hash": new_hash}
+
+
+@router.post("/api/baselines/check")
+async def api_trigger_drift_check(request: Request, auth=Depends(_require_operator)):
+    """Trigger an immediate drift check across all baselines."""
+    username, _ = auth
+    ip = _client_ip(request)
+    from ..scheduler import drift_checker
+    import threading
+    threading.Thread(
+        target=drift_checker.run_check_now, daemon=True, name="drift-check-manual"
+    ).start()
+    db.audit_log("drift_check_trigger", username, "manual", ip)
+    return {"status": "ok", "message": "Drift check started"}
+
+
+@router.get("/api/baselines/{baseline_id}/results")
+def api_baseline_results(baseline_id: int, auth=Depends(_get_auth)):
+    """Get drift check results per agent for a specific baseline."""
+    baseline = db.get_baseline(baseline_id)
+    if not baseline:
+        raise HTTPException(404, "Baseline not found")
+    results = db.get_drift_results(baseline_id=baseline_id)
+    return {
+        "baseline": baseline,
+        "results": results,
+    }
+
+
+# ── AI / LLM endpoints ────────────────────────────────────────────────────────
+
+def _get_llm_client():
+    """Create an LLMClient from current settings. Returns None if not configured."""
+    from ..llm import LLMClient
+    cfg = read_yaml_settings()
+    if not cfg.get("llmEnabled"):
+        return None
+    return LLMClient(cfg)
+
+
+def _build_ai_context() -> str:
+    """Build ops context string for the LLM system prompt."""
+    from ..llm import build_ops_context
+    with _agent_data_lock:
+        snapshot = dict(_agent_data)
+    return build_ops_context(read_yaml_settings, db, snapshot, _AGENT_MAX_AGE)
+
+
+@router.get("/api/ai/status")
+def api_ai_status(auth=Depends(_get_auth)):
+    """Return AI/LLM configuration status."""
+    cfg = read_yaml_settings()
+    return {
+        "enabled": bool(cfg.get("llmEnabled")),
+        "provider": cfg.get("llmProvider", ""),
+        "model": cfg.get("llmModel", ""),
+    }
+
+
+@router.post("/api/ai/chat")
+async def api_ai_chat(request: Request, auth=Depends(_require_operator)):
+    """Send a message to the AI assistant with optional conversation history."""
+    from ..llm import extract_actions
+    client = _get_llm_client()
+    if not client:
+        raise HTTPException(503, "LLM not configured")
+    body = await _read_body(request)
+    message = body.get("message", "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+    history = body.get("history", [])
+    # Build messages list from history + current message
+    messages: list[dict] = []
+    for h in history[-20:]:  # Cap history at 20 turns
+        role = h.get("role", "user")
+        content = h.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
+    system = _build_ai_context()
+    try:
+        response = await client.chat(messages, system)
+        actions = extract_actions(response)
+        return {"response": response, "actions": actions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI chat error: %s", e)
+        raise HTTPException(502, f"LLM request failed: {e}")
+
+
+@router.post("/api/ai/analyze-alert/{alert_id}")
+async def api_ai_analyze_alert(alert_id: int, auth=Depends(_require_operator)):
+    """Ask the AI to analyze a specific alert."""
+    from ..llm import extract_actions
+    client = _get_llm_client()
+    if not client:
+        raise HTTPException(503, "LLM not configured")
+    # Fetch alert details
+    alerts = db.get_alert_history(limit=100)
+    alert = None
+    for a in alerts:
+        if a.get("id") == alert_id:
+            alert = a
+            break
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    prompt = (
+        f"Analyze this infrastructure alert and suggest remediation steps:\n\n"
+        f"**Rule:** {alert.get('rule_id', 'unknown')}\n"
+        f"**Severity:** {alert.get('severity', 'unknown')}\n"
+        f"**Message:** {alert.get('message', 'N/A')}\n"
+        f"**Time:** {alert.get('timestamp', 'unknown')}\n"
+        f"**Resolved:** {'Yes' if alert.get('resolved_at') else 'No'}\n\n"
+        f"What is likely causing this? What should the operator do? "
+        f"If a command can fix it, include it as [ACTION:cmd:host:params]."
+    )
+    system = _build_ai_context()
+    try:
+        response = await client.chat([{"role": "user", "content": prompt}], system)
+        actions = extract_actions(response)
+        return {"response": response, "actions": actions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI analyze-alert error: %s", e)
+        raise HTTPException(502, f"LLM request failed: {e}")
+
+
+@router.post("/api/ai/analyze-logs")
+async def api_ai_analyze_logs(request: Request, auth=Depends(_require_operator)):
+    """Ask the AI to analyze a log excerpt."""
+    from ..llm import extract_actions
+    client = _get_llm_client()
+    if not client:
+        raise HTTPException(503, "LLM not configured")
+    body = await _read_body(request)
+    logs = body.get("logs", "").strip()
+    if not logs:
+        raise HTTPException(400, "logs field is required")
+    # Truncate to ~8000 chars to stay within reasonable token limits
+    if len(logs) > 8000:
+        logs = logs[:8000] + "\n... (truncated)"
+    prompt = (
+        f"Analyze these log entries and identify any issues, errors, or anomalies. "
+        f"Explain what happened and suggest fixes.\n\n```\n{logs}\n```\n\n"
+        f"If a command can fix the issue, include it as [ACTION:cmd:host:params]."
+    )
+    system = _build_ai_context()
+    try:
+        response = await client.chat([{"role": "user", "content": prompt}], system)
+        actions = extract_actions(response)
+        return {"response": response, "actions": actions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI analyze-logs error: %s", e)
+        raise HTTPException(502, f"LLM request failed: {e}")
+
+
+@router.post("/api/ai/summarize-incident/{incident_id}")
+async def api_ai_summarize_incident(incident_id: int, auth=Depends(_require_operator)):
+    """Generate an AI summary/report for an incident."""
+    from ..llm import extract_actions
+    client = _get_llm_client()
+    if not client:
+        raise HTTPException(503, "LLM not configured")
+    incidents = db.get_incidents(limit=200, hours=168)
+    incident = None
+    for inc in incidents:
+        if inc.get("id") == incident_id:
+            incident = inc
+            break
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    prompt = (
+        f"Generate a brief incident report for the following event:\n\n"
+        f"**ID:** {incident.get('id')}\n"
+        f"**Severity:** {incident.get('severity', 'unknown')}\n"
+        f"**Source:** {incident.get('source', 'unknown')}\n"
+        f"**Title:** {incident.get('title', 'N/A')}\n"
+        f"**Details:** {incident.get('details', 'N/A')}\n"
+        f"**Status:** {'Resolved' if incident.get('resolved_at') else 'Open'}\n\n"
+        f"Include: root cause hypothesis, impact assessment, and recommended next steps. "
+        f"If a command can help, include it as [ACTION:cmd:host:params]."
+    )
+    system = _build_ai_context()
+    try:
+        response = await client.chat([{"role": "user", "content": prompt}], system)
+        actions = extract_actions(response)
+        return {"response": response, "actions": actions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI summarize-incident error: %s", e)
+        raise HTTPException(502, f"LLM request failed: {e}")
+
+
+@router.post("/api/ai/test")
+async def api_ai_test(auth=Depends(_require_admin)):
+    """Test the LLM connection by sending a simple prompt."""
+    client = _get_llm_client()
+    if not client:
+        raise HTTPException(503, "LLM not configured")
+    try:
+        response = await client.chat(
+            [{"role": "user", "content": "Reply with exactly: NOBA AI connection successful."}],
+            system="You are a connection test. Reply with exactly the text requested.",
+        )
+        return {"status": "ok", "response": response.strip()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI test error: %s", e)
+        raise HTTPException(502, f"LLM connection test failed: {e}")

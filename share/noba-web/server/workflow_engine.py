@@ -52,6 +52,11 @@ def _validate_auto_config(atype: str, config: dict) -> None:
         url = config.get("url", "")
         if not url or not url.startswith(("http://", "https://")):
             raise HTTPException(400, "HTTP step requires a valid URL")
+    elif atype == "agent_command":
+        if not config.get("hostname"):
+            raise HTTPException(400, "agent_command requires 'hostname' in config")
+        if not config.get("command"):
+            raise HTTPException(400, "agent_command requires 'command' in config")
 
 
 # ── Builder functions ─────────────────────────────────────────────────────────
@@ -182,6 +187,64 @@ def _build_auto_condition_process(config: dict) -> subprocess.Popen | None:
                             start_new_session=True)
 
 
+def _build_auto_agent_command_process(config: dict) -> subprocess.Popen | None:
+    """Execute an agent command via the agent store and return a process for status tracking.
+
+    Config keys: hostname (str), command (str), params (dict), timeout (int).
+    Supports hostname ``__all__`` for broadcast to all online agents.
+    """
+    from .agent_store import queue_agent_command_and_wait
+
+    hostname = config.get("hostname", "")
+    cmd_type = config.get("command", "")
+    params = config.get("params", {})
+    timeout = int(config.get("timeout", 30))
+
+    if not hostname or not cmd_type:
+        return None
+
+    result = queue_agent_command_and_wait(
+        hostname, cmd_type, params, timeout=timeout, queued_by="workflow",
+    )
+
+    if result is None:
+        logger.warning("agent_command %s on %s: timeout (no result)", cmd_type, hostname)
+        return subprocess.Popen(
+            ["bash", "-c", "echo 'agent_command timed out'; exit 1"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+
+    # For __all__ broadcasts, check if any host failed
+    if isinstance(result, dict) and result.get("__all__"):
+        results = result.get("results", {})
+        failures = [h for h, r in results.items() if r is None or r.get("status") == "error"]
+        if failures:
+            msg = f"agent_command {cmd_type} failed on: {', '.join(failures)}"
+            return subprocess.Popen(
+                ["bash", "-c", f"echo '{msg}'; exit 1"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+            )
+        msg = f"agent_command {cmd_type} succeeded on {len(results)} agents"
+        return subprocess.Popen(
+            ["bash", "-c", f"echo '{msg}'"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+
+    # Single-host result
+    status = result.get("status", "error")
+    if status == "error":
+        err = result.get("error", "unknown error")
+        return subprocess.Popen(
+            ["bash", "-c", f"echo 'agent_command error: {err}'; exit 1"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+
+    return subprocess.Popen(
+        ["bash", "-c", f"echo 'agent_command {cmd_type} on {hostname}: {status}'"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+
+
 # ── Builder registry ──────────────────────────────────────────────────────────
 
 _AUTO_BUILDERS = {
@@ -189,6 +252,7 @@ _AUTO_BUILDERS = {
     "service": _build_auto_service_process, "delay": _build_auto_delay_process,
     "http": _build_auto_http_process, "notify": _build_auto_notify_process,
     "condition": _build_auto_condition_process,
+    "agent_command": _build_auto_agent_command_process,
 }
 _AUTO_TYPES = ALLOWED_AUTO_TYPES  # from config
 

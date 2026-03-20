@@ -116,11 +116,59 @@ def _safe_eval(condition_str: str, flat: dict) -> bool:
     return _safe_eval_single(condition_str, flat)
 
 
+# ── Self-heal: agent_command helper ───────────────────────────────────────────
+def _execute_heal_agent_command(action_cfg: dict, rule_id: str) -> bool:
+    """Execute a self-healing action that sends a command to a remote agent."""
+    from .agent_store import queue_agent_command_and_wait
+
+    hostname = action_cfg.get("hostname", "")
+    cmd_type = action_cfg.get("command", "")
+    params = action_cfg.get("params", {})
+    timeout = int(action_cfg.get("timeout", 30))
+
+    if not hostname or not cmd_type:
+        logger.warning("Heal agent_command for rule %s: missing hostname or command", rule_id)
+        return False
+
+    try:
+        result = queue_agent_command_and_wait(
+            hostname, cmd_type, params, timeout=timeout, queued_by=f"heal:{rule_id}",
+        )
+        if result is None:
+            logger.warning("Heal agent_command %s on %s timed out for rule %s",
+                           cmd_type, hostname, rule_id)
+            return False
+
+        # For __all__ broadcasts
+        if isinstance(result, dict) and result.get("__all__"):
+            results = result.get("results", {})
+            failures = [h for h, r in results.items() if r is None or r.get("status") == "error"]
+            success = len(failures) == 0
+            logger.info("Heal agent_command %s broadcast: %d/%d succeeded for rule %s",
+                        cmd_type, len(results) - len(failures), len(results), rule_id)
+            return success
+
+        status = result.get("status", "error")
+        logger.info("Heal agent_command %s on %s: %s (rule %s)",
+                     cmd_type, hostname, status, rule_id)
+        return status != "error"
+    except Exception as e:
+        logger.error("Heal agent_command %s/%s failed: %s", cmd_type, hostname, e)
+        return False
+
+
 # ── Self-heal action executor ─────────────────────────────────────────────────
 def _execute_heal(action_cfg: dict, rule_id: str, read_settings_fn) -> bool:
     atype  = action_cfg.get("type", "")
-    target = action_cfg.get("target", "").strip()
-    if not atype or not target:
+    target = action_cfg.get("target", "").strip() if action_cfg.get("target") else ""
+    if not atype:
+        return False
+
+    # agent_command doesn't use 'target' — it uses hostname/command/params
+    if atype == "agent_command":
+        return _execute_heal_agent_command(action_cfg, rule_id)
+
+    if not target:
         return False
     try:
         if atype == "run":

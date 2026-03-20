@@ -241,6 +241,43 @@ def api_profile_sessions(auth=Depends(_get_auth)):
     return [s for s in all_sessions if s.get("username") == username]
 
 
+# ── /api/user/preferences (Feature 10: Multi-user Dashboard Views) ───────────
+@router.get("/api/user/preferences")
+def api_user_preferences_get(auth=Depends(_get_auth)):
+    """Get current user's dashboard preferences."""
+    username, _ = auth
+    result = db.get_user_preferences(username)
+    if not result:
+        return {"preferences": {}, "synced": False}
+    return {"preferences": result["preferences"], "updated_at": result["updated_at"], "synced": True}
+
+
+@router.put("/api/user/preferences")
+async def api_user_preferences_put(request: Request, auth=Depends(_get_auth)):
+    """Save current user's dashboard preferences."""
+    username, _ = auth
+    body = await _read_body(request)
+    prefs = body.get("preferences")
+    if prefs is None or not isinstance(prefs, dict):
+        raise HTTPException(400, "Missing or invalid 'preferences' object")
+    # Limit preferences size to prevent abuse (64 KB should be plenty)
+    import json as _json
+    if len(_json.dumps(prefs)) > 65536:
+        raise HTTPException(413, "Preferences too large")
+    ok = db.save_user_preferences(username, prefs)
+    if not ok:
+        raise HTTPException(500, "Failed to save preferences")
+    return {"status": "ok"}
+
+
+@router.delete("/api/user/preferences")
+def api_user_preferences_delete(auth=Depends(_get_auth)):
+    """Reset current user's preferences to defaults."""
+    username, _ = auth
+    db.delete_user_preferences(username)
+    return {"status": "ok"}
+
+
 # ── /api/admin/users ──────────────────────────────────────────────────────────
 @router.get("/api/admin/users")
 def api_users_get(auth=Depends(_require_admin)):

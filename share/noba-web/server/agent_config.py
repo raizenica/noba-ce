@@ -24,6 +24,11 @@ RISK_LEVELS: dict[str, str] = {
     "container_logs":   "low",
     "dns_lookup":       "low",
     "network_config":   "low",
+    "endpoint_check":   "low",
+    "follow_logs":      "low",
+    "stop_stream":      "low",
+    "get_stream":       "low",
+    "discover_services": "low",
     # Medium risk — controlled mutations with limited blast radius
     "restart_service":  "medium",
     "set_interval":     "medium",
@@ -302,6 +307,16 @@ def validate_command_params(cmd_type: str, params: dict) -> str | None:  # noqa:
                 return "Parameter 'interval' must not exceed 86400 seconds (24 h)"
         except (TypeError, ValueError):
             return "Parameter 'interval' must be an integer"
+
+    # ── Endpoint check ────────────────────────────────────────────────────────
+    elif cmd_type == "endpoint_check":
+        url = params.get("url", "")
+        if not url:
+            return "Parameter 'url' is required"
+        if not url.startswith(("http://", "https://")):
+            return "Parameter 'url' must start with http:// or https://"
+        if len(url) > 2048:
+            return "URL exceeds maximum length of 2048 characters"
 
     # ── uninstall_agent — requires explicit confirmation ───────────────────────
     elif cmd_type == "uninstall_agent":

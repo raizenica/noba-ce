@@ -6,50 +6,301 @@
     <title>NOBA Status</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0e17; color: #c8dff0; min-height: 100vh; }
-        .container { max-width: 640px; margin: 0 auto; padding: 2rem 1rem; }
-        h1 { font-size: 1.1rem; letter-spacing: .2em; text-transform: uppercase; margin-bottom: .5rem; }
-        .subtitle { font-size: .75rem; color: #4a7a9b; margin-bottom: 2rem; }
-        .overall { padding: 1rem; border-radius: 8px; margin-bottom: 2rem; text-align: center; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; font-size: .85rem; }
-        .overall.operational { background: rgba(0,230,118,.1); border: 1px solid rgba(0,230,118,.3); color: #00e676; }
-        .overall.degraded { background: rgba(255,179,0,.1); border: 1px solid rgba(255,179,0,.3); color: #ffb300; }
-        .overall.major_outage { background: rgba(255,23,68,.1); border: 1px solid rgba(255,23,68,.3); color: #ff1744; }
-        .service { display: flex; justify-content: space-between; align-items: center; padding: .75rem 0; border-bottom: 1px solid rgba(30,58,95,.4); }
-        .service:last-child { border-bottom: none; }
-        .svc-name { font-size: .85rem; text-transform: capitalize; }
-        .svc-status { font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; padding: .2rem .6rem; border-radius: 3px; }
-        .svc-status.operational { color: #00e676; background: rgba(0,230,118,.1); }
-        .svc-status.degraded { color: #ffb300; background: rgba(255,179,0,.1); }
-        .svc-status.unknown { color: #4a7a9b; background: rgba(74,122,155,.1); }
-        .footer { margin-top: 2rem; text-align: center; font-size: .65rem; color: #4a7a9b; }
-        .updated { font-size: .7rem; color: #4a7a9b; text-align: center; margin-top: .5rem; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #060a10; color: #c8dff0; min-height: 100vh;
+            line-height: 1.6;
+        }
+        .container { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+
+        /* Header */
+        .header { text-align: center; margin-bottom: 2rem; }
+        .logo { font-size: 1.4rem; font-weight: 800; letter-spacing: .25em; text-transform: uppercase; color: #00c8ff; }
+        .logo span { color: #c8dff0; }
+        .subtitle { font-size: .75rem; color: #4a7a9b; margin-top: .25rem; letter-spacing: .15em; text-transform: uppercase; }
+
+        /* Overall banner */
+        .overall {
+            padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 2rem;
+            text-align: center; font-weight: 700; letter-spacing: .1em;
+            text-transform: uppercase; font-size: .85rem;
+        }
+        .overall.operational { background: rgba(0,230,118,.08); border: 1px solid rgba(0,230,118,.25); color: #00e676; }
+        .overall.degraded { background: rgba(255,179,0,.08); border: 1px solid rgba(255,179,0,.25); color: #ffb300; }
+        .overall.major_outage { background: rgba(255,23,68,.08); border: 1px solid rgba(255,23,68,.25); color: #ff1744; }
+
+        /* Component groups */
+        .group-title {
+            font-size: .7rem; font-weight: 700; letter-spacing: .15em;
+            text-transform: uppercase; color: #4a7a9b; margin: 1.5rem 0 .5rem;
+        }
+        .component {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: .65rem .8rem; border-radius: 6px;
+            background: rgba(12,20,32,.6); margin-bottom: 2px;
+        }
+        .comp-name { font-size: .85rem; }
+        .comp-dot {
+            width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+            margin-right: .5rem; vertical-align: middle;
+        }
+        .comp-dot.operational { background: #00e676; box-shadow: 0 0 6px rgba(0,230,118,.4); }
+        .comp-dot.degraded { background: #ffb300; box-shadow: 0 0 6px rgba(255,179,0,.4); }
+        .comp-dot.unknown { background: #4a7a9b; }
+        .comp-dot.outage { background: #ff1744; box-shadow: 0 0 6px rgba(255,23,68,.4); }
+        .comp-status {
+            font-size: .7rem; font-weight: 600; letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .comp-status.operational { color: #00e676; }
+        .comp-status.degraded { color: #ffb300; }
+        .comp-status.unknown { color: #4a7a9b; }
+
+        /* Incidents */
+        .section-title {
+            font-size: .8rem; font-weight: 700; letter-spacing: .12em;
+            text-transform: uppercase; color: #c8dff0; margin: 2rem 0 .75rem;
+            padding-bottom: .4rem; border-bottom: 1px solid rgba(30,58,95,.5);
+        }
+        .incident {
+            background: rgba(12,20,32,.6); border-radius: 8px;
+            padding: 1rem; margin-bottom: .75rem;
+            border-left: 3px solid #4a7a9b;
+        }
+        .incident.minor { border-left-color: #ffb300; }
+        .incident.major { border-left-color: #ff9100; }
+        .incident.critical { border-left-color: #ff1744; }
+        .incident-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: .5rem;
+        }
+        .incident-title { font-size: .85rem; font-weight: 700; }
+        .incident-badge {
+            font-size: .6rem; font-weight: 700; letter-spacing: .08em;
+            text-transform: uppercase; padding: .15rem .5rem; border-radius: 3px;
+        }
+        .incident-badge.investigating { background: rgba(255,179,0,.15); color: #ffb300; }
+        .incident-badge.identified { background: rgba(0,200,255,.15); color: #00c8ff; }
+        .incident-badge.monitoring { background: rgba(0,230,118,.15); color: #00e676; }
+        .incident-badge.resolved { background: rgba(74,122,155,.15); color: #4a7a9b; }
+        .incident-time { font-size: .7rem; color: #4a7a9b; margin-bottom: .4rem; }
+        .update-timeline { margin-top: .5rem; padding-left: 1rem; border-left: 1px solid rgba(30,58,95,.4); }
+        .update-item { margin-bottom: .5rem; }
+        .update-msg { font-size: .8rem; color: #c8dff0; }
+        .update-meta { font-size: .65rem; color: #4a7a9b; }
+
+        /* Uptime chart */
+        .uptime-chart {
+            display: flex; gap: 1px; align-items: flex-end;
+            height: 32px; margin-top: .5rem;
+        }
+        .uptime-bar {
+            flex: 1; min-width: 2px; border-radius: 1px; cursor: pointer;
+            position: relative; height: 100%;
+        }
+        .uptime-bar.none { background: #00e676; opacity: .6; }
+        .uptime-bar.minor { background: #ffb300; opacity: .8; }
+        .uptime-bar.major { background: #ff9100; opacity: .8; }
+        .uptime-bar.critical { background: #ff1744; opacity: .8; }
+        .uptime-bar:hover { opacity: 1; }
+        .uptime-labels {
+            display: flex; justify-content: space-between;
+            font-size: .6rem; color: #4a7a9b; margin-top: .25rem;
+        }
+        .uptime-tooltip {
+            display: none; position: absolute; bottom: 100%; left: 50%;
+            transform: translateX(-50%); background: #0c1420; border: 1px solid #1e3a5f;
+            color: #c8dff0; font-size: .65rem; padding: .3rem .5rem;
+            border-radius: 4px; white-space: nowrap; z-index: 10;
+            pointer-events: none;
+        }
+        .uptime-bar:hover .uptime-tooltip { display: block; }
+
+        /* Footer */
+        .footer {
+            margin-top: 2.5rem; text-align: center;
+            font-size: .65rem; color: #4a7a9b;
+        }
+        .updated { font-size: .7rem; color: #4a7a9b; text-align: center; margin-top: .3rem; }
+        .no-incidents { font-size: .8rem; color: #4a7a9b; text-align: center; padding: 1rem; }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .container { padding: 1rem .75rem; }
+            .uptime-bar { min-width: 1px; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>NOBA // Status</h1>
-        <p class="subtitle">System Status Page</p>
+        <div class="header">
+            <div class="logo">NOBA <span>//</span> Status</div>
+            <div class="subtitle">System Status Page</div>
+        </div>
+
         <div id="overall" class="overall operational">Loading...</div>
-        <div id="services"></div>
+
+        <div id="components"></div>
+
+        <div id="incidents-section" style="display:none">
+            <div class="section-title">Active Incidents</div>
+            <div id="incidents"></div>
+        </div>
+
+        <div id="uptime-section">
+            <div class="section-title">90-Day Uptime</div>
+            <div id="uptime-chart" class="uptime-chart"></div>
+            <div class="uptime-labels">
+                <span id="uptime-start">--</span>
+                <span>Today</span>
+            </div>
+        </div>
+
+        <div id="past-incidents-section" style="display:none">
+            <div class="section-title">Recent Incidents</div>
+            <div id="past-incidents"></div>
+        </div>
+
         <div id="updated" class="updated"></div>
         <div class="footer">Powered by NOBA Command Center</div>
     </div>
+
     <script>
+        function esc(s) {
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function fmtDate(ts) {
+            if (!ts) return '';
+            return new Date(ts * 1000).toLocaleString();
+        }
+
+        function relTime(ts) {
+            if (!ts) return '';
+            var diff = Math.floor(Date.now() / 1000) - ts;
+            if (diff < 60) return 'just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }
+
+        function renderComponents(components) {
+            var el = document.getElementById('components');
+            if (!components || components.length === 0) {
+                el.innerHTML = '';
+                return;
+            }
+            var groups = {};
+            components.forEach(function(c) {
+                var g = c.group_name || 'Default';
+                if (!groups[g]) groups[g] = [];
+                groups[g].push(c);
+            });
+            var html = '';
+            Object.keys(groups).forEach(function(g) {
+                html += '<div class="group-title">' + esc(g) + '</div>';
+                groups[g].forEach(function(c) {
+                    html += '<div class="component">' +
+                        '<span class="comp-name"><span class="comp-dot ' + c.status + '"></span>' + esc(c.name) + '</span>' +
+                        '<span class="comp-status ' + c.status + '">' + c.status + '</span>' +
+                        '</div>';
+                });
+            });
+            el.innerHTML = html;
+        }
+
+        function renderIncidents(incidents, targetId) {
+            var el = document.getElementById(targetId);
+            if (!incidents || incidents.length === 0) {
+                el.innerHTML = '<div class="no-incidents">No incidents to report.</div>';
+                return;
+            }
+            var html = '';
+            incidents.forEach(function(inc) {
+                html += '<div class="incident ' + esc(inc.severity) + '">';
+                html += '<div class="incident-header">';
+                html += '<span class="incident-title">' + esc(inc.title) + '</span>';
+                html += '<span class="incident-badge ' + esc(inc.status) + '">' + esc(inc.status) + '</span>';
+                html += '</div>';
+                html += '<div class="incident-time">' + fmtDate(inc.created_at) +
+                    (inc.resolved_at ? ' — Resolved ' + fmtDate(inc.resolved_at) : '') + '</div>';
+                if (inc.updates && inc.updates.length > 0) {
+                    html += '<div class="update-timeline">';
+                    inc.updates.forEach(function(u) {
+                        html += '<div class="update-item">';
+                        html += '<div class="update-msg">' + esc(u.message) + '</div>';
+                        html += '<div class="update-meta">' + esc(u.status) + ' — ' + relTime(u.created_at) + '</div>';
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+            el.innerHTML = html;
+        }
+
+        function renderUptime(history) {
+            var el = document.getElementById('uptime-chart');
+            if (!history || history.length === 0) {
+                el.innerHTML = '';
+                return;
+            }
+            var html = '';
+            history.forEach(function(d) {
+                var sev = d.worst_severity || 'none';
+                var tip = d.date + ': ' + (d.incidents === 0 ? 'No incidents' : d.incidents + ' incident(s)');
+                html += '<div class="uptime-bar ' + sev + '" title="' + esc(tip) + '">' +
+                    '<div class="uptime-tooltip">' + esc(tip) + '</div></div>';
+            });
+            el.innerHTML = html;
+            if (history.length > 0) {
+                document.getElementById('uptime-start').textContent = history[0].date;
+            }
+        }
+
         async function refresh() {
             try {
-                const r = await fetch('/api/status/public');
-                const d = await r.json();
-                const el = document.getElementById('overall');
+                var r = await fetch('/api/status/public');
+                var d = await r.json();
+
+                var el = document.getElementById('overall');
                 el.className = 'overall ' + d.overall;
-                el.textContent = d.overall === 'operational' ? 'All Systems Operational' :
-                    d.overall === 'degraded' ? 'Partial System Degradation' : 'Major Outage';
-                const sEl = document.getElementById('services');
-                sEl.innerHTML = (d.services || []).map(s =>
-                    '<div class="service"><span class="svc-name">' + s.name + '</span><span class="svc-status ' + s.status + '">' + s.status + '</span></div>'
-                ).join('');
+                if (d.overall === 'operational') el.textContent = 'All Systems Operational';
+                else if (d.overall === 'degraded') el.textContent = 'Partial System Degradation';
+                else el.textContent = 'Major Outage';
+
+                renderComponents(d.components || d.services || []);
+
+                var activeInc = d.active_incidents || [];
+                if (activeInc.length > 0) {
+                    document.getElementById('incidents-section').style.display = 'block';
+                    renderIncidents(activeInc, 'incidents');
+                } else {
+                    document.getElementById('incidents-section').style.display = 'none';
+                }
+
+                renderUptime(d.uptime_history || []);
                 document.getElementById('updated').textContent = 'Updated: ' + new Date(d.timestamp * 1000).toLocaleTimeString();
-            } catch(e) { document.getElementById('overall').textContent = 'Unable to fetch status'; }
+            } catch(e) {
+                document.getElementById('overall').textContent = 'Unable to fetch status';
+            }
+
+            // Fetch past incidents separately
+            try {
+                var r2 = await fetch('/api/status/incidents');
+                var d2 = await r2.json();
+                var resolved = (d2.incidents || []).filter(function(i) { return i.resolved_at; }).slice(0, 10);
+                if (resolved.length > 0) {
+                    document.getElementById('past-incidents-section').style.display = 'block';
+                    renderIncidents(resolved, 'past-incidents');
+                } else {
+                    document.getElementById('past-incidents-section').style.display = 'none';
+                }
+            } catch(e) { /* ignore */ }
         }
+
         refresh();
         setInterval(refresh, 30000);
     </script>

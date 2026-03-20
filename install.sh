@@ -502,7 +502,7 @@ fi
 # 4. Web dashboard
 header "Installing Web Dashboard"
 
-for f in server.py index.html manifest.json service-worker.js; do
+for f in server.py index.html status.html manifest.json service-worker.js; do
     src="$SCRIPT_DIR/share/noba-web/$f"
     dst="$LIBEXEC_DIR/web/$f"
     if [[ -f "$src" ]]; then

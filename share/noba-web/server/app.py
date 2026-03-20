@@ -113,6 +113,10 @@ async def lifespan(app: FastAPI):
     fs_watcher.start()
     from .scheduler import rss_watcher
     rss_watcher.start()
+    from .scheduler import endpoint_checker
+    endpoint_checker.start()
+    from .scheduler import drift_checker
+    drift_checker.start()
     db.catchup_rollups()
     # Load persisted agents (show as offline until they report)
     from .agent_store import _agent_data, _agent_data_lock
@@ -137,6 +141,8 @@ async def lifespan(app: FastAPI):
     yield
     _transfer_cleanup_task.cancel()
     rss_watcher.stop()
+    endpoint_checker.stop()
+    drift_checker.stop()
     from .scheduler import fs_watcher as _fw
     _fw.stop()
     scheduler.stop()
@@ -166,7 +172,7 @@ async def lifespan(app: FastAPI):
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Noba Command Center", version=VERSION, lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="Noba Command Center", version=VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url="/api/redoc")
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _cors_origins = os.environ.get("NOBA_CORS_ORIGINS", "").split(",")
@@ -181,11 +187,16 @@ app.add_middleware(
 
 
 # ── Security headers middleware ───────────────────────────────────────────────
+_DOCS_PATHS = ("/api/docs", "/api/redoc", "/openapi.json")
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
-    for k, v in SECURITY_HEADERS.items():
-        response.headers[k] = v
+    # Skip strict CSP for Swagger/ReDoc (they load external CSS/JS)
+    if not request.url.path.startswith(_DOCS_PATHS):
+        for k, v in SECURITY_HEADERS.items():
+            response.headers[k] = v
     return response
 
 

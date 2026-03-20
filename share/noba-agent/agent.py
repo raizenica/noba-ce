@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -822,6 +823,143 @@ def _cmd_package_updates(params: dict, _ctx: dict) -> dict:
     return {"status": "error", "error": "No supported package manager found"}
 
 
+# ── Live log streaming ───────────────────────────────────────────────────────
+
+# Active stream processes keyed by cmd_id
+_active_streams: dict[str, subprocess.Popen] = {}
+_active_streams_lock = threading.Lock()
+# Buffered output lines keyed by cmd_id (list of strings)
+_stream_buffers: dict[str, list[str]] = {}
+_stream_buffers_lock = threading.Lock()
+# Max lines kept in buffer per stream (older lines are dropped)
+_STREAM_BUFFER_MAX = 500
+
+
+def _stream_reader(cmd_id: str, proc: subprocess.Popen) -> None:
+    """Background thread: reads lines from a Popen stdout and buffers them."""
+    try:
+        for raw_line in iter(proc.stdout.readline, ""):
+            if not raw_line:
+                break
+            line = raw_line.rstrip("\n")
+            with _stream_buffers_lock:
+                buf = _stream_buffers.setdefault(cmd_id, [])
+                buf.append(line)
+                # Trim buffer to keep memory bounded
+                if len(buf) > _STREAM_BUFFER_MAX:
+                    _stream_buffers[cmd_id] = buf[-_STREAM_BUFFER_MAX:]
+    except (OSError, ValueError):
+        pass
+    finally:
+        # Clean up when process ends
+        with _active_streams_lock:
+            _active_streams.pop(cmd_id, None)
+
+
+def _cmd_follow_logs(params: dict, ctx: dict) -> dict:
+    """Start streaming journalctl -f output. Returns immediately; lines buffer in background."""
+    import re
+    unit = params.get("unit", "")
+    priority = params.get("priority", "")
+    lines = min(int(params.get("lines", 50)), 500)
+    cmd_id = ctx.get("_cmd_id", ctx.get("_current_cmd_id", ""))
+    if not cmd_id:
+        return {"status": "error", "error": "No command ID provided"}
+
+    cmd = ["journalctl", "-f", "--no-pager", "-n", str(lines)]
+    if unit:
+        if not re.match(r'^[a-zA-Z0-9@._-]+$', unit):
+            return {"status": "error", "error": "Invalid unit name"}
+        cmd.extend(["-u", unit])
+    if priority:
+        if not re.match(r'^[a-zA-Z0-9]+$', priority):
+            return {"status": "error", "error": "Invalid priority"}
+        cmd.extend(["-p", priority])
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except FileNotFoundError:
+        return {"status": "error", "error": "journalctl not found"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    with _active_streams_lock:
+        _active_streams[cmd_id] = proc
+    with _stream_buffers_lock:
+        _stream_buffers[cmd_id] = []
+
+    t = threading.Thread(target=_stream_reader, args=(cmd_id, proc), daemon=True)
+    t.start()
+
+    return {"status": "ok", "stream_id": cmd_id, "message": "Log stream started"}
+
+
+def _cmd_stop_stream(params: dict, _ctx: dict) -> dict:
+    """Stop a running log stream by its stream_id (the cmd_id of the follow_logs command)."""
+    stream_id = params.get("stream_id", "")
+    if not stream_id:
+        return {"status": "error", "error": "No stream_id provided"}
+
+    with _active_streams_lock:
+        proc = _active_streams.pop(stream_id, None)
+    if proc is None:
+        return {"status": "error", "error": "Stream not found or already stopped"}
+
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    # Clean up buffer
+    with _stream_buffers_lock:
+        _stream_buffers.pop(stream_id, None)
+
+    return {"status": "ok", "message": f"Stream {stream_id} stopped"}
+
+
+def _cmd_get_stream(params: dict, _ctx: dict) -> dict:
+    """Retrieve buffered stream lines and flush them."""
+    stream_id = params.get("stream_id", "")
+    if not stream_id:
+        return {"status": "error", "error": "No stream_id provided"}
+
+    with _stream_buffers_lock:
+        lines = _stream_buffers.get(stream_id, [])
+        # Flush after reading
+        _stream_buffers[stream_id] = []
+
+    # Check if stream is still active
+    with _active_streams_lock:
+        active = stream_id in _active_streams
+
+    return {"status": "ok", "lines": lines, "active": active}
+
+
+def collect_stream_data() -> dict[str, list[str]]:
+    """Collect and flush buffered lines from all active streams."""
+    data = {}
+    with _stream_buffers_lock:
+        for stream_id in list(_stream_buffers):
+            lines = _stream_buffers.get(stream_id, [])
+            if lines:
+                data[stream_id] = lines[:]
+                _stream_buffers[stream_id] = []
+    return data
+
+
+def has_active_streams() -> bool:
+    """Check if there are any active stream processes running."""
+    with _active_streams_lock:
+        return len(_active_streams) > 0
+
+
 # ── New command handlers (v2.0) ──────────────────────────────────────────────
 
 # -- System commands ----------------------------------------------------------
@@ -1492,6 +1630,218 @@ def _cmd_file_push(params: dict, ctx: dict) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def _cmd_endpoint_check(params: dict, _ctx: dict) -> dict:
+    """HTTP health check with optional TLS certificate inspection."""
+    import ssl
+    import urllib.parse
+
+    url = params.get("url", "")
+    if not url:
+        return {"status": "error", "error": "No URL provided"}
+    method = params.get("method", "GET").upper()
+    if method not in ("GET", "HEAD"):
+        method = "GET"
+    timeout = min(params.get("timeout", 10), 30)
+
+    result: dict = {"status": "ok"}
+    start = time.time()
+
+    try:
+        req = urllib.request.Request(url, method=method)
+        req.add_header("User-Agent", f"NOBA-Agent/{VERSION}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = resp.status
+            elapsed_ms = int((time.time() - start) * 1000)
+            result["status_code"] = status_code
+            result["response_ms"] = elapsed_ms
+    except urllib.error.HTTPError as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status_code"] = e.code
+        result["response_ms"] = elapsed_ms
+    except urllib.error.URLError as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status"] = "error"
+        result["error"] = str(e.reason)
+        result["response_ms"] = elapsed_ms
+        result["status_code"] = 0
+        return result
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status"] = "error"
+        result["error"] = str(e)
+        result["response_ms"] = elapsed_ms
+        result["status_code"] = 0
+        return result
+
+    # Extract TLS cert info for HTTPS URLs
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https":
+        try:
+            hostname = parsed.hostname or ""
+            port = parsed.port or 443
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                server_hostname=hostname,
+            ) as ssock:
+                ssock.settimeout(timeout)
+                ssock.connect((hostname, port))
+                cert = ssock.getpeercert()
+            if cert:
+                import datetime
+                not_after = cert.get("notAfter", "")
+                if not_after:
+                    # Format: 'Sep  9 12:00:00 2025 GMT'
+                    expiry_dt = datetime.datetime.strptime(
+                        not_after, "%b %d %H:%M:%S %Y %Z"
+                    )
+                    days_left = (expiry_dt - datetime.datetime.utcnow()).days
+                    result["cert_expiry_days"] = days_left
+                issuer = dict(x[0] for x in cert.get("issuer", ()))
+                result["cert_issuer"] = issuer.get("organizationName", "")
+        except Exception:
+            # TLS cert extraction is best-effort; don't fail the check
+            pass
+
+    return result
+
+
+def _cmd_discover_services(_params: dict, _ctx: dict) -> dict:
+    """Discover running services, listening ports, and established connections.
+
+    Uses /proc/net/tcp + ss for port scanning and systemctl for unit
+    dependencies.  Returns a service list with ports and connections.
+    """
+    services: list[dict] = []
+
+    # 1. Listening ports via ss -tlnp
+    try:
+        result = subprocess.run(
+            ["ss", "-tlnp"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                local_addr = parts[3]
+                # Extract port from addr:port or [::]:port
+                if "]:" in local_addr:
+                    port_str = local_addr.rsplit(":", 1)[-1]
+                elif ":" in local_addr:
+                    port_str = local_addr.rsplit(":", 1)[-1]
+                else:
+                    continue
+                try:
+                    port = int(port_str)
+                except (ValueError, TypeError):
+                    continue
+                # Extract process name from users:(("name",pid=...,...))
+                proc_name = ""
+                for p in parts:
+                    if "users:" in p:
+                        # Format: users:(("sshd",pid=1234,fd=3))
+                        start = p.find('(("')
+                        if start >= 0:
+                            end = p.find('"', start + 3)
+                            if end >= 0:
+                                proc_name = p[start + 3:end]
+                        break
+                svc_name = proc_name or f"port-{port}"
+                # Avoid duplicates
+                existing = next((s for s in services if s["name"] == svc_name), None)
+                if existing:
+                    if port not in existing.get("ports", []):
+                        existing.setdefault("ports", []).append(port)
+                else:
+                    services.append({
+                        "name": svc_name,
+                        "port": port,
+                        "ports": [port],
+                        "connections": [],
+                    })
+    except Exception:
+        pass  # ss not available
+
+    # 2. Established connections via ss -tnp
+    try:
+        result = subprocess.run(
+            ["ss", "-tnp"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                state = parts[0]
+                if state != "ESTAB":
+                    continue
+                local_addr = parts[3]
+                peer_addr = parts[4]
+                # Extract local port
+                local_port_str = local_addr.rsplit(":", 1)[-1] if ":" in local_addr else ""
+                try:
+                    local_port = int(local_port_str)
+                except (ValueError, TypeError):
+                    continue
+                # Extract remote host:port
+                if "]:" in peer_addr:
+                    remote_host = peer_addr[:peer_addr.rfind(":")]
+                    remote_port_str = peer_addr.rsplit(":", 1)[-1]
+                elif ":" in peer_addr:
+                    remote_host = peer_addr.rsplit(":", 1)[0]
+                    remote_port_str = peer_addr.rsplit(":", 1)[-1]
+                else:
+                    continue
+                try:
+                    remote_port = int(remote_port_str)
+                except (ValueError, TypeError):
+                    continue
+                # Find matching service by local port
+                for svc in services:
+                    if local_port in svc.get("ports", [svc.get("port")]):
+                        conn_entry = {
+                            "remote_host": remote_host,
+                            "remote_port": remote_port,
+                        }
+                        if conn_entry not in svc["connections"]:
+                            svc["connections"].append(conn_entry)
+                        break
+    except Exception:
+        pass
+
+    # 3. Systemd unit dependencies (if available)
+    if _HAS_SYSTEMD:
+        try:
+            result = subprocess.run(
+                ["systemctl", "list-units", "--type=service", "--state=running",
+                 "--no-pager", "--no-legend", "--plain"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if parts:
+                        unit_name = parts[0].replace(".service", "")
+                        existing = next(
+                            (s for s in services if s["name"] == unit_name),
+                            None,
+                        )
+                        if not existing:
+                            services.append({
+                                "name": unit_name,
+                                "port": 0,
+                                "ports": [],
+                                "connections": [],
+                            })
+        except Exception:
+            pass
+
+    return {"status": "ok", "services": services}
+
+
 def execute_commands(commands: list, ctx: dict) -> list:
     """Execute a list of commands and return results."""
     results = []
@@ -1536,11 +1886,21 @@ def execute_commands(commands: list, ctx: dict) -> list:
         "file_push": _cmd_file_push,
         # Agent management
         "uninstall_agent": _cmd_uninstall_agent,
+        # Endpoint monitoring
+        "endpoint_check": _cmd_endpoint_check,
+        # Live log streaming
+        "follow_logs": _cmd_follow_logs,
+        "stop_stream": _cmd_stop_stream,
+        "get_stream": _cmd_get_stream,
+        # Service discovery
+        "discover_services": _cmd_discover_services,
     }
     for cmd in commands[:20]:  # Max 20 commands per cycle
         cmd_type = cmd.get("type", "")
         cmd_id = cmd.get("id", "")
         params = cmd.get("params", {})
+        # Pass cmd_id into context for streaming commands
+        ctx["_cmd_id"] = cmd_id
         handler = handlers.get(cmd_type)
         if handler:
             try:
@@ -1704,6 +2064,10 @@ def main():
             if cmd_results:
                 metrics["_cmd_results"] = cmd_results
                 cmd_results = []
+            # Attach any buffered stream data
+            stream_data = collect_stream_data()
+            if stream_data:
+                metrics["_stream_data"] = stream_data
 
             if args.dry_run:
                 print(json.dumps(metrics, indent=2))
@@ -1734,6 +2098,9 @@ def main():
             if consecutive_failures > 3:
                 backoff = min(interval * (2 ** min(consecutive_failures - 3, 5)), max_backoff)
                 time.sleep(backoff)
+            elif has_active_streams():
+                # When streaming logs, report every 2 seconds for near-real-time delivery
+                time.sleep(2)
             else:
                 time.sleep(interval)
 

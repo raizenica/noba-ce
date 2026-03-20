@@ -323,7 +323,405 @@ class RSSFeedWatcher:
             logger.warning("RSS trigger submit failed: %s", exc)
 
 
+def _run_endpoint_check(monitor: dict) -> dict:
+    """Execute an endpoint check locally (server-side) or via agent.
+
+    Returns the monitor dict with updated status fields.
+    """
+    import socket
+    import ssl
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = monitor["url"]
+    method = monitor.get("method", "GET")
+    timeout = monitor.get("timeout", 10)
+    expected_status = monitor.get("expected_status", 200)
+    agent_hostname = monitor.get("agent_hostname")
+
+    # If an agent is assigned, dispatch via agent command
+    if agent_hostname:
+        return _dispatch_agent_endpoint_check(monitor)
+
+    # Run locally on the server
+    result: dict = {}
+    start = time.time()
+
+    try:
+        req = urllib.request.Request(url, method=method)
+        req.add_header("User-Agent", "NOBA-Server/1.0")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = resp.status
+            elapsed_ms = int((time.time() - start) * 1000)
+            result["status_code"] = status_code
+            result["response_ms"] = elapsed_ms
+    except urllib.error.HTTPError as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status_code"] = e.code
+        result["response_ms"] = elapsed_ms
+    except urllib.error.URLError as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status_code"] = 0
+        result["response_ms"] = elapsed_ms
+        result["error"] = str(e.reason)
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        result["status_code"] = 0
+        result["response_ms"] = elapsed_ms
+        result["error"] = str(e)
+
+    # Determine status
+    code = result.get("status_code", 0)
+    if code == 0:
+        status = "down"
+    elif code == expected_status:
+        status = "up"
+    elif 200 <= code < 400:
+        status = "degraded"
+    else:
+        status = "down"
+
+    # TLS cert check
+    cert_expiry_days = None
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https" and code > 0:
+        try:
+            hostname = parsed.hostname or ""
+            port = parsed.port or 443
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                server_hostname=hostname,
+            ) as ssock:
+                ssock.settimeout(timeout)
+                ssock.connect((hostname, port))
+                cert = ssock.getpeercert()
+            if cert:
+                import datetime as _dt
+                not_after = cert.get("notAfter", "")
+                if not_after:
+                    expiry_dt = _dt.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                    cert_expiry_days = (expiry_dt - _dt.datetime.utcnow()).days
+        except Exception:
+            pass
+
+    # Store result
+    db.record_endpoint_check(
+        monitor["id"],
+        status=status,
+        response_ms=result.get("response_ms"),
+        status_code=result.get("status_code"),
+        cert_expiry_days=cert_expiry_days,
+        error=result.get("error"),
+    )
+
+    # Record response_ms as a metric for trending
+    try:
+        now_ts = int(time.time())
+        metric_name = f"endpoint_ms:{monitor['name']}"
+        if result.get("response_ms") is not None:
+            db.insert_metrics([(now_ts, metric_name, float(result["response_ms"]), None)])
+    except Exception:
+        pass
+
+    return {
+        "last_status": status,
+        "last_response_ms": result.get("response_ms"),
+        "status_code": result.get("status_code"),
+        "cert_expiry_days": cert_expiry_days,
+        "error": result.get("error"),
+    }
+
+
+def _dispatch_agent_endpoint_check(monitor: dict) -> dict:
+    """Send endpoint_check command to an agent and process the result."""
+    from .agent_store import _agent_cmd_lock, _agent_cmd_results, _agent_commands
+
+    import uuid
+    cmd_id = str(uuid.uuid4())
+    hostname = monitor["agent_hostname"]
+    cmd = {
+        "id": cmd_id,
+        "type": "endpoint_check",
+        "params": {
+            "url": monitor["url"],
+            "method": monitor.get("method", "GET"),
+            "timeout": monitor.get("timeout", 10),
+        },
+    }
+    with _agent_cmd_lock:
+        _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, "endpoint_check", cmd["params"], "scheduler")
+
+    # Poll for result (up to timeout + 5s)
+    deadline = time.time() + monitor.get("timeout", 10) + 5
+    agent_result = None
+    while time.time() < deadline:
+        with _agent_cmd_lock:
+            if cmd_id in _agent_cmd_results.get(hostname, {}):
+                agent_result = _agent_cmd_results[hostname].pop(cmd_id)
+                break
+        time.sleep(0.5)
+
+    if agent_result is None:
+        # Timed out waiting for agent
+        db.record_endpoint_check(
+            monitor["id"], status="down", response_ms=None,
+            error="Agent did not respond in time",
+        )
+        return {"last_status": "down", "error": "Agent timeout"}
+
+    db.complete_command(cmd_id, agent_result)
+
+    # Interpret agent result
+    expected_status = monitor.get("expected_status", 200)
+    code = agent_result.get("status_code", 0)
+    if agent_result.get("status") == "error" or code == 0:
+        status = "down"
+    elif code == expected_status:
+        status = "up"
+    elif 200 <= code < 400:
+        status = "degraded"
+    else:
+        status = "down"
+
+    cert_expiry_days = agent_result.get("cert_expiry_days")
+
+    db.record_endpoint_check(
+        monitor["id"],
+        status=status,
+        response_ms=agent_result.get("response_ms"),
+        status_code=code,
+        cert_expiry_days=cert_expiry_days,
+        error=agent_result.get("error"),
+    )
+
+    # Record metric
+    try:
+        now_ts = int(time.time())
+        metric_name = f"endpoint_ms:{monitor['name']}"
+        if agent_result.get("response_ms") is not None:
+            db.insert_metrics([(now_ts, metric_name, float(agent_result["response_ms"]), None)])
+    except Exception:
+        pass
+
+    return {
+        "last_status": status,
+        "last_response_ms": agent_result.get("response_ms"),
+        "status_code": code,
+        "cert_expiry_days": cert_expiry_days,
+        "error": agent_result.get("error"),
+    }
+
+
+class EndpointChecker:
+    """Background thread that runs endpoint checks every 60 seconds."""
+
+    def __init__(self) -> None:
+        self._shutdown = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._shutdown.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="endpoint-checker")
+        self._thread.start()
+        logger.info("Endpoint checker started")
+
+    def stop(self) -> None:
+        self._shutdown.set()
+        if self._thread:
+            self._thread.join(timeout=10)
+
+    def _loop(self) -> None:
+        # Initial delay to let the app start
+        if self._shutdown.wait(10):
+            return
+        while not self._shutdown.is_set():
+            try:
+                self._tick()
+            except Exception as e:
+                logger.error("Endpoint checker tick error: %s", e)
+            self._shutdown.wait(60)
+
+    def _tick(self) -> None:
+        due = db.get_due_endpoint_monitors()
+        if not due:
+            return
+        logger.debug("Endpoint checker: %d monitors due", len(due))
+        for monitor in due:
+            try:
+                result = _run_endpoint_check(monitor)
+                # Check for cert expiry alerts
+                cert_days = result.get("cert_expiry_days")
+                notify_days = monitor.get("notify_cert_days", 14)
+                if cert_days is not None and cert_days <= notify_days:
+                    db.insert_alert_history(
+                        f"cert_expiry:{monitor['name']}",
+                        "warning" if cert_days > 7 else "critical",
+                        f"Certificate for {monitor['name']} ({monitor['url']}) "
+                        f"expires in {cert_days} day(s)",
+                    )
+                # Check for endpoint down alerts
+                if result.get("last_status") == "down":
+                    db.insert_alert_history(
+                        f"endpoint_down:{monitor['name']}",
+                        "critical",
+                        f"Endpoint {monitor['name']} ({monitor['url']}) is DOWN"
+                        + (f": {result.get('error', '')}" if result.get("error") else ""),
+                    )
+                elif result.get("last_status") == "up":
+                    # Resolve any existing alert for this endpoint
+                    db.resolve_alert(f"endpoint_down:{monitor['name']}")
+            except Exception as e:
+                logger.error("Endpoint check failed for %s: %s", monitor.get("name"), e)
+
+
+class DriftChecker:
+    """Background thread that checks config baselines against agents every 5 minutes."""
+
+    def __init__(self) -> None:
+        self._shutdown = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._shutdown.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="drift-checker")
+        self._thread.start()
+        logger.info("Drift checker started")
+
+    def stop(self) -> None:
+        self._shutdown.set()
+        if self._thread:
+            self._thread.join(timeout=10)
+
+    def _loop(self) -> None:
+        # Initial delay to let agents connect
+        if self._shutdown.wait(30):
+            return
+        while not self._shutdown.is_set():
+            try:
+                self._tick()
+            except Exception as e:
+                logger.error("Drift checker tick error: %s", e)
+            self._shutdown.wait(300)  # Every 5 minutes
+
+    def _tick(self) -> None:
+        baselines = db.list_baselines()
+        if not baselines:
+            return
+        from .agent_store import (
+            _agent_cmd_lock, _agent_cmd_results, _agent_commands,
+            _agent_data, _agent_data_lock, _agent_websockets, _agent_ws_lock,
+        )
+        # Build list of online agents
+        now_ts = time.time()
+        with _agent_data_lock:
+            online_agents = [
+                h for h, d in _agent_data.items()
+                if (now_ts - d.get("_received", 0)) < 120
+            ]
+        if not online_agents:
+            return
+        logger.debug("Drift checker: %d baselines, %d online agents",
+                      len(baselines), len(online_agents))
+        for baseline in baselines:
+            group = baseline.get("agent_group", "__all__")
+            targets = online_agents if group == "__all__" else [
+                h for h in online_agents if h == group or group in h
+            ]
+            if not targets:
+                continue
+            self._check_baseline(baseline, targets,
+                                 _agent_cmd_lock, _agent_cmd_results,
+                                 _agent_commands, _agent_websockets, _agent_ws_lock)
+
+    def _check_baseline(self, baseline: dict, targets: list[str],
+                        cmd_lock, cmd_results, cmd_queue,
+                        ws_registry, ws_lock) -> None:
+        """Send file_checksum to each target agent and record results."""
+        import secrets
+        cmd_ids: dict[str, str] = {}  # hostname -> cmd_id
+        for hostname in targets:
+            cmd_id = secrets.token_hex(8)
+            cmd = {
+                "id": cmd_id,
+                "type": "file_checksum",
+                "params": {"path": baseline["path"], "algorithm": "sha256"},
+            }
+            # Try WebSocket first, fall back to queue
+            delivered = False
+            with ws_lock:
+                ws = ws_registry.get(hostname)
+            if ws:
+                try:
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(ws.send_json({
+                        "type": "command", "id": cmd_id,
+                        "cmd": "file_checksum", "params": cmd["params"],
+                    }))
+                    loop.close()
+                    delivered = True
+                except Exception:
+                    pass
+            if not delivered:
+                with cmd_lock:
+                    cmd_queue.setdefault(hostname, []).append(cmd)
+            cmd_ids[hostname] = cmd_id
+
+        # Poll for results (up to 20s total)
+        deadline = time.time() + 20
+        pending = dict(cmd_ids)  # hostname -> cmd_id
+        results: dict[str, dict] = {}  # hostname -> result dict
+        while pending and time.time() < deadline:
+            for hostname in list(pending):
+                cid = pending[hostname]
+                with cmd_lock:
+                    rlist = cmd_results.get(hostname, [])
+                    for i, r in enumerate(rlist):
+                        if isinstance(r, dict) and r.get("id") == cid:
+                            results[hostname] = rlist.pop(i)
+                            del pending[hostname]
+                            break
+            if pending:
+                time.sleep(1)
+
+        # Record results
+        expected = baseline["expected_hash"]
+        for hostname, result in results.items():
+            actual = result.get("checksum", "")
+            status = "match" if actual == expected else "drift"
+            db.record_drift_check(baseline["id"], hostname, actual, status=status)
+            db.complete_command(cmd_ids[hostname], result)
+            if status == "drift":
+                db.insert_alert_history(
+                    f"config_drift:{baseline['path']}:{hostname}",
+                    "warning",
+                    f"Config drift detected: {baseline['path']} on {hostname} "
+                    f"(expected {expected[:16]}..., got {actual[:16]}...)",
+                )
+
+        # Record timeout for agents that didn't respond
+        for hostname in pending:
+            db.record_drift_check(baseline["id"], hostname, None, status="timeout")
+
+    def run_check_now(self) -> None:
+        """Run a drift check immediately (callable from API)."""
+        try:
+            self._tick()
+        except Exception as e:
+            logger.error("Manual drift check error: %s", e)
+
+
 # Singletons
 scheduler = Scheduler()
 fs_watcher = FSTriggerWatcher()
 rss_watcher = RSSFeedWatcher()
+endpoint_checker = EndpointChecker()
+drift_checker = DriftChecker()

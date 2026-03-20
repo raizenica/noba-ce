@@ -1517,5 +1517,573 @@ function systemActionsMixin() {
         get prometheusUrl() {
             return '/api/metrics/prometheus';
         },
+
+        // ── Saved Custom Dashboards ──────────────────────────────────────────────
+
+        async fetchDashboards() {
+            try {
+                const res = await fetch('/api/dashboards', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.savedDashboards = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async saveDashboard() {
+            const name = (this.saveDashboardName || '').trim();
+            if (!name) { this.addToast('Dashboard name is required', 'error'); return; }
+            const config = {
+                metrics: [...this.multiMetrics],
+                range: this.historyRange,
+                resolution: this.historyResolution,
+            };
+            const body = {
+                name,
+                config_json: JSON.stringify(config),
+                shared: this.saveDashboardShared,
+            };
+            const isEdit = !!this.saveDashboardId;
+            const url = isEdit ? '/api/dashboards/' + this.saveDashboardId : '/api/dashboards';
+            const method = isEdit ? 'PUT' : 'POST';
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast(err.detail || 'Failed to save dashboard', 'error');
+                    return;
+                }
+                this.addToast(isEdit ? 'Dashboard updated' : 'Dashboard saved', 'success');
+                this.showSaveDashboardModal = false;
+                this.saveDashboardName = '';
+                this.saveDashboardShared = false;
+                this.saveDashboardId = null;
+                this.fetchDashboards();
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        loadDashboard(dashboard) {
+            try {
+                const config = JSON.parse(dashboard.config_json);
+                if (config.metrics && Array.isArray(config.metrics)) {
+                    this.multiMetrics = config.metrics;
+                }
+                if (config.range) this.historyRange = config.range;
+                if (config.resolution) this.historyResolution = config.resolution;
+                this.monitoringTab = 'charts';
+                this.fetchAvailableMetrics();
+                this.fetchMultiMetricChart();
+                this.addToast('Loaded dashboard: ' + dashboard.name, 'success');
+            } catch (e) {
+                this.addToast('Failed to load dashboard config', 'error');
+            }
+        },
+
+        async deleteDashboard(id, name) {
+            if (!confirm('Delete dashboard "' + name + '"?')) return;
+            try {
+                const res = await fetch('/api/dashboards/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Dashboard deleted', 'success');
+                    this.fetchDashboards();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast(err.detail || 'Failed to delete', 'error');
+                }
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+
+        // ── Endpoint Monitoring ─────────────────────────────────────────────────
+
+        async fetchEndpointMonitors() {
+            this.endpointLoading = true;
+            try {
+                const res = await fetch('/api/endpoints', { headers: { 'Authorization': 'Bearer ' + this._token() } });
+                if (res.ok) this.endpointMonitors = await res.json();
+            } catch (e) {
+                this.addToast('Failed to load endpoints: ' + e.message, 'error');
+            } finally {
+                this.endpointLoading = false;
+            }
+        },
+
+        async saveEndpoint() {
+            const body = { ...this.endpointForm };
+            const isEdit = !!this.endpointEditId;
+            const url = isEdit ? '/api/endpoints/' + this.endpointEditId : '/api/endpoints';
+            const method = isEdit ? 'PUT' : 'POST';
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this._token() },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast(err.detail || 'Failed to save', 'error');
+                    return;
+                }
+                this.addToast(isEdit ? 'Monitor updated' : 'Monitor created', 'success');
+                this.showEndpointModal = false;
+                this.fetchEndpointMonitors();
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        editEndpoint(ep) {
+            this.endpointEditId = ep.id;
+            this.endpointForm = {
+                name: ep.name,
+                url: ep.url,
+                method: ep.method || 'GET',
+                expected_status: ep.expected_status || 200,
+                check_interval: ep.check_interval || 300,
+                timeout: ep.timeout || 10,
+                agent_hostname: ep.agent_hostname || '',
+                enabled: ep.enabled,
+                notify_cert_days: ep.notify_cert_days || 14,
+            };
+            this.showEndpointModal = true;
+        },
+
+        async deleteEndpoint(id, name) {
+            if (!confirm('Delete monitor "' + name + '"?')) return;
+            try {
+                const res = await fetch('/api/endpoints/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Deleted', 'success');
+                    this.fetchEndpointMonitors();
+                } else {
+                    this.addToast('Failed to delete', 'error');
+                }
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        async checkEndpointNow(id) {
+            try {
+                const res = await fetch('/api/endpoints/' + id + '/check', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    this.addToast('Check complete: ' + (data.last_status || 'done'), 'success');
+                    this.fetchEndpointMonitors();
+                } else {
+                    this.addToast('Check failed', 'error');
+                }
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        // ── Status Page Management ──────────────────────────────────────────
+        async fetchStatusComponents() {
+            try {
+                var res = await fetch('/api/status/components', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var d = await res.json();
+                    this.spComponents = d.components || [];
+                }
+            } catch { /* silent */ }
+        },
+
+        async createStatusComponent() {
+            var name = (this.spNewComp.name || '').trim();
+            if (!name) return;
+            try {
+                var res = await fetch('/api/status/components', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        group_name: this.spNewComp.group_name || 'Default',
+                        service_key: this.spNewComp.service_key || null,
+                        display_order: this.spNewComp.display_order || 0,
+                    }),
+                });
+                if (res.ok) {
+                    this.spNewComp = { name: '', group_name: 'Default', service_key: '', display_order: 0 };
+                    this.fetchStatusComponents();
+                    this.addToast('Component added', 'ok');
+                } else {
+                    var e = await res.json().catch(function() { return {}; });
+                    this.addToast('Failed: ' + (e.detail || 'Unknown error'), 'error');
+                }
+            } catch (err) { this.addToast('Error: ' + err.message, 'error'); }
+        },
+
+        async deleteStatusComponent(id) {
+            if (!confirm('Delete this component?')) return;
+            try {
+                var res = await fetch('/api/status/components/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.fetchStatusComponents();
+                    this.addToast('Component deleted', 'ok');
+                }
+            } catch { /* silent */ }
+        },
+
+        async fetchStatusIncidents() {
+            try {
+                var res = await fetch('/api/status/incidents');
+                if (res.ok) {
+                    var d = await res.json();
+                    this.spIncidents = d.incidents || [];
+                }
+            } catch { /* silent */ }
+        },
+
+        async createStatusIncident() {
+            var title = (this.spNewIncident.title || '').trim();
+            if (!title) return;
+            try {
+                var res = await fetch('/api/status/incidents/create', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        severity: this.spNewIncident.severity || 'minor',
+                        message: this.spNewIncident.message || '',
+                    }),
+                });
+                if (res.ok) {
+                    this.spNewIncident = { title: '', severity: 'minor', message: '' };
+                    this.fetchStatusIncidents();
+                    this.addToast('Incident created', 'ok');
+                } else {
+                    var e = await res.json().catch(function() { return {}; });
+                    this.addToast('Failed: ' + (e.detail || 'Unknown error'), 'error');
+                }
+            } catch (err) { this.addToast('Error: ' + err.message, 'error'); }
+        },
+
+        async addStatusUpdate(incidentId) {
+            var msgEl = document.getElementById('sp-upd-' + incidentId);
+            var statusEl = document.getElementById('sp-upd-status-' + incidentId);
+            var message = msgEl ? msgEl.value.trim() : '';
+            var status = statusEl ? statusEl.value : 'investigating';
+            if (!message) { this.addToast('Enter an update message', 'error'); return; }
+            try {
+                var res = await fetch('/api/status/incidents/' + incidentId + '/update', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message, status: status }),
+                });
+                if (res.ok) {
+                    if (msgEl) msgEl.value = '';
+                    this.fetchStatusIncidents();
+                    this.addToast('Update posted', 'ok');
+                }
+            } catch { /* silent */ }
+        },
+
+        async resolveStatusIncident(incidentId) {
+            if (!confirm('Resolve this incident?')) return;
+            try {
+                var res = await fetch('/api/status/incidents/' + incidentId + '/resolve', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.fetchStatusIncidents();
+                    this.addToast('Incident resolved', 'ok');
+                }
+            } catch { /* silent */ }
+        },
+
+        // ── Service Dependency Topology ─────────────────────────────────────
+
+        async fetchTopology() {
+            this.topologyLoading = true;
+            try {
+                var res = await fetch('/api/dependencies', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.topologyData = await res.json();
+                    this.$nextTick(() => { this.renderTopologyGraph(); });
+                }
+            } catch { /* silent */ }
+            this.topologyLoading = false;
+        },
+
+        async addDependency() {
+            var src = (this.topoNewSource || '').trim();
+            var tgt = (this.topoNewTarget || '').trim();
+            if (!src || !tgt) { this.addToast('Source and target required', 'error'); return; }
+            try {
+                var res = await fetch('/api/dependencies', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: src, target: tgt, type: this.topoNewType }),
+                });
+                if (res.ok) {
+                    this.topoNewSource = ''; this.topoNewTarget = '';
+                    this.fetchTopology();
+                    this.addToast('Dependency added', 'ok');
+                } else {
+                    var err = await res.json().catch(function() { return {}; });
+                    this.addToast(err.detail || 'Failed to add dependency', 'error');
+                }
+            } catch (e) { this.addToast('Error: ' + e.message, 'error'); }
+        },
+
+        async deleteDependency(depId) {
+            if (!confirm('Delete this dependency?')) return;
+            try {
+                var res = await fetch('/api/dependencies/' + depId, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.fetchTopology();
+                    this.addToast('Dependency deleted', 'ok');
+                }
+            } catch { /* silent */ }
+        },
+
+        async fetchImpactAnalysis(serviceName) {
+            this.topologyImpactService = serviceName;
+            try {
+                var res = await fetch('/api/dependencies/impact/' + encodeURIComponent(serviceName), {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.topologyImpact = await res.json();
+            } catch { /* silent */ }
+        },
+
+        async discoverServices(hostname) {
+            try {
+                var res = await fetch('/api/dependencies/discover/' + encodeURIComponent(hostname), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Discovery queued for ' + hostname, 'ok');
+                } else {
+                    this.addToast('Discovery failed', 'error');
+                }
+            } catch (e) { this.addToast('Error: ' + e.message, 'error'); }
+        },
+
+        renderTopologyGraph() {
+            var svg = document.getElementById('topology-svg');
+            if (!svg || !this.topologyData) return;
+            var data = this.topologyData;
+            var nodes = data.nodes || [];
+            var edges = data.edges || [];
+            if (nodes.length === 0) { svg.innerHTML = ''; return; }
+
+            var w = svg.clientWidth || 600;
+            var h = svg.clientHeight || 400;
+            var cx = w / 2, cy = h / 2;
+
+            // Position nodes in a circle
+            var positions = {};
+            var radius = Math.min(w, h) * 0.35;
+            nodes.forEach(function(n, i) {
+                var angle = (2 * Math.PI * i) / nodes.length - Math.PI / 2;
+                positions[n.id] = {
+                    x: cx + radius * Math.cos(angle),
+                    y: cy + radius * Math.sin(angle),
+                };
+            });
+
+            // Simple force-directed adjustment (a few iterations)
+            for (var iter = 0; iter < 50; iter++) {
+                // Repulsion between all nodes
+                for (var i = 0; i < nodes.length; i++) {
+                    for (var j = i + 1; j < nodes.length; j++) {
+                        var pi = positions[nodes[i].id], pj = positions[nodes[j].id];
+                        var dx = pj.x - pi.x, dy = pj.y - pi.y;
+                        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        var force = 2000 / (dist * dist);
+                        var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                        pi.x -= fx; pi.y -= fy;
+                        pj.x += fx; pj.y += fy;
+                    }
+                }
+                // Attraction along edges
+                edges.forEach(function(e) {
+                    var ps = positions[e.source], pt = positions[e.target];
+                    if (!ps || !pt) return;
+                    var dx = pt.x - ps.x, dy = pt.y - ps.y;
+                    var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    var force = (dist - 120) * 0.01;
+                    var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                    ps.x += fx; ps.y += fy;
+                    pt.x -= fx; pt.y -= fy;
+                });
+                // Keep nodes within bounds
+                nodes.forEach(function(n) {
+                    var p = positions[n.id];
+                    p.x = Math.max(40, Math.min(w - 40, p.x));
+                    p.y = Math.max(40, Math.min(h - 40, p.y));
+                });
+            }
+
+            var self = this;
+            var healthColors = { healthy: '#22c55e', warning: '#eab308', critical: '#ef4444', offline: '#6b7280', unknown: '#9ca3af' };
+
+            var html = '<defs><marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--text-muted)"/></marker></defs>';
+
+            // Draw edges
+            edges.forEach(function(e) {
+                var ps = positions[e.source], pt = positions[e.target];
+                if (!ps || !pt) return;
+                var dx = pt.x - ps.x, dy = pt.y - ps.y;
+                var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                var ox = (dx / dist) * 22, oy = (dy / dist) * 22;
+                var dash = e.type === 'optional' ? 'stroke-dasharray="5,5"' : '';
+                html += '<line x1="' + (ps.x + ox) + '" y1="' + (ps.y + oy) + '" x2="' + (pt.x - ox) + '" y2="' + (pt.y - oy) + '" stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrowhead)" ' + dash + '/>';
+            });
+
+            // Draw nodes
+            nodes.forEach(function(n) {
+                var p = positions[n.id];
+                var color = healthColors[n.health] || healthColors.unknown;
+                var isImpacted = self.topologyImpact && self.topologyImpact.affected && self.topologyImpact.affected.indexOf(n.id) >= 0;
+                var isTarget = self.topologyImpactService === n.id;
+                var strokeW = (isImpacted || isTarget) ? 3 : 1.5;
+                var strokeC = isTarget ? '#f97316' : (isImpacted ? '#ef4444' : 'var(--border)');
+                html += '<circle cx="' + p.x + '" cy="' + p.y + '" r="20" fill="' + color + '" stroke="' + strokeC + '" stroke-width="' + strokeW + '" style="cursor:pointer" onclick="document.dispatchEvent(new CustomEvent(\'topo-click\',{detail:\'' + n.id + '\'}))" />';
+                html += '<text x="' + p.x + '" y="' + (p.y + 34) + '" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600">' + n.label + '</text>';
+            });
+
+            svg.innerHTML = html;
+        },
+
+        // ── Config Drift Detection ──────────────────────────────────────────
+
+        async fetchDriftBaselines() {
+            this.driftLoading = true;
+            try {
+                var res = await fetch('/api/baselines', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) this.driftBaselines = await res.json();
+            } catch { /* silent */ }
+            finally { this.driftLoading = false; }
+        },
+
+        async createDriftBaseline() {
+            var path = (this.driftNewPath || '').trim();
+            if (!path) { this.addToast('File path is required', 'warn'); return; }
+            // First create with placeholder hash, then optionally set from agent
+            try {
+                var res = await fetch('/api/baselines', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + this._token(),
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        path: path,
+                        expected_hash: 'pending',
+                        agent_group: this.driftNewGroup || '__all__',
+                    }),
+                });
+                if (res.ok) {
+                    this.driftNewPath = '';
+                    this.driftNewGroup = '__all__';
+                    this.addToast('Baseline created', 'ok');
+                    this.fetchDriftBaselines();
+                } else {
+                    var err = await res.json().catch(function() { return {}; });
+                    this.addToast(err.detail || 'Failed to create baseline', 'error');
+                }
+            } catch { /* silent */ }
+        },
+
+        async deleteDriftBaseline(id) {
+            if (!confirm('Delete this baseline and all its drift history?')) return;
+            try {
+                var res = await fetch('/api/baselines/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Baseline deleted', 'ok');
+                    if (this.driftExpandedId === id) this.driftExpandedId = null;
+                    this.fetchDriftBaselines();
+                }
+            } catch { /* silent */ }
+        },
+
+        async setBaselineFromAgent(baselineId, hostname) {
+            if (!hostname) { this.addToast('Select an agent first', 'warn'); return; }
+            try {
+                var res = await fetch('/api/baselines/' + baselineId + '/set-from/' + hostname, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var data = await res.json();
+                    this.addToast('Baseline hash set from ' + hostname, 'ok');
+                    this.fetchDriftBaselines();
+                } else {
+                    var err = await res.json().catch(function() { return {}; });
+                    this.addToast(err.detail || 'Failed to set from agent', 'error');
+                }
+            } catch { /* silent */ }
+        },
+
+        async triggerDriftCheck() {
+            this.driftCheckLoading = true;
+            try {
+                var res = await fetch('/api/baselines/check', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    this.addToast('Drift check started', 'ok');
+                    // Refresh after a short delay to let results come in
+                    var self = this;
+                    setTimeout(function() { self.fetchDriftBaselines(); }, 5000);
+                }
+            } catch { /* silent */ }
+            finally { this.driftCheckLoading = false; }
+        },
+
+        async expandDriftBaseline(id) {
+            if (this.driftExpandedId === id) {
+                this.driftExpandedId = null;
+                this.driftResults = [];
+                return;
+            }
+            this.driftExpandedId = id;
+            try {
+                var res = await fetch('/api/baselines/' + id + '/results', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var data = await res.json();
+                    this.driftResults = data.results || [];
+                }
+            } catch { /* silent */ }
+        },
     };
 }

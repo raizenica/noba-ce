@@ -282,7 +282,28 @@ function dashboard() {
         searchResults: [],
         monitoringTab: 'sla',
         infrastructureTab: 'servicemap',
+        // ── Service Dependency Topology state ───────────────────────────────
+        topologyData: null, topologyLoading: false,
+        topologyImpact: null, topologyImpactService: '',
+        topologyViewMode: 'graph',
+        topoNewSource: '', topoNewTarget: '', topoNewType: 'requires',
+        // ── Config Drift Detection state ────────────────────────────────────
+        driftBaselines: [], driftLoading: false,
+        driftExpandedId: null, driftResults: [],
+        driftNewPath: '', driftNewGroup: '__all__',
+        driftSetFromHost: '', driftCheckLoading: false,
         logsTab: 'history',
+
+        // ── Live log streaming state ─────────────────────────────────────────
+        logStreamHost: '', logStreamUnit: '', logStreamPriority: '', logStreamBacklog: 50,
+        logStreamId: '', logStreamActive: false, logStreamLoading: false,
+        logStreamLines: [], logStreamCursor: 0, logStreamAutoScroll: true,
+        _logStreamInterval: null,
+
+        // Push notifications (PWA)
+        pushEnabled: localStorage.getItem('noba-push-enabled') === 'true',
+        pushPermission: (typeof Notification !== 'undefined') ? Notification.permission : 'default',
+        _notifiedAlerts: new Set(),
 
         // ── Core integration settings ──────────────────────────────────────────
         piholeUrl:         localStorage.getItem('noba-pihole')       || '',
@@ -442,9 +463,24 @@ function dashboard() {
         showCorrelateModal: false, correlateMetrics: '', correlateHours: 6, correlateData: null, correlateLoading: false,
         showGraylogModal: false, graylogQuery: '*', graylogResults: null, graylogLoading: false,
         agentKeys: '', statusPageServices: '', graylogUrl: '', graylogToken: '',
+        spComponents: [], spIncidents: [],
+        spNewComp: { name: '', group_name: 'Default', service_key: '', display_order: 0 },
+        spNewIncident: { title: '', severity: 'minor', message: '' },
         agentCmdTarget: '', agentCmdInput: '', agentCmdSending: false, agentCmdOutput: {},
         showSlaModal: false, slaData: null, slaLoading: false, slaPeriod: 720,
         agentHistoryHost: '', agentHistoryData: [], agentHistoryMetric: 'cpu',
+
+        // Endpoint monitoring
+        endpointMonitors: [], endpointLoading: false,
+        showEndpointModal: false, endpointEditId: null,
+        endpointForm: {name:'',url:'',method:'GET',expected_status:200,check_interval:300,timeout:10,agent_hostname:'',enabled:true,notify_cert_days:14},
+
+        // Saved custom dashboards
+        savedDashboards: [],
+        showSaveDashboardModal: false,
+        saveDashboardName: '',
+        saveDashboardShared: false,
+        saveDashboardId: null,
 
         // Phase 1d: Command palette & agent detail
         CMD_CATALOG,
@@ -463,6 +499,12 @@ function dashboard() {
         agentDetailTab: 'overview',
         agentDetailServices: [],
         agentDetailServicesLoading: false,
+
+        // ── AI / LLM ────────────────────────────────────────────────────────
+        llmProvider: '', llmModel: '', llmApiKey: '', llmBaseUrl: '',
+        llmMaxTokens: 4096, llmTemperature: 0.3, llmEnabled: false,
+        aiPanelOpen: false, aiMessages: [], aiInput: '', aiLoading: false,
+        aiEnabled: false, aiTestLoading: false,
 
         // ── Live data ──────────────────────────────────────────────────────────
         timestamp: '--:--', uptime: '--', loadavg: '--', memory: '--',
@@ -526,6 +568,7 @@ function dashboard() {
         _intervals: {},
         _pending: {},
         _termSocket: null, _term: null, _termResizeObserver: null,
+        _prefsSaveTimer: null,
 
         // FIXED: plain object instead of Set so Alpine reactivity works correctly
         _dismissedAlerts: {},
@@ -621,6 +664,7 @@ function dashboard() {
             // Sidebar collapse persistence
             this.$watch('sidebarCollapsed', (val) => {
                 localStorage.setItem('noba-sidebar-collapsed', val);
+                this.saveUserPreferences();
             });
             // Re-trigger masonry when navigating back to dashboard
             this.$watch('currentPage', (page) => {
@@ -636,7 +680,10 @@ function dashboard() {
             await this.fetchUserInfo();
             if (!this.authenticated) return;
 
-            // Token confirmed good — fetch remaining data in parallel
+            // Token confirmed good — fetch user preferences first (overrides localStorage)
+            await this.fetchUserPreferences();
+
+            // Then fetch remaining data in parallel
             await Promise.all([
                 this.fetchSettings(),
                 this.fetchCloudRemotes(),
@@ -648,6 +695,7 @@ function dashboard() {
             ]);
 
             this.fetchNotifications();
+            this.fetchAiStatus();
 
             this.startJobNotifPoller();
 
@@ -728,6 +776,52 @@ function dashboard() {
             this.searchResults = results.slice(0, 15);
         },
 
+        // ── Push Notifications ────────────────────────────────────────────────
+        async enablePushNotifications() {
+            if (typeof Notification === 'undefined') { this.addToast('Notifications not supported', 'error'); return; }
+            try {
+                const permission = await Notification.requestPermission();
+                this.pushPermission = permission;
+                if (permission === 'granted') {
+                    this.pushEnabled = true;
+                    localStorage.setItem('noba-push-enabled', 'true');
+                    if ('serviceWorker' in navigator) await navigator.serviceWorker.ready;
+                    this.addToast('Browser notifications enabled', 'success');
+                } else {
+                    this.pushEnabled = false;
+                    localStorage.setItem('noba-push-enabled', 'false');
+                    this.addToast(permission === 'denied' ? 'Permission denied — check browser settings' : 'Permission dismissed', permission === 'denied' ? 'error' : 'warning');
+                }
+            } catch (e) { this.addToast('Failed: ' + e.message, 'error'); }
+        },
+        disablePushNotifications() {
+            this.pushEnabled = false;
+            localStorage.setItem('noba-push-enabled', 'false');
+            this._notifiedAlerts.clear();
+            this.addToast('Browser notifications disabled', 'info');
+        },
+        togglePushNotifications() {
+            this.pushEnabled ? this.disablePushNotifications() : this.enablePushNotifications();
+        },
+        sendPushNotification(title, body, tag) {
+            if (!this.pushEnabled || this.pushPermission !== 'granted' || !document.hidden) return;
+            if (!('serviceWorker' in navigator)) return;
+            navigator.serviceWorker.ready.then(reg => {
+                if (reg.active) reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, body, tag: tag || 'noba-alert', url: '/' });
+            }).catch(() => {});
+        },
+        testPushNotification() {
+            if (typeof Notification === 'undefined' || this.pushPermission !== 'granted') {
+                this.addToast('Enable notifications first', 'warning'); return;
+            }
+            navigator.serviceWorker.ready.then(reg => {
+                if (reg.active) {
+                    reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title: 'NOBA Test', body: 'Browser notifications are working.', tag: 'noba-test', url: '/' });
+                    this.addToast('Test notification sent', 'success');
+                }
+            }).catch(() => this.addToast('Service worker not ready', 'error'));
+        },
+
         initMasonry() {
             this._masonryObserver = new ResizeObserver(entries => {
                 for (const entry of entries) {
@@ -781,6 +875,12 @@ function dashboard() {
             }
             const kb = this.keyBindings;
             this._keydownHandler = (e) => {
+                // Ctrl+Shift+K — toggle AI panel (works even in inputs)
+                if (e.ctrlKey && e.shiftKey && e.key === 'K') {
+                    e.preventDefault();
+                    this.toggleAiPanel();
+                    return;
+                }
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
                 // Global search: Ctrl+K
@@ -795,6 +895,7 @@ function dashboard() {
                 const key = e.key;
 
                 if (key === 'Escape') {
+                    if (this.aiPanelOpen) { this.aiPanelOpen = false; return; }
                     this.showSettings = false;
                     this.showModal = false;
                     this.showPassModal = false;
@@ -898,12 +999,14 @@ function dashboard() {
         toggleCollapse(card) {
             this.collapsed[card] = !this.collapsed[card];
             localStorage.setItem('noba-collapsed', JSON.stringify(this.collapsed));
+            this.saveUserPreferences();
         },
 
         collapseAll(state) {
             const cards = Object.keys(this.vis);
             for (const c of cards) this.collapsed[c] = state;
             localStorage.setItem('noba-collapsed', JSON.stringify(this.collapsed));
+            this.saveUserPreferences();
         },
 
         copyVal(val, e) {
@@ -932,6 +1035,7 @@ function dashboard() {
             else if (action === 'hide') {
                 this.vis[card] = false;
                 localStorage.setItem('noba-vis', JSON.stringify(this.vis));
+                this.saveUserPreferences();
             }
             else if (action === 'history' && card === 'core') {
                 this.showHistoryModal = true;
@@ -1057,6 +1161,21 @@ function dashboard() {
                     if (!active.has(k)) this._spokenAlerts.delete(k);
                 }
             }
+            // Push notifications for alerts (when page is hidden)
+            if (this.pushEnabled && this.pushPermission === 'granted' && payload.alerts) {
+                for (const alert of payload.alerts) {
+                    const key = alert.msg || alert.id || JSON.stringify(alert);
+                    if (!this._notifiedAlerts.has(key)) {
+                        this._notifiedAlerts.add(key);
+                        const severity = (alert.level || alert.severity || 'alert').toUpperCase();
+                        this.sendPushNotification(severity + ': ' + (alert.msg || alert.title || 'Alert'), alert.details || alert.msg || '', 'noba-alert-' + key.slice(0, 20));
+                    }
+                }
+                const activeKeys = new Set((payload.alerts || []).map(a => a.msg || a.id || JSON.stringify(a)));
+                for (const k of this._notifiedAlerts) {
+                    if (!activeKeys.has(k)) this._notifiedAlerts.delete(k);
+                }
+            }
         },
 
         toggleVoiceAlerts() {
@@ -1155,6 +1274,86 @@ function dashboard() {
             }
         },
 
+        /** Load user dashboard preferences from the server and apply them. */
+        async fetchUserPreferences() {
+            if (!this.authenticated) return;
+            try {
+                const res = await fetch('/api/user/preferences', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.status === 401 || !res.ok) return;
+                const data = await res.json();
+                if (!data.synced) return;
+                const p = data.preferences || {};
+                if (p.vis && typeof p.vis === 'object') {
+                    this.vis = { ...DEF_VIS, ...p.vis };
+                    localStorage.setItem('noba-vis', JSON.stringify(this.vis));
+                }
+                if (p.collapsed && typeof p.collapsed === 'object') {
+                    this.collapsed = p.collapsed;
+                    localStorage.setItem('noba-collapsed', JSON.stringify(this.collapsed));
+                }
+                if (p.sidebarCollapsed != null) {
+                    this.sidebarCollapsed = !!p.sidebarCollapsed;
+                    localStorage.setItem('noba-sidebar-collapsed', String(this.sidebarCollapsed));
+                }
+                if (p.theme && typeof p.theme === 'string') {
+                    this.theme = p.theme;
+                    localStorage.setItem('noba-theme', p.theme);
+                    document.documentElement.setAttribute('data-theme', p.theme);
+                }
+            } catch { /* preferences unavailable — use localStorage fallback */ }
+        },
+
+        /** Build the current preferences object from live state. */
+        _buildPreferences() {
+            return {
+                vis: this.vis,
+                collapsed: this.collapsed,
+                sidebarCollapsed: this.sidebarCollapsed,
+                theme: this.theme,
+            };
+        },
+
+        /** Save user dashboard preferences to the server (debounced). */
+        saveUserPreferences() {
+            if (!this.authenticated) return;
+            clearTimeout(this._prefsSaveTimer);
+            this._prefsSaveTimer = setTimeout(async () => {
+                try {
+                    const res = await fetch('/api/user/preferences', {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + this._token(),
+                        },
+                        body: JSON.stringify({ preferences: this._buildPreferences() }),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                } catch { /* silent — localStorage is the fallback */ }
+            }, 1000);
+        },
+
+        /** Reset dashboard layout preferences to defaults. */
+        async resetUserPreferences() {
+            this.vis = { ...DEF_VIS };
+            this.collapsed = {};
+            this.sidebarCollapsed = false;
+            localStorage.setItem('noba-vis', JSON.stringify(this.vis));
+            localStorage.setItem('noba-collapsed', '{}');
+            localStorage.setItem('noba-sidebar-collapsed', 'false');
+            if (!this.authenticated) return;
+            try {
+                await fetch('/api/user/preferences', {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                this.addToast('Layout reset to defaults', 'success');
+            } catch {
+                this.addToast('Failed to reset layout on server', 'error');
+            }
+        },
+
         /** Fetch available rclone cloud remotes. */
         async fetchCloudRemotes() {
             if (!this.authenticated) return;
@@ -1239,6 +1438,9 @@ function dashboard() {
             localStorage.setItem('noba-vis',        JSON.stringify(this.vis));
             localStorage.setItem('noba-collapsed',  JSON.stringify(this.collapsed));
 
+            // Sync layout preferences to server (non-blocking)
+            this.saveUserPreferences();
+
             if (!this.authenticated) return;
 
             const body = {};
@@ -1288,6 +1490,232 @@ function dashboard() {
             } finally {
                 this.notifTesting = false;
             }
+        },
+
+        // ── 5b. AI / LLM Assistant ────────────────────────────────────────────
+
+        async fetchAiStatus() {
+            if (!this.authenticated) return;
+            try {
+                const res = await fetch('/api/ai/status', {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    const d = await res.json();
+                    this.aiEnabled = d.enabled || false;
+                }
+            } catch { /* ignore */ }
+        },
+
+        toggleAiPanel() {
+            this.aiPanelOpen = !this.aiPanelOpen;
+            if (this.aiPanelOpen && !this.aiEnabled) this.fetchAiStatus();
+        },
+
+        async sendAiMessage(message) {
+            const msg = (message || this.aiInput || '').trim();
+            if (!msg || this.aiLoading) return;
+            this.aiInput = '';
+            this.aiMessages.push({ role: 'user', content: msg });
+            this.aiLoading = true;
+            // Build history from last 20 messages
+            const history = this.aiMessages.slice(0, -1).slice(-20).map(m => ({
+                role: m.role, content: m.content,
+            }));
+            try {
+                const res = await fetch('/api/ai/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + this._token(),
+                    },
+                    body: JSON.stringify({ message: msg, history }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: data.response || '',
+                    actions: data.actions || [],
+                });
+            } catch (e) {
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: 'Error: ' + e.message,
+                    actions: [],
+                });
+            } finally {
+                this.aiLoading = false;
+                this.$nextTick(() => {
+                    const el = document.getElementById('ai-messages');
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            }
+        },
+
+        async analyzeAlert(alertId) {
+            this.aiPanelOpen = true;
+            this.aiMessages.push({ role: 'user', content: '(Analyzing alert #' + alertId + '...)' });
+            this.aiLoading = true;
+            try {
+                const res = await fetch('/api/ai/analyze-alert/' + alertId, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: data.response || '',
+                    actions: data.actions || [],
+                });
+            } catch (e) {
+                this.aiMessages.push({ role: 'assistant', content: 'Error: ' + e.message, actions: [] });
+            } finally {
+                this.aiLoading = false;
+                this.$nextTick(() => {
+                    const el = document.getElementById('ai-messages');
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            }
+        },
+
+        async analyzeLogs(logText) {
+            this.aiPanelOpen = true;
+            this.aiMessages.push({ role: 'user', content: '(Analyzing log excerpt...)' });
+            this.aiLoading = true;
+            try {
+                const res = await fetch('/api/ai/analyze-logs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + this._token(),
+                    },
+                    body: JSON.stringify({ logs: logText }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: data.response || '',
+                    actions: data.actions || [],
+                });
+            } catch (e) {
+                this.aiMessages.push({ role: 'assistant', content: 'Error: ' + e.message, actions: [] });
+            } finally {
+                this.aiLoading = false;
+                this.$nextTick(() => {
+                    const el = document.getElementById('ai-messages');
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            }
+        },
+
+        async summarizeIncident(incidentId) {
+            this.aiPanelOpen = true;
+            this.aiMessages.push({ role: 'user', content: '(Summarizing incident #' + incidentId + '...)' });
+            this.aiLoading = true;
+            try {
+                const res = await fetch('/api/ai/summarize-incident/' + incidentId, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: data.response || '',
+                    actions: data.actions || [],
+                });
+            } catch (e) {
+                this.aiMessages.push({ role: 'assistant', content: 'Error: ' + e.message, actions: [] });
+            } finally {
+                this.aiLoading = false;
+                this.$nextTick(() => {
+                    const el = document.getElementById('ai-messages');
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            }
+        },
+
+        async executeAiAction(action) {
+            if (!action || !action.cmd || !action.hostname) return;
+            const params = {};
+            if (action.params) params.command = action.params;
+            try {
+                const res = await fetch('/api/agents/' + encodeURIComponent(action.hostname) + '/command', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + this._token(),
+                    },
+                    body: JSON.stringify({ type: action.cmd, params }),
+                });
+                if (res.ok) {
+                    this.addToast('Command queued: ' + action.cmd + ' on ' + action.hostname, 'success');
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.addToast('Failed: ' + (err.detail || 'Unknown error'), 'error');
+                }
+            } catch (e) {
+                this.addToast('Error: ' + e.message, 'error');
+            }
+        },
+
+        async testAiConnection() {
+            this.aiTestLoading = true;
+            try {
+                const res = await fetch('/api/ai/test', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    this.addToast('AI connection OK: ' + (data.response || 'Success'), 'success');
+                } else {
+                    this.addToast('AI test failed: ' + (data.detail || 'Unknown error'), 'error');
+                }
+            } catch (e) {
+                this.addToast('AI test error: ' + e.message, 'error');
+            } finally {
+                this.aiTestLoading = false;
+            }
+        },
+
+        /** Simple markdown-like formatting for AI messages. */
+        formatAiMessage(text) {
+            if (!text) return '';
+            // Escape HTML
+            let s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Code blocks
+            s = s.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="ai-code">$2</pre>');
+            // Inline code
+            s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Bold
+            s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            // Italic
+            s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            // Strip [ACTION:...] patterns (rendered as buttons separately)
+            s = s.replace(/\[ACTION:[^\]]+\]/g, '');
+            // Line breaks
+            s = s.replace(/\n/g, '<br>');
+            return s;
+        },
+
+        clearAiMessages() {
+            this.aiMessages = [];
         },
 
         // ── 6. Notification Center ─────────────────────────────────────────────

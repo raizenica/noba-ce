@@ -6,11 +6,42 @@ import sqlite3
 import threading
 
 from ..config import HISTORY_DB
+from .dashboards import (
+    create_dashboard as _create_dashboard,
+    delete_dashboard as _delete_dashboard,
+    get_dashboard as _get_dashboard,
+    get_dashboards as _get_dashboards,
+    update_dashboard as _update_dashboard,
+)
+from .dependencies import (
+    create_dependency as _create_dependency,
+    delete_dependency as _delete_dependency,
+    get_impact_analysis as _get_impact_analysis,
+    list_dependencies as _list_dependencies,
+)
 from .agents import (
     delete_agent as _delete_agent,
     get_all_agents as _get_all_agents,
     update_agent_config as _update_agent_config,
     upsert_agent as _upsert_agent,
+)
+from .baselines import (  # noqa: F401
+    create_baseline as _create_baseline,
+    delete_baseline as _delete_baseline,
+    get_baseline as _get_baseline,
+    get_drift_results as _get_drift_results,
+    list_baselines as _list_baselines,
+    record_drift_check as _record_drift_check,
+    update_baseline as _update_baseline,
+)
+from .endpoints import (  # noqa: F401
+    create_monitor as _create_monitor,
+    delete_monitor as _delete_monitor,
+    get_due_monitors as _get_due_monitors,
+    get_monitor as _get_monitor,
+    get_monitors as _get_monitors,
+    record_check_result as _record_check_result,
+    update_monitor as _update_monitor,
 )
 from .alerts import (
     get_alert_history as _get_alert_history,
@@ -58,6 +89,24 @@ from .metrics import (
     get_trend as _get_trend,
     insert_metrics as _insert_metrics,
     prune_history as _prune_history,
+)
+from .user_preferences import (
+    delete_user_preferences as _delete_user_preferences,
+    get_user_preferences as _get_user_preferences,
+    save_user_preferences as _save_user_preferences,
+)
+from .status_page import (  # noqa: F401
+    add_status_update as _add_status_update,
+    create_status_component as _create_status_component,
+    create_status_incident as _create_status_incident,
+    delete_status_component as _delete_status_component,
+    get_status_incident as _get_status_incident,
+    get_status_uptime_history as _get_status_uptime_history,
+    list_status_components as _list_status_components,
+    list_status_incidents as _list_status_incidents,
+    resolve_status_incident as _resolve_status_incident,
+    update_status_component as _update_status_component,
+    update_status_incident as _update_status_incident,
 )
 
 logger = logging.getLogger("noba")
@@ -224,6 +273,109 @@ class Database:
                     ON agent_command_history(hostname, queued_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_cmd_hist_status
                     ON agent_command_history(status);
+
+                CREATE TABLE IF NOT EXISTS endpoint_monitors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    method TEXT DEFAULT 'GET',
+                    expected_status INTEGER DEFAULT 200,
+                    check_interval INTEGER DEFAULT 300,
+                    timeout INTEGER DEFAULT 10,
+                    agent_hostname TEXT,
+                    enabled INTEGER DEFAULT 1,
+                    created_at INTEGER,
+                    last_checked INTEGER,
+                    last_status TEXT,
+                    last_response_ms INTEGER,
+                    cert_expiry_days INTEGER,
+                    notify_cert_days INTEGER DEFAULT 14
+                );
+                CREATE INDEX IF NOT EXISTS idx_endpoint_monitors_enabled
+                    ON endpoint_monitors(enabled);
+
+                CREATE TABLE IF NOT EXISTS custom_dashboards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    shared INTEGER DEFAULT 0,
+                    created_at INTEGER,
+                    updated_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_custom_dashboards_owner
+                    ON custom_dashboards(owner);
+
+                CREATE TABLE IF NOT EXISTS status_components (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    group_name TEXT DEFAULT 'Default',
+                    service_key TEXT,
+                    display_order INTEGER DEFAULT 0,
+                    enabled INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS status_incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    severity TEXT DEFAULT 'minor',
+                    status TEXT DEFAULT 'investigating',
+                    created_at INTEGER,
+                    resolved_at INTEGER,
+                    created_by TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS status_updates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL REFERENCES status_incidents(id),
+                    message TEXT NOT NULL,
+                    status TEXT DEFAULT 'investigating',
+                    created_at INTEGER,
+                    created_by TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_status_updates_incident
+                    ON status_updates(incident_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS service_dependencies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_service TEXT NOT NULL,
+                    target_service TEXT NOT NULL,
+                    dependency_type TEXT DEFAULT 'requires',
+                    auto_discovered INTEGER DEFAULT 0,
+                    created_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_svc_deps_source
+                    ON service_dependencies(source_service);
+                CREATE INDEX IF NOT EXISTS idx_svc_deps_target
+                    ON service_dependencies(target_service);
+
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    username TEXT PRIMARY KEY,
+                    preferences_json TEXT DEFAULT '{}',
+                    updated_at INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS config_baselines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL,
+                    expected_hash TEXT NOT NULL,
+                    agent_group TEXT DEFAULT '__all__',
+                    created_at INTEGER,
+                    updated_at INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS drift_checks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    baseline_id INTEGER NOT NULL REFERENCES config_baselines(id),
+                    hostname TEXT NOT NULL,
+                    actual_hash TEXT,
+                    status TEXT DEFAULT 'match',
+                    checked_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_drift_checks_baseline
+                    ON drift_checks(baseline_id, checked_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_drift_checks_hostname
+                    ON drift_checks(hostname, checked_at DESC);
             """)
 
     # ── Metrics ───────────────────────────────────────────────────────────────
@@ -386,6 +538,16 @@ class Database:
     def get_user_dashboard(self, username: str) -> dict | None:
         return _get_user_dashboard(self._get_conn(), self._lock, username)
 
+    # ── User Preferences (Feature 10: Multi-user Dashboard Views) ────────────
+    def get_user_preferences(self, username: str) -> dict | None:
+        return _get_user_preferences(self._get_conn(), self._lock, username)
+
+    def save_user_preferences(self, username: str, preferences: dict) -> bool:
+        return _save_user_preferences(self._get_conn(), self._lock, username, preferences)
+
+    def delete_user_preferences(self, username: str) -> bool:
+        return _delete_user_preferences(self._get_conn(), self._lock, username)
+
     # ── Incidents ─────────────────────────────────────────────────────────────
     def insert_incident(self, severity: str, source: str, title: str, details: str = "") -> int:
         return _insert_incident(self._get_conn(), self._lock, severity, source, title,
@@ -487,3 +649,134 @@ class Database:
         except Exception as e:
             logger.error("get_command_history failed: %s", e)
             return []
+
+    # ── Endpoint Monitors ────────────────────────────────────────────────────
+    def create_endpoint_monitor(self, name: str, url: str, **kwargs) -> int | None:
+        return _create_monitor(self._get_conn(), self._lock, name, url, **kwargs)
+
+    def get_endpoint_monitors(self, *, enabled_only: bool = False) -> list[dict]:
+        return _get_monitors(self._get_conn(), self._lock, enabled_only=enabled_only)
+
+    def get_endpoint_monitor(self, monitor_id: int) -> dict | None:
+        return _get_monitor(self._get_conn(), self._lock, monitor_id)
+
+    def update_endpoint_monitor(self, monitor_id: int, **kwargs) -> bool:
+        return _update_monitor(self._get_conn(), self._lock, monitor_id, **kwargs)
+
+    def delete_endpoint_monitor(self, monitor_id: int) -> bool:
+        return _delete_monitor(self._get_conn(), self._lock, monitor_id)
+
+    def record_endpoint_check(self, monitor_id: int, **kwargs) -> None:
+        _record_check_result(self._get_conn(), self._lock, monitor_id, **kwargs)
+
+    def get_due_endpoint_monitors(self) -> list[dict]:
+        return _get_due_monitors(self._get_conn(), self._lock)
+
+    # ── Custom Dashboards ────────────────────────────────────────────────────
+    def create_dashboard(self, name: str, owner: str, config_json: str,
+                         *, shared: bool = False) -> int | None:
+        return _create_dashboard(self._get_conn(), self._lock, name, owner,
+                                 config_json, shared=shared)
+
+    def get_dashboards(self, owner: str | None = None) -> list[dict]:
+        return _get_dashboards(self._get_conn(), self._lock, owner=owner)
+
+    def get_dashboard(self, dashboard_id: int) -> dict | None:
+        return _get_dashboard(self._get_conn(), self._lock, dashboard_id)
+
+    def update_dashboard(self, dashboard_id: int, **kwargs) -> bool:
+        return _update_dashboard(self._get_conn(), self._lock, dashboard_id, **kwargs)
+
+    def delete_dashboard(self, dashboard_id: int) -> bool:
+        return _delete_dashboard(self._get_conn(), self._lock, dashboard_id)
+
+    # ── Status Page ──────────────────────────────────────────────────────────
+    def create_status_component(self, name: str, group_name: str = "Default",
+                                service_key: str | None = None,
+                                display_order: int = 0) -> int:
+        return _create_status_component(self._get_conn(), self._lock, name,
+                                        group_name=group_name, service_key=service_key,
+                                        display_order=display_order)
+
+    def list_status_components(self) -> list[dict]:
+        return _list_status_components(self._get_conn(), self._lock)
+
+    def update_status_component(self, comp_id: int, **kwargs) -> bool:
+        return _update_status_component(self._get_conn(), self._lock, comp_id, **kwargs)
+
+    def delete_status_component(self, comp_id: int) -> bool:
+        return _delete_status_component(self._get_conn(), self._lock, comp_id)
+
+    def create_status_incident(self, title: str, severity: str = "minor",
+                               message: str = "", created_by: str = "") -> int:
+        return _create_status_incident(self._get_conn(), self._lock, title,
+                                       severity=severity, message=message,
+                                       created_by=created_by)
+
+    def list_status_incidents(self, limit: int = 50,
+                              include_resolved: bool = True) -> list[dict]:
+        return _list_status_incidents(self._get_conn(), self._lock, limit=limit,
+                                      include_resolved=include_resolved)
+
+    def get_status_incident(self, incident_id: int) -> dict | None:
+        return _get_status_incident(self._get_conn(), self._lock, incident_id)
+
+    def update_status_incident(self, incident_id: int, **kwargs) -> bool:
+        return _update_status_incident(self._get_conn(), self._lock, incident_id, **kwargs)
+
+    def add_status_update(self, incident_id: int, message: str,
+                          status: str = "investigating",
+                          created_by: str = "") -> int:
+        return _add_status_update(self._get_conn(), self._lock, incident_id,
+                                  message, status=status, created_by=created_by)
+
+    def resolve_status_incident(self, incident_id: int,
+                                created_by: str = "") -> bool:
+        return _resolve_status_incident(self._get_conn(), self._lock, incident_id,
+                                        created_by=created_by)
+
+    def get_status_uptime_history(self, days: int = 90) -> list[dict]:
+        return _get_status_uptime_history(self._get_conn(), self._lock, days=days)
+
+    # ── Service Dependencies ─────────────────────────────────────────────────
+    def create_dependency(self, source: str, target: str, *,
+                          dependency_type: str = "requires",
+                          auto_discovered: bool = False) -> int | None:
+        return _create_dependency(self._get_conn(), self._lock, source, target,
+                                  dependency_type=dependency_type,
+                                  auto_discovered=auto_discovered)
+
+    def list_dependencies(self) -> list[dict]:
+        return _list_dependencies(self._get_conn(), self._lock)
+
+    def delete_dependency(self, dep_id: int) -> bool:
+        return _delete_dependency(self._get_conn(), self._lock, dep_id)
+
+    def get_impact_analysis(self, service_name: str) -> list[str]:
+        return _get_impact_analysis(self._get_conn(), self._lock, service_name)
+
+    # ── Config Baselines / Drift Detection ───────────────────────────────────
+    def create_baseline(self, path: str, expected_hash: str,
+                        agent_group: str = "__all__") -> int | None:
+        return _create_baseline(self._get_conn(), self._lock, path, expected_hash,
+                                agent_group=agent_group)
+
+    def list_baselines(self) -> list[dict]:
+        return _list_baselines(self._get_conn(), self._lock)
+
+    def get_baseline(self, baseline_id: int) -> dict | None:
+        return _get_baseline(self._get_conn(), self._lock, baseline_id)
+
+    def delete_baseline(self, baseline_id: int) -> bool:
+        return _delete_baseline(self._get_conn(), self._lock, baseline_id)
+
+    def update_baseline(self, baseline_id: int, expected_hash: str) -> bool:
+        return _update_baseline(self._get_conn(), self._lock, baseline_id, expected_hash)
+
+    def record_drift_check(self, baseline_id: int, hostname: str,
+                           actual_hash: str | None, status: str = "match") -> int | None:
+        return _record_drift_check(self._get_conn(), self._lock, baseline_id,
+                                   hostname, actual_hash, status=status)
+
+    def get_drift_results(self, baseline_id: int | None = None) -> list[dict]:
+        return _get_drift_results(self._get_conn(), self._lock, baseline_id=baseline_id)

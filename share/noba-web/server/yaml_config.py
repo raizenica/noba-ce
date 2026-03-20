@@ -113,6 +113,9 @@ def read_yaml_settings() -> dict:
         "agentKeys": "", "statusPageServices": "",
         "graylogUrl": "", "graylogToken": "",
         "runbooks": [],
+        # AI / LLM
+        "llmProvider": "", "llmModel": "", "llmApiKey": "", "llmBaseUrl": "",
+        "llmMaxTokens": 4096, "llmTemperature": 0.3, "llmEnabled": False,
     }
     if not os.path.exists(NOBA_YAML):
         with _settings_cache_lock:

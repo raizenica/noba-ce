@@ -101,6 +101,9 @@ WEB_KEYS = frozenset([
     "agentKeys", "statusPageServices",
     "graylogUrl", "graylogToken",
     "runbooks",
+    # AI / LLM
+    "llmProvider", "llmModel", "llmApiKey", "llmBaseUrl",
+    "llmMaxTokens", "llmTemperature", "llmEnabled",
 ])
 _NOTIF_WEB_KEYS = frozenset([
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
@@ -127,7 +130,7 @@ SCRIPT_MAP = {
     "check_updates": "noba-update.sh",
 }
 ALLOWED_ACTIONS    = frozenset({"start", "stop", "restart", "poweroff"})
-ALLOWED_AUTO_TYPES = frozenset(["script", "webhook", "service", "workflow", "condition", "delay", "notify", "http"])
+ALLOWED_AUTO_TYPES = frozenset(["script", "webhook", "service", "workflow", "condition", "delay", "notify", "http", "agent_command"])
 VALID_ROLES        = ("viewer", "operator", "admin")
 
 HISTORY_METRICS = [

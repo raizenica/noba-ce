@@ -34,11 +34,35 @@ self.addEventListener('activate', event => {
     );
 });
 
-// ── Message: handle logout cache clear ──────────────────────────────────────
+// ── Message: handle logout cache clear + push notifications ─────────────────
 self.addEventListener('message', event => {
-    if (event.data && event.data.type === 'LOGOUT') {
+    if (!event.data) return;
+    if (event.data.type === 'LOGOUT') {
         caches.delete(STATS_CACHE);
     }
+    if (event.data.type === 'SHOW_NOTIFICATION') {
+        self.registration.showNotification(event.data.title || 'NOBA Alert', {
+            body: event.data.body || '',
+            icon: '/static/favicon.svg',
+            badge: '/static/favicon.svg',
+            tag: event.data.tag || 'noba-alert',
+            data: { url: event.data.url || '/' },
+            vibrate: [200, 100, 200],
+        });
+    }
+});
+
+// ── Notification click: focus or open window ────────────────────────────────
+self.addEventListener('notificationclick', event => {
+    event.notification.close();
+    event.waitUntil(
+        clients.matchAll({ type: 'window' }).then(list => {
+            for (const c of list) {
+                if (c.url.includes(self.location.origin)) return c.focus();
+            }
+            return clients.openWindow(event.notification.data.url || '/');
+        })
+    );
 });
 
 // ── Fetch: network-first for API, cache-first for static ────────────────────

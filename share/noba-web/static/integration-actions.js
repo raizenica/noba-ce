@@ -751,5 +751,114 @@ function integrationActionsMixin() {
             if (p.indexOf('freebsd') >= 0) return 'fab fa-freebsd';
             return 'fa-server';
         },
+
+
+        // ── Live Log Streaming ──────────────────────────────────────────────────
+
+        async startLogStream() {
+            if (!this.logStreamHost) return;
+            this.logStreamLoading = true;
+            this.logStreamLines = [];
+            this.logStreamCursor = 0;
+            try {
+                var res = await fetch('/api/agents/' + encodeURIComponent(this.logStreamHost) + '/stream-logs', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + this._token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        unit: this.logStreamUnit || '',
+                        priority: this.logStreamPriority || '',
+                        lines: parseInt(this.logStreamBacklog, 10) || 50,
+                    }),
+                });
+                if (res.ok) {
+                    var d = await res.json();
+                    this.logStreamId = d.stream_id || '';
+                    this.logStreamActive = true;
+                    this.addToast('Log stream started on ' + this.logStreamHost, 'success');
+                    // Start polling for lines
+                    this._startStreamPoll();
+                } else {
+                    this.addToast('Failed to start log stream', 'error');
+                }
+            } catch (e) {
+                this.addToast('Stream error: ' + e.message, 'error');
+            }
+            this.logStreamLoading = false;
+        },
+
+        async stopLogStream() {
+            if (!this.logStreamHost || !this.logStreamId) return;
+            this._stopStreamPoll();
+            try {
+                await fetch('/api/agents/' + encodeURIComponent(this.logStreamHost) + '/stream-logs/' + this.logStreamId, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+            } catch { /* silent */ }
+            this.logStreamActive = false;
+            this.logStreamId = '';
+            this.addToast('Log stream stopped', 'info');
+        },
+
+        _startStreamPoll() {
+            this._stopStreamPoll();
+            var self = this;
+            this._logStreamInterval = setInterval(function() {
+                self._pollStreamLines();
+            }, 1500);
+        },
+
+        _stopStreamPoll() {
+            if (this._logStreamInterval) {
+                clearInterval(this._logStreamInterval);
+                this._logStreamInterval = null;
+            }
+        },
+
+        async _pollStreamLines() {
+            if (!this.logStreamHost || !this.logStreamId) return;
+            try {
+                var res = await fetch('/api/agents/' + encodeURIComponent(this.logStreamHost) + '/stream/' + this.logStreamId + '?after=' + (this.logStreamCursor || 0), {
+                    headers: { 'Authorization': 'Bearer ' + this._token() },
+                });
+                if (res.ok) {
+                    var d = await res.json();
+                    if (d.lines && d.lines.length > 0) {
+                        this.logStreamLines = this.logStreamLines.concat(d.lines);
+                        // Cap at 2000 lines client-side
+                        if (this.logStreamLines.length > 2000) {
+                            this.logStreamLines = this.logStreamLines.slice(-2000);
+                        }
+                        this.logStreamCursor = d.cursor || 0;
+                        // Auto-scroll
+                        if (this.logStreamAutoScroll) {
+                            this.$nextTick(function() {
+                                var el = document.getElementById('log-stream-output');
+                                if (el) el.scrollTop = el.scrollHeight;
+                            });
+                        }
+                    }
+                    if (!d.active) {
+                        this.logStreamActive = false;
+                        this._stopStreamPoll();
+                        this.addToast('Log stream ended', 'info');
+                    }
+                }
+            } catch { /* silent */ }
+        },
+
+        getLogLineClass(line) {
+            if (!line) return '';
+            // journalctl output typically contains priority keywords
+            var lower = line.toLowerCase();
+            if (lower.indexOf(' emerg') >= 0 || lower.indexOf('emergency') >= 0) return 'log-emerg';
+            if (lower.indexOf(' alert') >= 0) return 'log-alert';
+            if (lower.indexOf(' crit') >= 0) return 'log-crit';
+            if (lower.indexOf(' err') >= 0 || lower.indexOf('error') >= 0) return 'log-err';
+            if (lower.indexOf(' warn') >= 0 || lower.indexOf('warning') >= 0) return 'log-warn';
+            if (lower.indexOf(' notice') >= 0) return 'log-notice';
+            if (lower.indexOf(' debug') >= 0) return 'log-debug';
+            return '';
+        },
     };
 }
