@@ -1225,6 +1225,13 @@ async def agent_websocket(ws: WebSocket):
                     _agent_cmd_results.setdefault(hostname, []).append(msg)
                     if len(_agent_cmd_results[hostname]) > 50:
                         _agent_cmd_results[hostname] = _agent_cmd_results[hostname][-50:]
+                # Complete command in history DB (same as HTTP report path)
+                cmd_id = msg.get("id", "")
+                if cmd_id:
+                    try:
+                        db.complete_command(cmd_id, msg)
+                    except Exception:
+                        pass
                 # Auto-record security scan results via WebSocket
                 if msg.get("cmd") == "security_scan" and msg.get("status") == "ok":
                     try:
