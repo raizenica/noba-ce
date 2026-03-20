@@ -3870,7 +3870,7 @@ async def api_agent_report(request: Request):
     if not valid_keys or key not in valid_keys:
         raise HTTPException(403, "Invalid agent key")
     body = await _read_body(request)
-    hostname = body.get("hostname", "unknown")
+    hostname = body.get("hostname", "unknown")[:253]  # DNS max length
     body["_received"] = time.time()
     body["_ip"] = _client_ip(request)
     # Store command results if present
@@ -3879,12 +3879,21 @@ async def api_agent_report(request: Request):
         with _agent_cmd_lock:
             _agent_cmd_results[hostname] = cmd_results
     with _agent_data_lock:
+        # Evict stale agents (not seen in 24h)
+        stale = [h for h, d in _agent_data.items() if time.time() - d.get("_received", 0) > 86400]
+        for h in stale:
+            del _agent_data[h]
         _agent_data[hostname] = body
     # Return pending commands (piggybacked on the response)
     pending = []
     with _agent_cmd_lock:
         if hostname in _agent_commands:
             pending = _agent_commands.pop(hostname)
+        # Evict orphaned commands older than 10 minutes
+        stale_cmds = [h for h, cmds in _agent_commands.items()
+                      if cmds and cmds[0].get("queued_at", 0) < time.time() - 600]
+        for h in stale_cmds:
+            del _agent_commands[h]
     return {"status": "ok", "commands": pending}
 
 
@@ -4038,7 +4047,9 @@ async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
     target_host = body.get("host", "")
     ssh_user = body.get("ssh_user", "")
     ssh_pass = body.get("ssh_pass", "")
-    target_port = int(body.get("ssh_port", 22))
+    target_port = _safe_int(body.get("ssh_port", 22), 22)
+    if target_port < 1 or target_port > 65535:
+        target_port = 22
 
     if not target_host or not ssh_user:
         raise HTTPException(400, "host and ssh_user are required")
@@ -4046,6 +4057,8 @@ async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
     import re
     if not re.match(r'^[a-zA-Z0-9._:-]+$', target_host):
         raise HTTPException(400, "Invalid hostname")
+    if not re.match(r'^[a-zA-Z0-9._-]+$', ssh_user) or len(ssh_user) > 64:
+        raise HTTPException(400, "Invalid ssh_user")
 
     cfg = read_yaml_settings()
     agent_keys = cfg.get("agentKeys", "")

@@ -406,6 +406,7 @@ function dashboard() {
         paperless: null, vaultwarden: null,
         weather: null, certExpiry: [], domainExpiry: [], vpn: null,
         dockerUpdates: [], devicePresence: [], energy: [],
+        scrutiny: null, tailscale: null, frigate: null,
         agents: [],
 
         // ── App state ──────────────────────────────────────────────────────────

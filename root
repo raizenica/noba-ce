@@ -383,6 +383,15 @@ def collect_metrics() -> dict:
 
 # ── Command execution ────────────────────────────────────────────────────────
 
+# Commands the agent is allowed to execute. Anything not here is rejected.
+ALLOWED_COMMANDS = {
+    "exec":             "_cmd_exec",
+    "restart_service":  "_cmd_restart_service",
+    "update_agent":     "_cmd_update_agent",
+    "set_interval":     "_cmd_set_interval",
+    "ping":             "_cmd_ping",
+}
+
 # Safety: max output size, max execution time
 _CMD_MAX_OUTPUT = 4096
 _CMD_TIMEOUT = 30
