@@ -1180,11 +1180,15 @@ function dashboard() {
             const term = new window.Terminal({
                 cursorBlink: true,
                 fontSize: 14,
-                fontFamily: 'JetBrains Mono, monospace',
+                fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', monospace",
                 theme: {
-                    background: '#1a1b26',
-                    foreground: '#c0caf5',
-                    cursor: '#c0caf5',
+                    background: '#0c1420',
+                    foreground: '#c8dff0',
+                    cursor: '#00c8ff',
+                    cursorAccent: '#0c1420',
+                    selectionBackground: '#1e3a5f',
+                    black: '#1a1b26', red: '#ff1744', green: '#00e676', yellow: '#ffb300',
+                    blue: '#00c8ff', magenta: '#ab47bc', cyan: '#26c6da', white: '#c8dff0',
                 },
             });
             const fitAddon = new window.FitAddon.FitAddon();

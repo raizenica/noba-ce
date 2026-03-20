@@ -190,8 +190,8 @@
     <div class="health-bar" x-show="authenticated" x-cloak title="Service Health">
         <div class="health-pip" :class="(services||[]).length ? ((services||[]).every(s=>s.running) ? 'ok' : 'warn') : 'off'" title="Services"></div>
         <div class="health-pip" :class="scrutiny ? (scrutiny.failed > 0 ? 'warn' : 'ok') : 'off'" title="Disks"></div>
-        <div class="health-pip" :class="tailscale ? (tailscale.onlineCount === tailscale.totalCount ? 'ok' : 'warn') : 'off'" title="Tailscale"></div>
-        <div class="health-pip" :class="frigateUrl && frigate ? (frigate.onlineCount > 0 ? 'ok' : 'warn') : 'off'" title="Cameras"></div>
+        <div class="health-pip" :class="tailscale ? (tailscale?.onlineCount === tailscale?.totalCount ? 'ok' : 'warn') : 'off'" title="Tailscale"></div>
+        <div class="health-pip" :class="frigateUrl && frigate ? (frigate?.onlineCount > 0 ? 'ok' : 'warn') : 'off'" title="Cameras"></div>
         <div class="health-pip" :class="radar && radar.length ? (radar.every(r=>r.status==='Up') ? 'ok' : 'warn') : 'off'" title="Network"></div>
         <div class="health-pip" :class="piholeUrl && pihole ? 'ok' : piholeUrl ? 'warn' : 'off'" title="DNS"></div>
         <div class="health-pip" :class="containers && containers.length ? 'ok' : 'off'" title="Containers"></div>
@@ -732,6 +732,8 @@
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-scrutiny" x-show="!collapsed.scrutiny">
+                <template x-if="scrutiny">
+                <div>
                 <div class="row">
                     <span class="row-label">Disks</span>
                     <span class="row-val" x-text="scrutiny.devices"></span>
@@ -767,11 +769,13 @@
                         </div>
                     </template>
                 </div>
+                </div>
+                </template>
             </div>
         </div>
 
         <!-- ── Tailscale Network ────────────────────────────────────────── -->
-        <div class="card" data-id="card-tailscale" x-show="vis.tailscale && tailscale" :data-health="tailscale ? (tailscale.onlineCount === tailscale.totalCount ? 'ok' : 'warn') : ''" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+        <div class="card" data-id="card-tailscale" x-show="vis.tailscale && tailscale" :data-health="tailscale ? (tailscale?.onlineCount === tailscale?.totalCount ? 'ok' : 'warn') : ''" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
             <div class="card-hdr">
                 <i class="fas fa-network-wired card-icon" style="color:#56b6c2" aria-hidden="true"></i>
                 <span class="card-title">Tailscale</span>
@@ -779,10 +783,10 @@
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-tailscale" x-show="!collapsed.tailscale">
-                <div class="row"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale.tailnet || '—'"></span></div>
-                <div class="row"><span class="row-label">Nodes Online</span><span class="row-val" style="color:var(--success)" x-text="(tailscale.onlineCount||0) + '/' + (tailscale.totalCount||0)"></span></div>
+                <div class="row"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale?.tailnet || '—'"></span></div>
+                <div class="row"><span class="row-label">Nodes Online</span><span class="row-val" style="color:var(--success)" x-text="(tailscale?.onlineCount||0) + '/' + (tailscale?.totalCount||0)"></span></div>
                 <div style="margin-top:.5rem;max-height:150px;overflow-y:auto">
-                    <template x-for="p in (tailscale.peers||[]).filter(n=>n.online).slice(0,8)" :key="p.hostname">
+                    <template x-for="p in (tailscale?.peers||[]).filter(n=>n.online).slice(0,8)" :key="p.hostname">
                         <div class="row" style="font-size:.75rem">
                             <span class="row-label"><i class="fas fa-circle dot-up" style="font-size:.35rem;margin-right:4px"></i><span x-text="p.hostname"></span></span>
                             <span class="row-val" style="opacity:.7" x-text="p.ip"></span>
@@ -793,7 +797,7 @@
         </div>
 
         <!-- ── Frigate Cameras ──────────────────────────────────────────── -->
-        <div class="card" data-id="card-frigate" x-show="vis.frigate && frigateUrl && frigate" :data-health="frigate ? (frigate.onlineCount === frigate.cameraCount ? 'ok' : 'fail') : ''" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
+        <div class="card" data-id="card-frigate" x-show="vis.frigate && frigateUrl && frigate" :data-health="frigate ? (frigate?.onlineCount === frigate?.cameraCount ? 'ok' : 'fail') : ''" @contextmenu="showContextMenu($event, $el.dataset.id?.replace('card-','') || '')">
             <div class="card-hdr">
                 <i class="fas fa-video card-icon" style="color:#e06c75" aria-hidden="true"></i>
                 <span class="card-title">Cameras</span>
@@ -801,10 +805,10 @@
                 <i class="fas fa-grip-lines drag-handle" aria-hidden="true"></i>
             </div>
             <div class="card-body" id="body-frigate" x-show="!collapsed.frigate">
-                <div class="row"><span class="row-label">Cameras</span><span class="row-val" x-text="(frigate.onlineCount||0) + '/' + (frigate.cameraCount||0) + ' online'"></span></div>
-                <div class="row" x-show="frigate.version"><span class="row-label">Version</span><span class="row-val" x-text="frigate.version"></span></div>
+                <div class="row"><span class="row-label">Cameras</span><span class="row-val" x-text="(frigate?.onlineCount||0) + '/' + (frigate?.cameraCount||0) + ' online'"></span></div>
+                <div class="row" x-show="frigate?.version"><span class="row-label">Version</span><span class="row-val" x-text="frigate?.version"></span></div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.4rem;margin-top:.5rem">
-                    <template x-for="cam in (frigate.cameras||[])" :key="cam.name">
+                    <template x-for="cam in (frigate?.cameras||[])" :key="cam.name">
                         <div style="position:relative;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
                             <img :src="'/api/cameras/snapshot/' + cam.name" loading="lazy" :alt="cam.name" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block" onerror="this.style.display='none'">
                             <div style="padding:.2rem .4rem;font-size:.65rem;display:flex;justify-content:space-between;background:var(--surface-2)">
@@ -4906,10 +4910,10 @@
         <div style="padding:16px">
             <template x-if="tailscale">
                 <div>
-                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale.tailnet"></span></div>
-                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">This Node</span><span class="row-val" x-text="(tailscale.self?.hostname||'') + ' (' + (tailscale.self?.ip||'') + ')'"></span></div>
+                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">Tailnet</span><span class="row-val" x-text="tailscale?.tailnet"></span></div>
+                    <div class="row" style="margin-bottom:.8rem"><span class="row-label">This Node</span><span class="row-val" x-text="(tailscale?.self?.hostname||'') + ' (' + (tailscale?.self?.ip||'') + ')'"></span></div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.6rem">
-                        <template x-for="p in (tailscale.peers||[]).sort((a,b)=>b.online-a.online)" :key="p.hostname">
+                        <template x-for="p in (tailscale?.peers||[]).sort((a,b)=>b.online-a.online)" :key="p.hostname">
                             <div style="padding:.6rem;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
                                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
                                     <span style="font-weight:600;font-size:.85rem" x-text="p.hostname"></span>
