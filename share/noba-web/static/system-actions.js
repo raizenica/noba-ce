@@ -134,7 +134,7 @@ function systemActionsMixin() {
 
         // ── Network Traffic Analysis state ──────────────────────────────
         trafficAgent: '',
-        trafficData: null,
+        trafficData: {},
         trafficLoading: false,
         trafficConnFilter: '',
 
