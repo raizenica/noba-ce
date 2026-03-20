@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 
 # ── Configuration ────────────────────────────────────────────────────────────
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 DEFAULT_INTERVAL = 30
 DEFAULT_CONFIG = "/etc/noba-agent.yaml"
 # Mount types to exclude from disk reporting

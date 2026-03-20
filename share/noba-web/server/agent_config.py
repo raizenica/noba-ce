@@ -91,6 +91,8 @@ AGENT_CAPABILITIES: dict[str, frozenset[str]] = {
     "v1.1.0": _V1_COMMANDS,
     "2.0.0": _V2_COMMANDS,
     "v2.0.0": _V2_COMMANDS,
+    "2.1.0": _V2_COMMANDS,
+    "v2.1.0": _V2_COMMANDS,
 }
 
 
