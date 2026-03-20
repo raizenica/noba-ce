@@ -1220,7 +1220,19 @@ async def agent_websocket(ws: WebSocket):
             msg = await ws.receive_json()
             msg_type = msg.get("type", "")
 
-            if msg_type == "result":
+            # Detect results from old agents (pre-fix): the "type" key
+            # contains the command name instead of "result" due to a dict
+            # unpacking collision.  Normalise so the rest of the handler
+            # works identically for old and new agents.
+            is_result = msg_type == "result"
+            if not is_result and msg_type in RISK_LEVELS and "id" in msg:
+                # Old-format result: {"type": "disk_usage", "id": "...", ...}
+                is_result = True
+                msg["cmd"] = msg_type       # stash command type
+                msg["type"] = "result"      # fix discriminator
+                msg_type = "result"
+
+            if is_result:
                 with _agent_cmd_lock:
                     _agent_cmd_results.setdefault(hostname, []).append(msg)
                     if len(_agent_cmd_results[hostname]) > 50:
@@ -1233,7 +1245,8 @@ async def agent_websocket(ws: WebSocket):
                     except Exception:
                         pass
                 # Auto-record security scan results via WebSocket
-                if msg.get("cmd") == "security_scan" and msg.get("status") == "ok":
+                cmd_name = msg.get("cmd", "")
+                if cmd_name == "security_scan" and msg.get("status") == "ok":
                     try:
                         db.record_security_scan(
                             hostname,
@@ -1243,7 +1256,7 @@ async def agent_websocket(ws: WebSocket):
                     except Exception:
                         pass
                 # Auto-record backup verification results via WebSocket
-                if msg.get("cmd") == "verify_backup":
+                if cmd_name == "verify_backup":
                     try:
                         details = msg.get("details")
                         db.record_backup_verification(
