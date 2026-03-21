@@ -4,6 +4,9 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Backend decomposition (v3 Phase 1)** — Decomposed `routers/system.py` (3190 lines, 117 routes) into 8 focused domain routers: `agents.py` (22), `containers.py` (8), `dashboards.py` (4), `infrastructure.py` (19), `intelligence.py` (22), `monitoring.py` (17), `operations.py` (19), `security.py` (6). All route URLs unchanged. `system.py` deleted.
+
 ### Fixed
 - **Collector timeout stacking** — Integration futures were evaluated sequentially with per-future timeouts (3-6s each), meaning the 5-second collection cycle could take 200+ seconds if multiple integrations were offline. Replaced with `concurrent.futures.wait()` using a single 4.5s global deadline — futures that don't finish in time gracefully return defaults.
 - **Workflow engine subprocess overhead** — Webhook and HTTP automation steps spawned full `subprocess.Popen(["curl", ...])` OS processes for every request. Replaced with native `httpx` calls wrapped in a Popen-compatible `_HttpResult` class, eliminating process fork overhead while preserving the job_runner contract.
