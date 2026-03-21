@@ -101,7 +101,7 @@ const historyChartConfig = computed(() => {
       maintainAspectRatio: false,
       scales: {
         x: {
-          type: 'time',
+          type: 'category',
           time: { tooltipFormat: 'MMM d, HH:mm' },
           grid: { color: 'rgba(255,255,255,0.05)' },
         },

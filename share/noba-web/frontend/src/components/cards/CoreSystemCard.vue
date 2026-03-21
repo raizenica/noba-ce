@@ -10,8 +10,10 @@ const memory     = computed(() => dashboard.live.memory || {})
 const uptime     = computed(() => dashboard.live.uptime || '--')
 const loadavg    = computed(() => {
   const la = dashboard.live.loadavg
-  if (!la || !la.length) return '--'
-  return la.map(v => (v || 0).toFixed(2)).join(' ')
+  if (!la) return '--'
+  if (typeof la === 'string') return la
+  if (Array.isArray(la) && la.length) return la.map(v => (v || 0).toFixed(2)).join(' ')
+  return '--'
 })
 const cpuTemp    = computed(() => dashboard.live.cpuTemp || '--')
 const osName     = computed(() => dashboard.live.osName || '--')

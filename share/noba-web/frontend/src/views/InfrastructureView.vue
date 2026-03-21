@@ -369,7 +369,7 @@ const predChartConfig = computed(() => {
       animation: { duration: 0 },
       scales: {
         x: {
-          type: 'time',
+          type: 'category',
           ticks: { color: 'rgba(200,223,240,.6)', maxTicksLimit: 8 },
           grid: { display: false },
         },

@@ -79,7 +79,8 @@ const projectionPoints = computed(() => {
   const metrics = capacityData.value?.metrics
   if (!metrics) return []
   const first = Object.values(metrics)[0]
-  return first?.projection || []
+  const proj = first?.projection
+  return Array.isArray(proj) ? proj : []
 })
 
 const chartConfig = computed(() => {
@@ -88,7 +89,7 @@ const chartConfig = computed(() => {
   return {
     type: 'line',
     data: {
-      labels: points.map(p => new Date(p.time * 1000)),
+      labels: points.map(p => new Date(p.time * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
       datasets: [
         {
           label: 'Predicted',
@@ -139,7 +140,7 @@ const chartConfig = computed(() => {
       animation: { duration: 0 },
       scales: {
         x: {
-          type: 'time',
+          type: 'category',
           ticks: { color: 'rgba(200,223,240,.6)', maxTicksLimit: 6 },
           grid: { display: false },
         },
