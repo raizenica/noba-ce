@@ -24,7 +24,10 @@ async function fetchCapacity() {
 
 function formatRelativeTime(ts) {
   if (!ts) return null
-  const diff = ts - Date.now() / 1000
+  // ts may be ISO string or unix timestamp
+  const targetMs = typeof ts === 'string' ? new Date(ts).getTime() : ts * 1000
+  const diff = (targetMs - Date.now()) / 1000
+  if (isNaN(diff)) return null
   if (diff <= 0) return 'already full'
   const days = Math.floor(diff / 86400)
   if (days < 1)  return 'less than a day'
@@ -37,7 +40,9 @@ function formatRelativeTime(ts) {
 
 function formatAbsDate(ts) {
   if (!ts) return ''
-  return new Date(ts * 1000).toLocaleDateString(undefined, {
+  const d = typeof ts === 'string' ? new Date(ts) : new Date(ts * 1000)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, {
     year: 'numeric', month: 'short', day: 'numeric',
   })
 }
