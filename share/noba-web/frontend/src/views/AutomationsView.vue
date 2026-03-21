@@ -10,6 +10,7 @@ import AutomationFormModal          from '../components/automations/AutomationFo
 import RunOutputModal               from '../components/automations/RunOutputModal.vue'
 import ApprovalQueue                from '../components/automations/ApprovalQueue.vue'
 import MaintenanceWindows           from '../components/automations/MaintenanceWindows.vue'
+import PlaybookLibrary              from '../components/automations/PlaybookLibrary.vue'
 import DataTable                    from '../components/ui/DataTable.vue'
 
 const authStore = useAuthStore()
@@ -462,6 +463,14 @@ onMounted(async () => {
       >
         <i class="fas fa-clipboard-list" style="margin-right:.25rem"></i>Audit Trail
       </button>
+      <button
+        class="btn btn-xs"
+        :class="activeTab === 'playbooks' ? 'btn-primary' : ''"
+        style="border-radius:4px 4px 0 0;border-bottom:none"
+        @click="activeTab = 'playbooks'"
+      >
+        <i class="fas fa-book" style="margin-right:.25rem"></i>Playbooks
+      </button>
     </div>
 
     <!-- Audit Trail tab content -->
@@ -520,6 +529,11 @@ onMounted(async () => {
           </template>
         </DataTable>
       </div>
+    </div>
+
+    <!-- Playbooks tab content -->
+    <div v-if="activeTab === 'playbooks'">
+      <PlaybookLibrary />
     </div>
 
     <!-- Approvals tab content -->
