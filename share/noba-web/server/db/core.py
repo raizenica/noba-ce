@@ -65,20 +65,25 @@ from .audit import (
 )
 from .automations import (
     _auto_approve_expired,
+    _cleanup_tokens,
     _count_pending_approvals,
     _decide_approval,
     _delete_maintenance_window,
+    _delete_token,
     _get_action_audit,
     _get_active_maintenance_windows,
     _get_approval,
     _get_playbook_template,
+    _get_token,
     _get_workflow_context,
     _insert_action_audit,
     _insert_approval,
     _insert_maintenance_window,
+    _insert_token,
     _list_approvals,
     _list_maintenance_windows,
     _list_playbook_templates,
+    _load_tokens,
     _save_workflow_context,
     _seed_default_playbooks,
     _update_approval_result,
@@ -596,6 +601,16 @@ class Database:
                     config      TEXT NOT NULL,
                     version     INTEGER NOT NULL DEFAULT 1
                 );
+
+                CREATE TABLE IF NOT EXISTS tokens (
+                    token_hash  TEXT PRIMARY KEY,
+                    username    TEXT NOT NULL,
+                    role        TEXT NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    expires_at  INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tokens_expires
+                    ON tokens(expires_at);
             """)
             # Migrate existing databases: add assigned_to column if missing
             try:
@@ -746,6 +761,30 @@ class Database:
 
     def delete_api_key(self, key_id: str) -> bool:
         return _delete_api_key(self._get_conn(), self._lock, key_id)
+
+    # ── Token persistence ─────────────────────────────────────────────────────
+    def insert_token(self, token_hash: str, username: str, role: str,
+                     created_at: int, expires_at: int) -> None:
+        _insert_token(self._get_conn(), self._lock, token_hash, username,
+                      role, created_at, expires_at)
+
+    def delete_token(self, token_hash: str) -> None:
+        _delete_token(self._get_conn(), self._lock, token_hash)
+
+    def get_token(self, token_hash: str) -> dict | None:
+        return _get_token(self._get_conn(), self._lock, token_hash)
+
+    def cleanup_tokens(self) -> None:
+        _cleanup_tokens(self._get_conn(), self._lock)
+
+    def load_tokens(self) -> list[dict]:
+        return _load_tokens(self._get_conn(), self._lock)
+
+    # ── WAL checkpoint ────────────────────────────────────────────────────────
+    def wal_checkpoint(self) -> None:
+        """Run WAL checkpoint. Safe to call from cleanup loop."""
+        with self._lock:
+            self._get_conn().execute("PRAGMA wal_checkpoint(TRUNCATE);")
 
     # ── Notifications ─────────────────────────────────────────────────────────
     def insert_notification(self, level: str, title: str, message: str,

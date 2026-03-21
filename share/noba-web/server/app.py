@@ -47,8 +47,7 @@ def _cleanup_loop() -> None:
             db.prune_endpoint_check_history()
             # Checkpoint WAL to prevent unbounded growth on long-running instances
             try:
-                with db._lock:
-                    db._get_conn().execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                db.wal_checkpoint()
             except Exception as exc:
                 logger.debug("WAL checkpoint failed: %s", exc)
         if _prune_counter == 6:  # Every ~30 minutes
@@ -108,6 +107,8 @@ async def _cleanup_transfers() -> None:
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Hydrate token store from DB (tokens survive restarts)
+    token_store.load_from_db()
     db.mark_stale_jobs()
     db.audit_log("system_start", "system", f"Noba v{VERSION} starting (FastAPI)")
     bg_collector.start()
@@ -265,6 +266,26 @@ async def favicon_ico():
 # ── Include API routers ───────────────────────────────────────────────────────
 from .routers import api_router  # noqa: E402
 app.include_router(api_router)
+
+
+# ── Health check endpoint ─────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    """Health check endpoint for monitoring and load balancers."""
+    checks: dict = {"status": "ok", "timestamp": int(time.time())}
+
+    # DB check
+    try:
+        db.get_history("cpu_percent", range_hours=0, resolution=1)
+        checks["db"] = "ok"
+    except Exception:
+        checks["db"] = "error"
+        checks["status"] = "degraded"
+
+    # Uptime
+    checks["uptime_s"] = int(time.time() - _server_start_time)
+
+    return checks
 
 
 # ── SPA fallback (must be last) ──────────────────────────────────────────────

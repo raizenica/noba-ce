@@ -158,6 +158,7 @@ async def api_agent_report(request: Request):
                       if cmds and cmds[0].get("queued_at", 0) < time.time() - 600]
         for h in stale_cmds:
             del _agent_commands[h]
+    logger.info("Agent report", extra={"hostname": hostname, "ip": body.get("_ip")})
     return {"status": "ok", "commands": pending}
 
 

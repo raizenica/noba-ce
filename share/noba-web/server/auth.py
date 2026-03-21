@@ -12,6 +12,12 @@ from datetime import datetime, timedelta
 
 from .config import AUTH_CONFIG, USER_DB, TOKEN_TTL_H, _PW_MIN_LEN
 
+
+def _get_db():
+    """Lazy import of DB to avoid circular imports at module load time."""
+    from .db import db  # noqa: PLC0415
+    return db
+
 logger = logging.getLogger("noba")
 
 _USERNAME_RE = re.compile(r"^[^\s:/\\]{1,64}$")
@@ -248,18 +254,85 @@ def load_legacy_user() -> tuple | None:
 
 # ── Token store ───────────────────────────────────────────────────────────────
 
+def _token_hash(token: str) -> str:
+    """Return sha256 hex digest of a plaintext token."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class TokenStore:
-    """In-memory JWT-style bearer token store with TTL."""
+    """Bearer token store with in-memory cache and DB persistence.
+
+    In-memory dict is keyed by plaintext token (original behavior).
+    DB stores tokens hashed with sha256 so plaintext is never persisted.
+    Tokens survive restarts: ``load_from_db()`` is called at startup to
+    recover tokens from the previous run (they cannot be stored plaintext,
+    so recovered tokens are keyed by their hash and validated via
+    ``_validate_by_hash()``).
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # Keyed by plaintext token (fast path)
         self._tokens: dict[str, tuple[str, str, datetime]] = {}
+        # Keyed by sha256 hash (populated from DB on startup restart recovery)
+        self._tokens_by_hash: dict[str, tuple[str, str, datetime]] = {}
+
+    # ── DB helpers ─────────────────────────────────────────────────────────────
+
+    def _db_insert(self, token: str, username: str, role: str, expires: datetime) -> None:
+        try:
+            _get_db().insert_token(
+                token_hash=_token_hash(token),
+                username=username,
+                role=role,
+                created_at=int(time.time()),
+                expires_at=int(expires.timestamp()),
+            )
+        except Exception as exc:
+            logger.debug("TokenStore DB insert failed: %s", exc)
+
+    def _db_delete(self, token: str) -> None:
+        try:
+            _get_db().delete_token(_token_hash(token))
+        except Exception as exc:
+            logger.debug("TokenStore DB delete failed: %s", exc)
+
+    def _db_delete_by_hash(self, token_hash: str) -> None:
+        try:
+            _get_db().delete_token(token_hash)
+        except Exception as exc:
+            logger.debug("TokenStore DB delete_by_hash failed: %s", exc)
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def load_from_db(self) -> None:
+        """Hydrate hash-keyed store from DB on startup.
+
+        We cannot reconstruct plaintext tokens, so recovered tokens are stored
+        in ``_tokens_by_hash`` and validated when the client presents the token.
+        """
+        try:
+            rows = _get_db().load_tokens()
+            loaded = 0
+            with self._lock:
+                for row in rows:
+                    h = row["token_hash"]
+                    expires = datetime.fromtimestamp(row["expires_at"])
+                    if expires > datetime.now():
+                        self._tokens_by_hash[h] = (row["username"], row["role"], expires)
+                        loaded += 1
+            if loaded:
+                logger.info("TokenStore: loaded %d token(s) from DB", loaded)
+        except Exception as exc:
+            logger.debug("TokenStore load_from_db failed: %s", exc)
 
     def generate(self, username: str, role: str) -> str:
         token = secrets.token_urlsafe(32)
         expires = datetime.now() + timedelta(hours=TOKEN_TTL_H)
         with self._lock:
             self._tokens[token] = (username, role, expires)
+        # Persist to DB (hashed — never plaintext)
+        self._db_insert(token, username, role, expires)
         # Mirror to cache for cross-instance sharing
         from .cache import cache as _cache  # noqa: PLC0415
 
@@ -268,13 +341,33 @@ class TokenStore:
         return token
 
     def validate(self, token: str) -> tuple[str | None, str | None]:
-        # Check in-memory first
+        # Fast path: check plaintext dict
         with self._lock:
             data = self._tokens.get(token)
             if data and data[2] > datetime.now():
                 return data[0], data[1]
             self._tokens.pop(token, None)
-        # Fall back to cache (Redis)
+        # Restart-recovery path: check hash dict (populated from DB)
+        h = _token_hash(token)
+        with self._lock:
+            data = self._tokens_by_hash.get(h)
+            if data and data[2] > datetime.now():
+                # Promote to plaintext dict for faster future lookups
+                self._tokens[token] = data
+                self._tokens_by_hash.pop(h, None)
+                return data[0], data[1]
+            self._tokens_by_hash.pop(h, None)
+        # DB fallback: check DB directly (for tokens from other processes)
+        try:
+            row = _get_db().get_token(h)
+            if row:
+                expires = datetime.fromtimestamp(row["expires_at"])
+                with self._lock:
+                    self._tokens[token] = (row["username"], row["role"], expires)
+                return row["username"], row["role"]
+        except Exception as exc:
+            logger.debug("TokenStore DB fallback failed: %s", exc)
+        # Redis fallback
         from .cache import cache as _cache  # noqa: PLC0415
 
         if _cache.is_redis:
@@ -286,6 +379,8 @@ class TokenStore:
     def revoke(self, token: str) -> None:
         with self._lock:
             self._tokens.pop(token, None)
+            self._tokens_by_hash.pop(_token_hash(token), None)
+        self._db_delete(token)
         from .cache import cache as _cache  # noqa: PLC0415
 
         if _cache.is_redis:
@@ -304,10 +399,19 @@ class TokenStore:
                         "role": role,
                         "expires": expires.isoformat(),
                     })
+            # Also include restart-recovered sessions (keyed by hash)
+            for h, (username, role, expires) in self._tokens_by_hash.items():
+                if expires > now:
+                    sessions.append({
+                        "prefix": h[:8] + "\u2026",
+                        "username": username,
+                        "role": role,
+                        "expires": expires.isoformat(),
+                    })
             return sessions
 
     def revoke_by_prefix(self, prefix: str) -> bool:
-        """Revoke a token by its first 8 characters."""
+        """Revoke a token by its first 8 characters (plaintext token prefix)."""
         from .cache import cache as _cache  # noqa: PLC0415
 
         with self._lock:
@@ -316,6 +420,13 @@ class TokenStore:
                     del self._tokens[tok]
                     if _cache.is_redis:
                         _cache.delete(f"noba:token:{tok}")
+                    self._db_delete_by_hash(_token_hash(tok))
+                    return True
+            # Also check hash-keyed tokens (restart-recovered sessions)
+            for h in list(self._tokens_by_hash):
+                if h[:8] == prefix[:8]:
+                    del self._tokens_by_hash[h]
+                    self._db_delete_by_hash(h)
                     return True
             return False
 
@@ -325,6 +436,14 @@ class TokenStore:
             expired = [t for t, (_, _, exp) in list(self._tokens.items()) if exp <= now]
             for t in expired:
                 del self._tokens[t]
+            expired_h = [h for h, (_, _, exp) in list(self._tokens_by_hash.items()) if exp <= now]
+            for h in expired_h:
+                del self._tokens_by_hash[h]
+        # Also clean expired rows from DB
+        try:
+            _get_db().cleanup_tokens()
+        except Exception as exc:
+            logger.debug("TokenStore DB cleanup failed: %s", exc)
 
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────

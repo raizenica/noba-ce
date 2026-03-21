@@ -113,6 +113,10 @@ def execute_action(action_type, params, triggered_by="system",
             health_ok = _health_check(action_type, params)
 
         outcome = "success" if result.get("success", False) else "failure"
+        logger.info(
+            "Action executed: %s", action_type,
+            extra={"action_type": action_type, "target": target, "outcome": outcome},
+        )
         _db.insert_action_audit(
             trigger_type=trigger_type, trigger_id=trigger_id,
             action_type=action_type, action_params=params,

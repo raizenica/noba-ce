@@ -125,6 +125,7 @@ class JobRunner:
         exit_code: int | None = None
         error: str | None = None
         proc: subprocess.Popen | None = None
+        _job_start = time.monotonic()
 
         try:
             proc = run_fn(run_id)
@@ -202,6 +203,11 @@ class JobRunner:
             error = str(exc)[:512]
         finally:
             output = "".join(output_buf) if output_buf else None
+            logger.info(
+                "Job %d complete: %s", run_id, status,
+                extra={"run_id": run_id, "status": status,
+                       "duration": round(time.monotonic() - _job_start, 2)},
+            )
             db.update_job_run(run_id, status, output=output,
                               exit_code=exit_code, error=error)
             with self._lock:

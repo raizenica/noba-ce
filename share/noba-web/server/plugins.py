@@ -32,6 +32,38 @@ from .config import PLUGIN_API_VERSION
 
 logger = logging.getLogger("noba")
 
+
+class PluginContext:
+    """Limited context passed to new-style plugins instead of raw app + db.
+
+    New plugins should declare ``register(ctx: PluginContext)`` and use this
+    interface.  Legacy plugins with ``register(app, db)`` signatures continue
+    to work unchanged — the manager calls them with the raw objects.
+    """
+
+    def __init__(self, app, db) -> None:
+        self._app = app
+        self._db = db
+
+    def add_route(self, path: str, endpoint, methods=None, **kwargs) -> None:
+        """Register a new API route."""
+        self._app.add_api_route(
+            path, endpoint, methods=methods or ["GET"], **kwargs
+        )
+
+    def query(self, sql: str, params=None) -> list[dict]:
+        """Execute a read-only DB query. Returns list of row dicts."""
+        with self._db._lock:
+            conn = self._db._get_conn()
+            cur = conn.execute(sql, params or ())
+            return [dict(r) for r in cur.fetchall()]
+
+    def log(self, message: str, level: str = "info") -> None:
+        """Log a message under the plugin namespace."""
+        logging.getLogger("noba.plugin").log(
+            getattr(logging, level.upper(), logging.INFO), message
+        )
+
 PLUGIN_DIR = Path(os.environ.get(
     "NOBA_PLUGIN_DIR",
     os.path.expanduser("~/.config/noba/plugins"),
@@ -179,10 +211,20 @@ class PluginManager:
             if hasattr(mod, "setup"):
                 mod.setup()
 
-            # Call register(app, db) if present -- the formalized interface
+            # Call register() if present -- the formalized interface.
+            # New-style plugins accept register(ctx: PluginContext).
+            # Legacy plugins accept register(app, db) -- both are supported.
             if hasattr(mod, "register") and self._app is not None:
                 try:
-                    mod.register(self._app, self._db)
+                    import inspect as _inspect  # noqa: PLC0415
+                    sig = _inspect.signature(mod.register)
+                    param_count = len(sig.parameters)
+                    if param_count == 1:
+                        # New-style: register(ctx)
+                        mod.register(PluginContext(self._app, self._db))
+                    else:
+                        # Legacy: register(app, db)
+                        mod.register(self._app, self._db)
                 except Exception as e:
                     logger.error("Plugin %s register error: %s", plugin_id, e)
                     plugin.error = f"register failed: {e}"

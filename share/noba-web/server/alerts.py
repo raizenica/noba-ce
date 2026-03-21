@@ -514,6 +514,10 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
                     dispatch_notifications(severity, message, notif_cfg, channels)
 
             # Record alert in history
+            logger.info(
+                "Alert fired: %s", rule_id,
+                extra={"rule_id": rule_id, "severity": severity, "autonomy": autonomy},
+            )
             _db.insert_alert_history(rule_id, severity, message)
 
             # Auto-create incident
