@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAuthStore }      from '../stores/auth'
 import { useApi }            from '../composables/useApi'
+import { useNotificationsStore } from '../stores/notifications'
 
 import AgentDetailModal from '../components/agents/AgentDetailModal.vue'
 import CommandPalette   from '../components/agents/CommandPalette.vue'
@@ -11,7 +12,8 @@ import DeployModal      from '../components/agents/DeployModal.vue'
 
 const dashboardStore = useDashboardStore()
 const authStore      = useAuthStore()
-const { get }        = useApi()
+const { get, del }   = useApi()
+const notify         = useNotificationsStore()
 
 // ── Agent list from SSE store ──────────────────────────────────────────────────
 const agents = computed(() => dashboardStore.live.agents || [])
@@ -47,6 +49,16 @@ const logStreamHost    = ref('')
 function openLogStream(hostname) {
   logStreamHost.value = hostname
   showLogStream.value = true
+}
+
+async function deleteAgent(hostname) {
+  if (!confirm(`Remove agent "${hostname}" from the dashboard? This only removes the record — the agent service on the remote host is not affected.`)) return
+  try {
+    await del(`/api/agents/${hostname}`)
+    notify.addToast(`Agent "${hostname}" removed`, 'success')
+  } catch (e) {
+    notify.addToast(`Failed to remove agent: ${e.message}`, 'danger')
+  }
 }
 
 // ── Deploy modal ──────────────────────────────────────────────────────────────
@@ -164,9 +176,9 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Quick action buttons (operator+) -->
+        <!-- Quick action buttons -->
         <div
-          v-if="a.online && authStore.isOperator"
+          v-if="authStore.isOperator"
           style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.3rem"
           @click.stop
         >
@@ -176,10 +188,18 @@ onMounted(() => {
             @click="openDetail(a)"
           ><i class="fas fa-info-circle"></i></button>
           <button
+            v-if="a.online"
             class="btn btn-xs"
             title="Stream logs"
             @click="openLogStream(a.hostname)"
           ><i class="fas fa-scroll"></i></button>
+          <button
+            v-if="authStore.isAdmin"
+            class="btn btn-xs"
+            style="margin-left:auto;color:var(--danger)"
+            title="Remove agent"
+            @click="deleteAgent(a.hostname)"
+          ><i class="fas fa-trash"></i></button>
         </div>
       </div>
     </div>

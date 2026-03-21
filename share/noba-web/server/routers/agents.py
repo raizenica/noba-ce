@@ -456,6 +456,23 @@ async def api_agent_uninstall(hostname: str, request: Request, auth=Depends(_req
     return {"status": "queued", "id": cmd_id}
 
 
+@router.delete("/api/agents/{hostname}")
+def api_agent_delete(hostname: str, request: Request, auth=Depends(_require_admin)):
+    """Remove an agent from the dashboard (DB + in-memory). Admin only."""
+    username, _ = auth
+    ip = _client_ip(request)
+    with _agent_data_lock:
+        _agent_data.pop(hostname, None)
+    with _agent_cmd_lock:
+        _agent_commands.pop(hostname, None)
+        _agent_cmd_results.pop(hostname, None)
+    with _agent_ws_lock:
+        _agent_websockets.pop(hostname, None)
+    db.delete_agent(hostname)
+    db.audit_log("agent_delete", username, f"host={hostname}", ip)
+    return {"status": "ok"}
+
+
 @router.get("/api/agents/{hostname}/results")
 def api_agent_results(hostname: str, auth=Depends(_get_auth)):
     """Get command execution results for an agent."""
