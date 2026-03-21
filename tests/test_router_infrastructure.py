@@ -305,42 +305,48 @@ class TestServicesMap:
 # GET /api/disks/prediction  (user auth)
 # ===========================================================================
 
+_DISK_MOCK_RESULT = {
+    "metrics": {
+        "disk_percent": {
+            "regression": {"slope": 0.0001, "intercept": 40.0, "r_squared": 0.9},
+            "seasonal": None,
+            "projection": [],
+            "residual_std": 0.5,
+        }
+    },
+    "combined": {
+        "full_at": "2026-06-01T00:00:00+00:00",
+        "primary_metric": "disk_percent",
+        "r_squared": 0.9,
+        "confidence": "high",
+        "slope_per_day": 8.64,
+    },
+}
+
+
 class TestDiskPrediction:
-    """GET /api/disks/prediction — uses bg_collector + db.get_trend."""
+    """GET /api/disks/prediction — returns predict_capacity shape."""
 
     def test_no_auth_returns_401(self, client):
         resp = client.get("/api/disks/prediction")
         assert resp.status_code == 401
 
-    def test_viewer_returns_200_empty_when_no_disks(self, client, viewer_headers):
-        resp = client.get("/api/disks/prediction", headers=viewer_headers)
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
-
-    def test_disk_data_returns_prediction_fields(self, client, admin_headers):
-        import server.deps as _deps
-
-        fake_stats = {"disks": [{"mount": "/", "percent": 55}]}
-        fake_trend = {"full_at": "2026-06-01", "slope": 0.0001, "r_squared": 0.9}
-
-        original_get = _deps.bg_collector.get
-        _deps.bg_collector.get = MagicMock(return_value=fake_stats)
-        try:
-            with patch("server.routers.infrastructure.db") as mock_db:
-                mock_db.get_trend.return_value = fake_trend
-                mock_db.audit_log = MagicMock()
-                resp = client.get("/api/disks/prediction", headers=admin_headers)
-        finally:
-            _deps.bg_collector.get = original_get
-
+    def test_viewer_returns_200_with_metrics_and_combined(self, client, viewer_headers):
+        with patch("server.prediction.predict_capacity", return_value=_DISK_MOCK_RESULT):
+            resp = client.get("/api/disks/prediction", headers=viewer_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
-        item = data[0]
-        assert item["mount"] == "/"
-        assert "current_percent" in item
-        assert "slope_per_day" in item
+        assert "metrics" in data
+        assert "combined" in data
+
+    def test_disk_data_returns_prediction_fields(self, client, admin_headers):
+        with patch("server.prediction.predict_capacity", return_value=_DISK_MOCK_RESULT):
+            resp = client.get("/api/disks/prediction", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "disk_percent" in data["metrics"]
+        assert "confidence" in data["combined"]
+        assert "full_at" in data["combined"]
 
 
 # ===========================================================================

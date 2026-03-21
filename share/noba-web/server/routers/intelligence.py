@@ -513,6 +513,18 @@ async def api_ai_summarize_incident(incident_id: int, auth=Depends(_require_oper
         raise HTTPException(502, f"LLM request failed: {e}")
 
 
+# ── Prediction endpoints ──────────────────────────────────────────────────────
+
+@router.get("/api/predict/capacity")
+def api_predict_capacity(request: Request, auth=Depends(_get_auth)):
+    """Multi-metric capacity prediction with confidence intervals."""
+    from ..prediction import predict_capacity
+    metrics = request.query_params.get("metrics", "disk_percent").split(",")
+    range_h = min(int(request.query_params.get("range", "168")), 720)
+    proj_h = min(int(request.query_params.get("projection", "720")), 2160)
+    return predict_capacity(metrics, range_hours=range_h, projection_hours=proj_h)
+
+
 @router.post("/api/ai/test")
 async def api_ai_test(auth=Depends(_require_admin)):
     """Test the LLM connection by sending a simple prompt."""

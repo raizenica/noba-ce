@@ -151,20 +151,18 @@ def api_service_map(auth=Depends(_get_auth)):
 # ── Disk usage prediction ────────────────────────────────────────────────────
 @router.get("/api/disks/prediction")
 def api_disk_prediction(request: Request, auth=Depends(_get_auth)):
-    """Predict when each disk will be full based on usage trends."""
-    results = []
-    stats = _deps.bg_collector.get() or {}
-    for disk in stats.get("disks", []):
-        mount = disk.get("mount", "")
+    """Disk capacity prediction with confidence intervals."""
+    from ..prediction import predict_capacity
+    try:
+        result = predict_capacity(["disk_percent"], range_hours=168, projection_hours=720)
+        return result
+    except Exception:
+        # Fallback to simple trend, normalized to match predict_capacity shape
         trend = db.get_trend("disk_percent", range_hours=168, projection_hours=720)
-        results.append({
-            "mount": mount,
-            "current_percent": disk.get("percent", 0),
-            "full_at": trend.get("full_at"),
-            "slope_per_day": round((trend.get("slope", 0) or 0) * 86400, 3),
-            "r_squared": trend.get("r_squared", 0),
-        })
-    return results
+        return {
+            "metrics": {"disk_percent": {"regression": {"slope": trend.get("slope", 0), "r_squared": trend.get("r_squared", 0)}, "projection": trend.get("projection", [])}},
+            "combined": {"full_at": trend.get("full_at"), "confidence": "low", "primary_metric": "disk_percent"},
+        }
 
 
 # ── Kubernetes deep management ───────────────────────────────────────────
