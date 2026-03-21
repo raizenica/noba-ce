@@ -331,6 +331,10 @@ class TestApprovalDecideEndpoint:
             "restart_service",
             {"service": "nginx"},
             triggered_by="operator_user",
+            trigger_type="approval",
+            trigger_id=str(approval_id),
+            target="host-x",
+            approved_by="operator_user",
         )
         rec = app_db.get_approval(approval_id)
         assert rec["status"] == "approved"

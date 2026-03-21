@@ -76,17 +76,33 @@ def validate_action(action_type, params):
     return None
 
 
-def execute_action(action_type, params, triggered_by="system"):
+def execute_action(action_type, params, triggered_by="system",
+                   trigger_type="manual", trigger_id=None, target=None,
+                   approved_by=None):
     """Execute a remediation action. Returns {success, output, duration_s, error?}."""
+    from .db import db as _db
+
     defn = ACTION_TYPES.get(action_type)
     if not defn:
-        return {"success": False, "error": f"Unknown action: {action_type}"}
+        error_msg = f"Unknown action: {action_type}"
+        _db.insert_action_audit(
+            trigger_type=trigger_type, trigger_id=trigger_id,
+            action_type=action_type, action_params=params,
+            target=target, outcome="error", error=error_msg,
+        )
+        return {"success": False, "error": error_msg}
 
     start = time.time()
     try:
         handler = _HANDLERS.get(action_type)
         if not handler:
-            return {"success": False, "error": f"No handler for: {action_type}"}
+            error_msg = f"No handler for: {action_type}"
+            _db.insert_action_audit(
+                trigger_type=trigger_type, trigger_id=trigger_id,
+                action_type=action_type, action_params=params,
+                target=target, outcome="error", error=error_msg,
+            )
+            return {"success": False, "error": error_msg}
         result = handler(params)
         duration = round(time.time() - start, 2)
 
@@ -95,6 +111,14 @@ def execute_action(action_type, params, triggered_by="system"):
         if defn.get("has_health_check"):
             health_ok = _health_check(action_type, params)
 
+        outcome = "success" if result.get("success", False) else "failure"
+        _db.insert_action_audit(
+            trigger_type=trigger_type, trigger_id=trigger_id,
+            action_type=action_type, action_params=params,
+            target=target, outcome=outcome, duration_s=duration,
+            output=result.get("output", ""),
+            approved_by=approved_by,
+        )
         return {
             "success": result.get("success", False),
             "output": result.get("output", ""),
@@ -102,10 +126,17 @@ def execute_action(action_type, params, triggered_by="system"):
             "health_check": "pass" if health_ok else "fail",
         }
     except Exception as e:
+        duration = round(time.time() - start, 2)
+        _db.insert_action_audit(
+            trigger_type=trigger_type, trigger_id=trigger_id,
+            action_type=action_type, action_params=params,
+            target=target, outcome="error", duration_s=duration,
+            approved_by=approved_by, error=str(e),
+        )
         return {
             "success": False,
             "error": str(e),
-            "duration_s": round(time.time() - start, 2),
+            "duration_s": duration,
         }
 
 

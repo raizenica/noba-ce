@@ -946,6 +946,89 @@ def _delete_maintenance_window(
         return False
 
 
+# ── Action Audit Trail ─────────────────────────────────────────────────────────
+
+def _insert_action_audit(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    trigger_type: str,
+    trigger_id: str | None,
+    action_type: str,
+    action_params: dict | None,
+    target: str | None,
+    outcome: str,
+    duration_s: float | None = None,
+    output: str | None = None,
+    approved_by: str | None = None,
+    rollback_result: str | None = None,
+    error: str | None = None,
+) -> int | None:
+    """Record an automated action for audit."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "INSERT INTO action_audit "
+                "(timestamp, trigger_type, trigger_id, action_type, action_params, "
+                "target, outcome, duration_s, output, approved_by, rollback_result, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    now, trigger_type, trigger_id,
+                    action_type, json.dumps(action_params) if action_params else None,
+                    target, outcome, duration_s, output, approved_by,
+                    rollback_result, error,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except Exception as e:
+        logger.error("_insert_action_audit failed: %s", e)
+        return None
+
+
+def _get_action_audit(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    limit: int = 100,
+    trigger_type: str | None = None,
+    outcome: str | None = None,
+) -> list[dict]:
+    """Query action audit trail with optional filters."""
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if trigger_type:
+            clauses.append("trigger_type = ?")
+            params.append(trigger_type)
+        if outcome:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with lock:
+            rows = conn.execute(
+                "SELECT id, timestamp, trigger_type, trigger_id, action_type, "
+                "action_params, target, outcome, duration_s, output, "
+                "approved_by, rollback_result, error "
+                f"FROM action_audit{where} ORDER BY timestamp DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "timestamp": r[1], "trigger_type": r[2],
+                "trigger_id": r[3], "action_type": r[4],
+                "action_params": json.loads(r[5]) if r[5] else None,
+                "target": r[6], "outcome": r[7], "duration_s": r[8],
+                "output": r[9], "approved_by": r[10],
+                "rollback_result": r[11], "error": r[12],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("_get_action_audit failed: %s", e)
+        return []
+
+
 def _get_active_maintenance_windows(
     conn: sqlite3.Connection,
     lock: threading.Lock,

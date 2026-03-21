@@ -63,8 +63,10 @@ from .automations import (
     _count_pending_approvals,
     _decide_approval,
     _delete_maintenance_window,
+    _get_action_audit,
     _get_active_maintenance_windows,
     _get_approval,
+    _insert_action_audit,
     _insert_approval,
     _insert_maintenance_window,
     _list_approvals,
@@ -541,6 +543,28 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_maint_windows_enabled
                     ON maintenance_windows(enabled);
+
+                CREATE TABLE IF NOT EXISTS action_audit (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       INTEGER NOT NULL,
+                    trigger_type    TEXT NOT NULL,
+                    trigger_id      TEXT,
+                    action_type     TEXT NOT NULL,
+                    action_params   TEXT,
+                    target          TEXT,
+                    outcome         TEXT NOT NULL,
+                    duration_s      REAL,
+                    output          TEXT,
+                    approved_by     TEXT,
+                    rollback_result TEXT,
+                    error           TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_action_audit_ts
+                    ON action_audit(timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_action_audit_trigger_type
+                    ON action_audit(trigger_type);
+                CREATE INDEX IF NOT EXISTS idx_action_audit_outcome
+                    ON action_audit(outcome);
             """)
             # Migrate existing databases: add assigned_to column if missing
             try:
@@ -1107,3 +1131,37 @@ class Database:
 
     def get_active_maintenance_windows(self) -> list[dict]:
         return _get_active_maintenance_windows(self._get_conn(), self._lock)
+
+    # ── Action Audit Trail ────────────────────────────────────────────────────
+    def insert_action_audit(
+        self,
+        trigger_type: str,
+        trigger_id: str | None,
+        action_type: str,
+        action_params: dict | None,
+        target: str | None,
+        outcome: str,
+        duration_s: float | None = None,
+        output: str | None = None,
+        approved_by: str | None = None,
+        rollback_result: str | None = None,
+        error: str | None = None,
+    ) -> int | None:
+        return _insert_action_audit(
+            self._get_conn(), self._lock,
+            trigger_type, trigger_id, action_type, action_params,
+            target, outcome, duration_s=duration_s, output=output,
+            approved_by=approved_by, rollback_result=rollback_result,
+            error=error,
+        )
+
+    def get_action_audit(
+        self,
+        limit: int = 100,
+        trigger_type: str | None = None,
+        outcome: str | None = None,
+    ) -> list[dict]:
+        return _get_action_audit(
+            self._get_conn(), self._lock,
+            limit=limit, trigger_type=trigger_type, outcome=outcome,
+        )

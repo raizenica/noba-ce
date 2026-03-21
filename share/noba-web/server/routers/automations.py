@@ -729,6 +729,10 @@ async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_
             approval["action_type"],
             action_params,
             triggered_by=username,
+            trigger_type="approval",
+            trigger_id=str(approval_id),
+            target=approval.get("target"),
+            approved_by=username,
         )
         db.update_approval_result(approval_id, _json.dumps(result))
 
@@ -736,6 +740,15 @@ async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_
     db.audit_log("approval_decision", username,
                  f"id={approval_id} decision={decision}", ip)
     return {"status": "ok", "decision": decision}
+
+
+@router.get("/api/action-audit")
+def api_action_audit(request: Request, auth=Depends(_get_auth)):
+    """Query the action audit trail."""
+    limit = min(int(request.query_params.get("limit", "100")), 500)
+    trigger_type = request.query_params.get("trigger_type")
+    outcome = request.query_params.get("outcome")
+    return db.get_action_audit(limit=limit, trigger_type=trigger_type, outcome=outcome)
 
 
 @router.post("/api/webhooks/receive/{hook_id}")
