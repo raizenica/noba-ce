@@ -620,6 +620,69 @@ def api_webhooks_delete(webhook_id: int, request: Request, auth=Depends(_require
     return {"status": "ok"}
 
 
+# ── Approval Queue ──────────────────────────────────────────────────────────
+
+@router.get("/api/approvals/count")
+def api_approval_count(auth=Depends(_get_auth)):
+    """Get count of pending approvals (for badge in UI)."""
+    return {"count": db.count_pending_approvals()}
+
+
+@router.get("/api/approvals")
+def api_list_approvals(request: Request, auth=Depends(_get_auth)):
+    """List approvals, filtered by status."""
+    status_filter = request.query_params.get("status", "pending")
+    return db.list_approvals(status=status_filter)
+
+
+@router.get("/api/approvals/{approval_id}")
+def api_get_approval(approval_id: int, auth=Depends(_get_auth)):
+    """Get approval details."""
+    a = db.get_approval(approval_id)
+    if not a:
+        raise HTTPException(404, "Approval not found")
+    return a
+
+
+@router.post("/api/approvals/{approval_id}/decide")
+async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_require_operator)):
+    """Approve or deny a pending action."""
+    username, role = auth
+    body = await _read_body(request)
+    decision = body.get("decision", "")
+    if decision not in ("approved", "denied"):
+        raise HTTPException(400, "decision must be 'approved' or 'denied'")
+
+    approval = db.get_approval(approval_id)
+    if not approval:
+        raise HTTPException(404, "Approval not found")
+    if approval["status"] != "pending":
+        raise HTTPException(400, f"Approval already {approval['status']}")
+
+    ok = db.decide_approval(approval_id, decision, username)
+    if not ok:
+        raise HTTPException(500, "Failed to update approval")
+
+    # If approved, execute the action
+    if decision == "approved":
+        import json as _json
+        from ..remediation import execute_action
+        action_params = approval.get("action_params") or {}
+        if isinstance(action_params, str):
+            action_params = _json.loads(action_params)
+        result = execute_action(
+            approval["action_type"],
+            action_params,
+            triggered_by=username,
+        )
+        db.update_approval_result(approval_id, _json.dumps(result))
+
+    ip = _client_ip(request)
+    db.audit_log("approval_decision", username,
+                 f"id={approval_id} decision={decision}", ip)
+    return {"status": "ok", "decision": decision}
+
+
 @router.post("/api/webhooks/receive/{hook_id}")
 async def api_webhooks_receive(hook_id: str, request: Request):
     """PUBLIC endpoint -- receive incoming webhook, validate HMAC, trigger automation."""
