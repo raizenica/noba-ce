@@ -5,6 +5,7 @@ All notable changes to NOBA Command Center are documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Test coverage + API contracts (v3 Phase 3)** — Added integration tests for all 8 decomposed routers (668 new backend tests, total 1451). OpenAPI schema at `/api/openapi.json` with Swagger UI at `/api/docs`. Frontend test suite: Vitest + Vue Test Utils (81 tests covering Pinia stores and key components).
 - **Vue.js migration (v3 Phase 2)** — Replaced Alpine.js frontend (6945-line index.html + 6 JS mixins) with Vue 3 + Vite SPA. 16 pages as lazy-loaded Vue components with Pinia state management. Mobile responsive. PWA service worker updated. Old frontend files deleted.
 - **Backend decomposition (v3 Phase 1)** — Decomposed `routers/system.py` (3190 lines, 117 routes) into 8 focused domain routers: `agents.py` (22), `containers.py` (8), `dashboards.py` (4), `infrastructure.py` (19), `intelligence.py` (22), `monitoring.py` (17), `operations.py` (19), `security.py` (6). All route URLs unchanged. `system.py` deleted.
 
