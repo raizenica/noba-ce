@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
+import AutonomySelector from '../automations/AutonomySelector.vue'
 
 const authStore = useAuthStore()
 const { get, post } = useApi()
@@ -69,6 +70,8 @@ function addRule() {
     severity: 'warning',
     message: '',
     channels: [],
+    autonomy: 'execute',
+    auto_approve_timeout: 15,
     max_retries: 3,
     circuit_break_after: 5,
   }
@@ -161,6 +164,25 @@ function copyMetric(m) {
             <label class="field-label">Notification Message</label>
             <input class="field-input" v-model="draft.message" placeholder="e.g. CPU usage is critically high!">
           </div>
+          <!-- Autonomy -->
+          <div class="field-2" style="margin-bottom:.75rem">
+            <div>
+              <label class="field-label">Autonomy Level</label>
+              <AutonomySelector v-model="draft.autonomy" />
+            </div>
+            <div v-if="draft.autonomy === 'approve'">
+              <label class="field-label">Auto-approve timeout (minutes)</label>
+              <input
+                class="field-input"
+                type="number"
+                min="1"
+                max="1440"
+                v-model.number="draft.auto_approve_timeout"
+                placeholder="15"
+              >
+            </div>
+          </div>
+
           <div style="margin-bottom:.75rem">
             <label class="field-label">Notification Channels</label>
             <div class="toggle-grid">
