@@ -37,9 +37,15 @@ def _validate_auto_config(atype: str, config: dict) -> None:
         if config.get("action", "restart") not in ("start", "stop", "restart"):
             raise HTTPException(400, "Service action must be start, stop, or restart")
     elif atype == "workflow":
-        steps = config.get("steps", [])
-        if not isinstance(steps, list) or len(steps) < 1:
-            raise HTTPException(400, "Workflow requires 'steps' list with at least one automation ID")
+        # Accept both graph format (nodes/edges/entry) and legacy flat format (steps)
+        if config.get("nodes"):
+            nodes = config["nodes"]
+            if not isinstance(nodes, list) or len(nodes) < 1:
+                raise HTTPException(400, "Workflow requires at least one node")
+        else:
+            steps = config.get("steps", [])
+            if not isinstance(steps, list) or len(steps) < 1:
+                raise HTTPException(400, "Workflow requires 'steps' list with at least one automation ID")
     elif atype == "condition":
         if not config.get("condition"):
             raise HTTPException(400, "Condition automation requires 'condition'")
