@@ -756,27 +756,38 @@ async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
         raise HTTPException(400, "No agent keys configured. Set agentKeys in settings first.")
     agent_key = agent_keys.split(",")[0].strip()
 
-    host_header = request.headers.get("Host", "localhost:8080")
-    server_url = f"http://{host_header}"
+    # Validate server_url from config rather than trusting the Host header
+    server_url = cfg.get("serverUrl", "").strip()
+    if not server_url:
+        host_header = request.headers.get("Host", "localhost:8080")
+        server_url = f"http://{host_header}"
+    if not re.match(r'^https?://[a-zA-Z0-9._:/-]+$', server_url):
+        raise HTTPException(400, "Invalid serverUrl configuration")
 
     agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
     if not agent_path.exists():
         raise HTTPException(500, "Agent file not found on server")
 
     import shutil
-    if not shutil.which("sshpass"):
+    if ssh_pass and not shutil.which("sshpass"):
         raise HTTPException(400, "sshpass not installed on server. Use the install script method instead.")
 
-    ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
     target = f"{ssh_user}@{target_host}"
     env = {**os.environ, "SSHPASS": ssh_pass} if ssh_pass else os.environ
-    ssh_cmd = f"sshpass -e ssh -p {target_port}" if ssh_pass else f"ssh -p {target_port}"
-    scp_cmd = f"sshpass -e scp -P {target_port}" if ssh_pass else f"scp -P {target_port}"
+
+    # Build list-form commands (no shell=True) to prevent shell injection
+    _ssh_common = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+    if ssh_pass:
+        scp_cmd = ["sshpass", "-e", "scp", "-P", str(target_port)] + _ssh_common
+        ssh_cmd = ["sshpass", "-e", "ssh", "-p", str(target_port)] + _ssh_common
+    else:
+        scp_cmd = ["scp", "-P", str(target_port)] + _ssh_common
+        ssh_cmd = ["ssh", "-p", str(target_port)] + _ssh_common
 
     try:
         result = subprocess.run(
-            f"{scp_cmd} {ssh_opts} {agent_path} {target}:/tmp/noba-agent.py",
-            shell=True, capture_output=True, text=True, timeout=30, env=env,
+            scp_cmd + [str(agent_path), f"{target}:/tmp/noba-agent.py"],
+            capture_output=True, text=True, timeout=30, env=env,
         )
         if result.returncode != 0:
             return {"status": "error", "step": "copy", "error": result.stderr[:500]}
@@ -810,8 +821,8 @@ sudo systemctl enable --now noba-agent 2>&1
 systemctl is-active noba-agent
 """
         result = subprocess.run(
-            f'{ssh_cmd} {ssh_opts} {target} "bash -s"',
-            input=install_cmds, shell=True, capture_output=True, text=True,
+            ssh_cmd + [target, "bash", "-s"],
+            input=install_cmds, capture_output=True, text=True,
             timeout=60, env=env,
         )
         success = "active" in result.stdout

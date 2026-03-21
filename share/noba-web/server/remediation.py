@@ -264,11 +264,19 @@ def _health_check(action_type, params):
     import time as _time
     _time.sleep(2)  # Brief wait for action to take effect
     if action_type == "restart_container":
-        r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", params["container"]],
+        try:
+            name = _safe_name(params["container"])
+        except ValueError:
+            return False
+        r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
                           capture_output=True, text=True, timeout=10)
         return r.stdout.strip() == "true"
     if action_type == "restart_service":
-        r = subprocess.run(["systemctl", "is-active", params["service"]],
+        try:
+            svc = _safe_name(params["service"], pattern=r'^[a-zA-Z0-9@._\-]+$')
+        except ValueError:
+            return False
+        r = subprocess.run(["systemctl", "is-active", svc],
                           capture_output=True, text=True, timeout=10)
         return r.stdout.strip() == "active"
     return True

@@ -30,6 +30,13 @@ logger = logging.getLogger("noba")
 router = APIRouter(tags=["infrastructure"])
 
 
+def _validate_k8s_name(val: str, label: str = "name") -> str:
+    """Validate a Kubernetes resource name or namespace to prevent path injection."""
+    if not val or not re.match(r'^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$', val) or '/' in val or '..' in val:
+        raise HTTPException(400, f"Invalid Kubernetes {label}: {val}")
+    return val
+
+
 # ── /api/service-control ──────────────────────────────────────────────────────
 @router.post("/api/service-control")
 async def api_service_control(request: Request, auth=Depends(_require_operator)):
@@ -195,6 +202,8 @@ def api_k8s_pods(request: Request, auth=Depends(_get_auth)):
     if not url or not token:
         raise HTTPException(400, "Kubernetes not configured")
     namespace = request.query_params.get("namespace", "")
+    if namespace:
+        namespace = _validate_k8s_name(namespace, "namespace")
     path = f"/api/v1/namespaces/{namespace}/pods" if namespace else "/api/v1/pods"
     import httpx as _httpx
     try:
@@ -233,11 +242,15 @@ def api_k8s_pods(request: Request, auth=Depends(_get_auth)):
 @router.get("/api/k8s/pods/{namespace}/{name}/logs")
 def api_k8s_pod_logs(namespace: str, name: str, request: Request, auth=Depends(_require_operator)):
     """Get pod logs."""
+    namespace = _validate_k8s_name(namespace, "namespace")
+    name = _validate_k8s_name(name, "name")
     cfg = read_yaml_settings()
     url, token = cfg.get("k8sUrl", ""), cfg.get("k8sToken", "")
     if not url or not token:
         raise HTTPException(400, "Kubernetes not configured")
     container = request.query_params.get("container", "")
+    if container:
+        container = _validate_k8s_name(container, "container")
     lines = _int_param(request, "lines", 100, 1, 5000)
     path = f"/api/v1/namespaces/{namespace}/pods/{name}/log?tailLines={lines}"
     if container:
@@ -260,6 +273,8 @@ def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
     if not url or not token:
         raise HTTPException(400, "Kubernetes not configured")
     namespace = request.query_params.get("namespace", "")
+    if namespace:
+        namespace = _validate_k8s_name(namespace, "namespace")
     path = f"/apis/apps/v1/namespaces/{namespace}/deployments" if namespace else "/apis/apps/v1/deployments"
     import httpx as _httpx
     try:
@@ -282,6 +297,8 @@ def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
 @router.post("/api/k8s/deployments/{namespace}/{name}/scale")
 async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depends(_require_admin)):
     """Scale a deployment."""
+    namespace = _validate_k8s_name(namespace, "namespace")
+    name = _validate_k8s_name(name, "name")
     username, _ = auth
     body = await _read_body(request)
     replicas = int(body.get("replicas", 1))

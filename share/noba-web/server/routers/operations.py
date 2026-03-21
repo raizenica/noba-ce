@@ -136,6 +136,9 @@ def api_journal(request: Request, auth=Depends(_require_operator)):
         if re.match(r'^\d+\s*(min|hour|day|sec)\s*ago$', since):
             cmd += ["--since", since]
     if grep_pattern:
+        # Reject patterns with nested quantifiers (ReDoS risk)
+        if re.search(r'\([^)]*[+*][^)]*\)[+*]', grep_pattern):
+            raise HTTPException(400, "Unsafe regex pattern")
         cmd += ["-g", grep_pattern[:100]]
 
     try:

@@ -282,7 +282,10 @@ async def api_cloud_remote_create(request: Request, auth=Depends(_require_admin)
     for k, v in params.items():
         if not re.match(r'^[a-zA-Z0-9_-]+$', str(k)):
             raise HTTPException(400, f"Invalid parameter key: {k}")
-        cmd.append(f"{k}={v}")
+        sv = str(v)
+        if not re.match(r'^[a-zA-Z0-9_./:@=, -]+$', sv):
+            raise HTTPException(400, f"Invalid parameter value for {k}")
+        cmd.append(f"{k}={sv}")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if r.returncode != 0:

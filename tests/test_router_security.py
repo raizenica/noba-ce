@@ -262,7 +262,7 @@ class TestSecurityScanAll:
 # ===========================================================================
 
 class TestSecurityRecord:
-    """Record security scan results — any authenticated user (called internally)."""
+    """Record security scan results — admin only (security audit Fix 8)."""
 
     def test_no_auth_returns_401(self, client):
         resp = client.post(
@@ -296,24 +296,23 @@ class TestSecurityRecord:
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
-    def test_operator_can_record(self, client, operator_headers):
+    def test_operator_cannot_record(self, client, operator_headers):
+        """security/record requires admin (security audit Fix 8)."""
         resp = client.post(
             "/api/security/record",
             json={"hostname": "ophost", "score": 70, "findings": []},
             headers=operator_headers,
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        assert resp.status_code == 403
 
-    def test_viewer_can_record(self, client, viewer_headers):
-        """security/record uses _get_auth (not _require_operator), so viewer is allowed."""
+    def test_viewer_cannot_record(self, client, viewer_headers):
+        """security/record requires admin (security audit Fix 8)."""
         resp = client.post(
             "/api/security/record",
             json={"hostname": "vhost", "score": 60, "findings": []},
             headers=viewer_headers,
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        assert resp.status_code == 403
 
     def test_record_with_findings_list(self, client, admin_headers):
         findings = [

@@ -360,15 +360,20 @@ class PluginManager:
         """Download a plugin file from URL to the plugin directory."""
         import re as _re  # noqa: PLC0415
         if not _re.match(r'^[a-zA-Z0-9_-]+\.py$', filename):
+            logger.warning("Plugin install rejected: invalid filename %r", filename)
+            return False
+        if not url.startswith("https://"):
+            logger.warning("Plugin install rejected: non-HTTPS URL %r", url)
             return False
         try:
             import httpx  # noqa: PLC0415
+            logger.info("Installing plugin %r from %s", filename, url)
             r = httpx.get(url, timeout=30)
             r.raise_for_status()
             dest = PLUGIN_DIR / filename
             PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
             dest.write_text(r.text, encoding="utf-8")
-            logger.info("Installed plugin: %s", filename)
+            logger.info("Installed plugin: %s from %s", filename, url)
             return True
         except Exception as e:
             logger.error("Plugin install failed: %s", e)

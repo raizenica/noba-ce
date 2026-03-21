@@ -461,7 +461,8 @@ async def api_backup_restore(request: Request, auth=Depends(_require_admin)):
         raise HTTPException(400, "Cannot determine original path -- provide 'dest' in request body")
 
     restore_real = os.path.realpath(restore_to)
-    for forbidden in ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys"):
+    for forbidden in ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys",
+                      "/dev", "/root", "/run", "/var/run", "/lib", "/lib64"):
         if restore_real.startswith(forbidden):
             raise HTTPException(403, f"Cannot restore to {forbidden}")
 

@@ -13,7 +13,7 @@ from ..agent_store import (
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
     _agent_websockets, _agent_ws_lock,
 )
-from ..deps import _client_ip, _get_auth, _read_body, _safe_int, db
+from ..deps import _client_ip, _get_auth, _read_body, _require_admin, _require_operator, _safe_int, db
 
 logger = logging.getLogger("noba")
 
@@ -44,7 +44,7 @@ def api_security_history(request: Request, auth=Depends(_get_auth)):
 
 
 @router.post("/api/security/scan/{hostname}")
-async def api_security_scan(hostname: str, request: Request, auth=Depends(_get_auth)):
+async def api_security_scan(hostname: str, request: Request, auth=Depends(_require_operator)):
     """Trigger a security scan on a specific agent."""
     username, role = auth
     ip = _client_ip(request)
@@ -85,7 +85,7 @@ async def api_security_scan(hostname: str, request: Request, auth=Depends(_get_a
 
 
 @router.post("/api/security/scan-all")
-async def api_security_scan_all(request: Request, auth=Depends(_get_auth)):
+async def api_security_scan_all(request: Request, auth=Depends(_require_operator)):
     """Trigger security scan on all online agents."""
     username, role = auth
     ip = _client_ip(request)
@@ -132,7 +132,7 @@ async def api_security_scan_all(request: Request, auth=Depends(_get_auth)):
 
 
 @router.post("/api/security/record")
-async def api_security_record(request: Request, auth=Depends(_get_auth)):
+async def api_security_record(request: Request, auth=Depends(_require_admin)):
     """Record security scan results from an agent (called internally after scan completes)."""
     body = await _read_body(request)
     hostname = body.get("hostname", "")
