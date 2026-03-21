@@ -1,5 +1,6 @@
 <script setup>
 import { ref, provide, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 import { useDashboardStore } from './stores/dashboard'
 import { useSettingsStore } from './stores/settings'
@@ -18,6 +19,7 @@ import NetworkModal from './components/modals/NetworkModal.vue'
 import ProcessModal from './components/modals/ProcessModal.vue'
 import BackupExplorerModal from './components/modals/BackupExplorerModal.vue'
 
+const router = useRouter()
 const auth = useAuthStore()
 const dashboard = useDashboardStore()
 const settings = useSettingsStore()
@@ -67,7 +69,10 @@ onUnmounted(() => {
 })
 
 watch(() => auth.authenticated, (val) => {
-  if (!val) dashboard.disconnectSse()
+  if (!val) {
+    dashboard.disconnectSse()
+    router.push('/login')
+  }
 })
 </script>
 
