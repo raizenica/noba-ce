@@ -196,18 +196,31 @@ async function deleteDashboard(id) {
 onMounted(() => {
   fetchHealthScore()
   fetchDashboards()
-  // Initialize drag-to-reorder on card grid (delay to ensure cards render)
-  setTimeout(() => {
-    if (gridRef.value) {
-      Sortable.create(gridRef.value, {
-        animation: 150,
-        handle: '.drag-handle',
-        ghostClass: 'sortable-ghost',
-        dragClass: 'sortable-drag',
-        forceFallback: true,
-      })
+  // Initialize drag-to-reorder on card grid
+  function initSortable() {
+    if (!gridRef.value) return
+    // Avoid double-init
+    if (gridRef.value._sortable) return
+    gridRef.value._sortable = Sortable.create(gridRef.value, {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'sortable-ghost',
+      dragClass: 'sortable-drag',
+      forceFallback: true,
+      fallbackOnBody: true,
+    })
+  }
+  // Retry until grid is in DOM and has children
+  let attempts = 0
+  const tryInit = () => {
+    attempts++
+    if (gridRef.value && gridRef.value.children.length > 0) {
+      initSortable()
+    } else if (attempts < 20) {
+      setTimeout(tryInit, 250)
     }
-  }, 500)
+  }
+  setTimeout(tryInit, 300)
 })
 </script>
 

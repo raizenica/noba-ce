@@ -455,8 +455,9 @@
     .card-title { font-size: .65rem; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--text-muted); flex: 1; }
     .card-count { font-size: .6rem; color: var(--text-dim); background: var(--surface-2); padding: .1rem .4rem; border-radius: 3px; font-family: var(--font-data); }
 
-    .drag-handle { color: var(--text-dim); font-size: .8rem; transition: color .15s; }
+    .drag-handle { color: var(--text-dim); font-size: .8rem; transition: color .15s; cursor: grab; padding: 0 .2rem; }
     .card:hover .drag-handle { color: var(--text-muted); }
+    .drag-handle:active { cursor: grabbing; }
 
     .collapse-btn {
         color: var(--text-dim); cursor: pointer;
