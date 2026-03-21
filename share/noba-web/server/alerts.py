@@ -421,6 +421,8 @@ def in_maintenance_window(read_settings_fn) -> bool:
     from datetime import datetime
 
     from .scheduler import _match_cron
+
+    # Check YAML-configured windows (backward compat)
     cfg = read_settings_fn()
     windows = cfg.get("maintenanceWindows", [])
     now = datetime.now()
@@ -429,6 +431,16 @@ def in_maintenance_window(read_settings_fn) -> bool:
         _duration_min = int(window.get("duration_minutes", 60))  # noqa: F841
         if start_cron and _match_cron(start_cron, now):
             return True
+
+    # Also check DB-backed windows
+    try:
+        from .db import db
+        active = db.get_active_maintenance_windows()
+        if active:
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -461,12 +473,17 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             # ── Autonomy enforcement ───────────────────────────────────────
             autonomy = rule.get("autonomy", "execute")
 
-            # Check for maintenance window autonomy override
+            # Check for maintenance window autonomy override and suppression
             from .db import db as _db
             active_windows = _db.get_active_maintenance_windows()
+            suppress_notifications = False
             for window in active_windows:
                 if window.get("override_autonomy"):
                     autonomy = window["override_autonomy"]
+                    break
+            for window in active_windows:
+                if window.get("suppress_alerts") is True:
+                    suppress_notifications = True
                     break
 
             # disabled: skip entirely — no notification, no action
@@ -484,7 +501,8 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             notif_cfg = cfg.get("notifications", {})
 
             # notify / approve: dispatch notification (possibly modified message)
-            if autonomy in ("execute", "notify", "approve"):
+            # skip notification dispatch when a maintenance window suppresses alerts
+            if not suppress_notifications and autonomy in ("execute", "notify", "approve"):
                 if autonomy == "approve":
                     dispatch_notifications(
                         severity,
@@ -500,9 +518,20 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
 
             # Auto-create incident
             try:
-                _db.insert_incident(severity, "alert", message, condition)
+                incident_id = _db.insert_incident(severity, "alert", message, condition)
             except Exception:
-                pass
+                incident_id = 0
+
+            # auto_close_alerts: if alert condition is met during a maintenance window
+            # with auto_close enabled and the alert was just inserted, resolve it immediately
+            if incident_id:
+                for window in active_windows:
+                    if window.get("auto_close_alerts"):
+                        try:
+                            _db.resolve_incident(incident_id)
+                        except Exception:
+                            pass
+                        break
 
             # Check escalation policies
             _check_escalation(rule, rule_id, severity, message, notif_cfg, read_settings_fn)

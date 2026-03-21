@@ -620,6 +620,61 @@ def api_webhooks_delete(webhook_id: int, request: Request, auth=Depends(_require
     return {"status": "ok"}
 
 
+# ── Maintenance Windows ─────────────────────────────────────────────────────
+
+@router.get("/api/maintenance-windows/active")
+def api_active_maintenance_windows(auth=Depends(_get_auth)):
+    """Get currently active maintenance windows."""
+    return db.get_active_maintenance_windows()
+
+
+@router.get("/api/maintenance-windows")
+def api_list_maintenance_windows(auth=Depends(_get_auth)):
+    return db.list_maintenance_windows()
+
+
+@router.post("/api/maintenance-windows")
+async def api_create_maintenance_window(request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    body = await _read_body(request)
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    wid = db.insert_maintenance_window(
+        name=name, schedule=body.get("schedule"),
+        duration_min=body.get("duration_min", 60),
+        one_off_start=body.get("one_off_start"),
+        one_off_end=body.get("one_off_end"),
+        suppress_alerts=body.get("suppress_alerts", True),
+        override_autonomy=body.get("override_autonomy"),
+        auto_close_alerts=body.get("auto_close_alerts", False),
+        created_by=username,
+    )
+    db.audit_log("maintenance_window_create", username, f"id={wid} name={name}", _client_ip(request))
+    return {"id": wid, "status": "ok"}
+
+
+@router.put("/api/maintenance-windows/{window_id}")
+async def api_update_maintenance_window(window_id: int, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    body = await _read_body(request)
+    ok = db.update_maintenance_window(window_id, **body)
+    if not ok:
+        raise HTTPException(404, "Window not found")
+    db.audit_log("maintenance_window_update", username, f"id={window_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+@router.delete("/api/maintenance-windows/{window_id}")
+def api_delete_maintenance_window(window_id: int, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    ok = db.delete_maintenance_window(window_id)
+    if not ok:
+        raise HTTPException(404, "Window not found")
+    db.audit_log("maintenance_window_delete", username, f"id={window_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
 # ── Approval Queue ──────────────────────────────────────────────────────────
 
 @router.get("/api/approvals/count")
