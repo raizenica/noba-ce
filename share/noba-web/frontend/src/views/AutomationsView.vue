@@ -3,14 +3,20 @@ import { ref, computed, onMounted } from 'vue'
 import { useApi }                   from '../composables/useApi'
 import { useAuthStore }             from '../stores/auth'
 import { useNotificationsStore }    from '../stores/notifications'
+import { useApprovalsStore }        from '../stores/approvals'
 import AppModal                     from '../components/ui/AppModal.vue'
 import ConfirmDialog                from '../components/ui/ConfirmDialog.vue'
 import AutomationFormModal          from '../components/automations/AutomationFormModal.vue'
 import RunOutputModal               from '../components/automations/RunOutputModal.vue'
+import ApprovalQueue                from '../components/automations/ApprovalQueue.vue'
 
 const authStore = useAuthStore()
 const notify    = useNotificationsStore()
+const approvalsStore = useApprovalsStore()
 const { get, post, del, download } = useApi()
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+const activeTab = ref('automations')
 
 // ── Automation list ────────────────────────────────────────────────────────
 const autoList        = ref([])
@@ -301,6 +307,7 @@ onMounted(async () => {
   await fetchAutomations()
   await fetchAutoStats()
   if (authStore.isAdmin) await fetchWebhooks()
+  approvalsStore.fetchCount()
 })
 </script>
 
@@ -337,6 +344,51 @@ onMounted(async () => {
         </label>
       </div>
     </div>
+
+    <!-- Tab bar -->
+    <div style="display:flex;gap:.25rem;border-bottom:1px solid var(--border);margin-bottom:1rem">
+      <button
+        class="btn btn-xs"
+        :class="activeTab === 'automations' ? 'btn-primary' : ''"
+        style="border-radius:4px 4px 0 0;border-bottom:none"
+        @click="activeTab = 'automations'"
+      >
+        <i class="fas fa-bolt" style="margin-right:.25rem"></i>Automations
+      </button>
+      <button
+        class="btn btn-xs"
+        :class="activeTab === 'approvals' ? 'btn-primary' : ''"
+        style="border-radius:4px 4px 0 0;border-bottom:none;position:relative"
+        @click="activeTab = 'approvals'; approvalsStore.fetchPending()"
+      >
+        <i class="fas fa-check-circle" style="margin-right:.25rem"></i>Approvals
+        <span
+          v-if="(approvalsStore.count || 0) > 0"
+          style="
+            position:absolute;top:-4px;right:-4px;
+            background:var(--warning, #f0a500);
+            color:#000;
+            border-radius:50%;
+            font-size:.55rem;
+            min-width:14px;
+            height:14px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:0 2px;
+            font-weight:700;
+          "
+        >{{ approvalsStore.count }}</span>
+      </button>
+    </div>
+
+    <!-- Approvals tab content -->
+    <div v-if="activeTab === 'approvals'">
+      <ApprovalQueue />
+    </div>
+
+    <!-- Automations tab content -->
+    <div v-if="activeTab === 'automations'">
 
     <!-- Filter bar -->
     <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem;align-items:center">
@@ -584,6 +636,8 @@ onMounted(async () => {
         </table>
       </div>
     </div>
+
+    </div><!-- end automations tab content -->
 
     <!-- ── Modals ──────────────────────────────────────────────────────── -->
 

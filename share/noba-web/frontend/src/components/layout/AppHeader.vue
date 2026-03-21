@@ -1,18 +1,33 @@
 <script setup>
-import { inject } from 'vue'
+import { inject, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useDashboardStore } from '../../stores/dashboard'
 import { useSettingsStore } from '../../stores/settings'
 import { useNotificationsStore } from '../../stores/notifications'
 import { useAuthStore } from '../../stores/auth'
 import { useModalsStore } from '../../stores/modals'
+import { useApprovalsStore } from '../../stores/approvals'
 
 const toggleSidebar = inject('toggleSidebar')
+const router = useRouter()
 
 const dashboardStore = useDashboardStore()
 const settingsStore = useSettingsStore()
 const notifStore = useNotificationsStore()
 const auth = useAuthStore()
 const modals = useModalsStore()
+const approvalsStore = useApprovalsStore()
+
+let _approvalPollInterval = null
+
+onMounted(() => {
+  approvalsStore.fetchCount()
+  _approvalPollInterval = setInterval(() => approvalsStore.fetchCount(), 30_000)
+})
+
+onUnmounted(() => {
+  clearInterval(_approvalPollInterval)
+})
 
 const themes = [
   { value: 'auto', label: 'System' },
@@ -86,6 +101,19 @@ function openProfile() {
         v-if="(notifStore.unreadCount || 0) > 0"
         class="notif-badge"
       >{{ notifStore.unreadCount }}</span>
+    </button>
+
+    <button
+      v-if="(approvalsStore.count || 0) > 0"
+      class="icon-btn"
+      title="Pending Approvals"
+      style="position:relative"
+      @click="router.push('/automations')"
+    >
+      <i class="fas fa-check-circle" style="color:var(--warning, #f0a500)"></i>
+      <span class="notif-badge" style="background:var(--warning, #f0a500);color:#000">
+        {{ approvalsStore.count }}
+      </span>
     </button>
 
     <span
