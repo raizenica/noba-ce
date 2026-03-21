@@ -25,7 +25,8 @@ const dashboard = useDashboardStore()
 const settings = useSettingsStore()
 const modals = useModalsStore()
 
-const sidebarCollapsed = ref(false)
+const isMobile = () => window.innerWidth <= 640
+const sidebarCollapsed = ref(isMobile())
 provide('sidebarCollapsed', sidebarCollapsed)
 provide('toggleSidebar', () => { sidebarCollapsed.value = !sidebarCollapsed.value })
 
@@ -73,6 +74,11 @@ watch(() => auth.authenticated, (val) => {
     dashboard.disconnectSse()
     router.push('/login')
   }
+})
+
+// Auto-collapse sidebar on navigation (mobile)
+watch(() => router.currentRoute.value.path, () => {
+  if (isMobile()) sidebarCollapsed.value = true
 })
 </script>
 
