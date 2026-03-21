@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 import subprocess
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -17,7 +18,8 @@ from ..deps import (
 )
 from ..runner import job_runner
 from ..workflow_engine import (
-    _AUTO_BUILDERS, _run_parallel_workflow, _run_workflow, _validate_auto_config,
+    _AUTO_BUILDERS, _run_graph_workflow, _run_parallel_workflow, _run_workflow,
+    _validate_auto_config,
 )
 from ..yaml_config import read_yaml_settings
 
@@ -205,8 +207,19 @@ async def api_automations_run(auto_id: str, request: Request, auth=Depends(_requ
                 except (KeyError, ValueError, IndexError):
                     pass
 
-    # Workflow: chain execution of steps
+    # Workflow: graph or flat step execution
     if auto["type"] == "workflow":
+        # Graph format (opt-in): config has "nodes" key
+        if config.get("nodes"):
+            threading.Thread(
+                target=_run_graph_workflow,
+                args=(auto_id, config, username),
+                daemon=True,
+            ).start()
+            db.audit_log("automation_run", username,
+                         f"Graph workflow '{auto['name']}' started", ip)
+            return {"success": True, "run_id": None, "workflow": True, "graph": True}
+        # Legacy flat steps format
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
@@ -310,6 +323,42 @@ _AUTOMATION_TEMPLATES = [
 @router.get("/api/automations/templates")
 def api_automation_templates(auth=Depends(_get_auth)):
     return _AUTOMATION_TEMPLATES
+
+
+# ── /api/playbooks — playbook library ────────────────────────────────────────
+
+@router.get("/api/playbooks")
+def api_list_playbooks(auth=Depends(_get_auth)):
+    """List available playbook templates."""
+    return db.list_playbook_templates()
+
+
+@router.get("/api/playbooks/{playbook_id}")
+def api_get_playbook(playbook_id: str, auth=Depends(_get_auth)):
+    """Get a single playbook template by id."""
+    template = db.get_playbook_template(playbook_id)
+    if not template:
+        raise HTTPException(404, "Playbook not found")
+    return template
+
+
+@router.post("/api/playbooks/{playbook_id}/install")
+async def api_install_playbook(
+    playbook_id: str, request: Request, auth=Depends(_require_operator)
+):
+    """Install a playbook template as a new workflow automation."""
+    import secrets
+    username, _ = auth
+    template = db.get_playbook_template(playbook_id)
+    if not template:
+        raise HTTPException(404, "Playbook not found")
+    body = await _read_body(request)
+    name = body.get("name", template["name"])
+    auto_id = secrets.token_hex(6)
+    db.insert_automation(auto_id, name, "workflow", template["config"], enabled=False)
+    db.audit_log("playbook_install", username,
+                 f"template={playbook_id} auto={auto_id}", _client_ip(request))
+    return {"id": auto_id, "status": "ok"}
 
 
 # ── /api/automations/stats ────────────────────────────────────────────────────
@@ -618,6 +667,156 @@ def api_webhooks_delete(webhook_id: int, request: Request, auth=Depends(_require
         raise HTTPException(404, "Webhook not found")
     db.audit_log("webhook_delete", username, f"Deleted webhook id={webhook_id}", ip)
     return {"status": "ok"}
+
+
+# ── Maintenance Windows ─────────────────────────────────────────────────────
+
+@router.get("/api/maintenance-windows/active")
+def api_active_maintenance_windows(auth=Depends(_get_auth)):
+    """Get currently active maintenance windows."""
+    return db.get_active_maintenance_windows()
+
+
+@router.get("/api/maintenance-windows")
+def api_list_maintenance_windows(auth=Depends(_get_auth)):
+    return db.list_maintenance_windows()
+
+
+@router.post("/api/maintenance-windows")
+async def api_create_maintenance_window(request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    body = await _read_body(request)
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    wid = db.insert_maintenance_window(
+        name=name, schedule=body.get("schedule"),
+        duration_min=body.get("duration_min", 60),
+        one_off_start=body.get("one_off_start"),
+        one_off_end=body.get("one_off_end"),
+        suppress_alerts=body.get("suppress_alerts", True),
+        override_autonomy=body.get("override_autonomy"),
+        auto_close_alerts=body.get("auto_close_alerts", False),
+        created_by=username,
+    )
+    db.audit_log("maintenance_window_create", username, f"id={wid} name={name}", _client_ip(request))
+    return {"id": wid, "status": "ok"}
+
+
+@router.put("/api/maintenance-windows/{window_id}")
+async def api_update_maintenance_window(window_id: int, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    body = await _read_body(request)
+    ok = db.update_maintenance_window(window_id, **body)
+    if not ok:
+        raise HTTPException(404, "Window not found")
+    db.audit_log("maintenance_window_update", username, f"id={window_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+@router.delete("/api/maintenance-windows/{window_id}")
+def api_delete_maintenance_window(window_id: int, request: Request, auth=Depends(_require_admin)):
+    username, _ = auth
+    ok = db.delete_maintenance_window(window_id)
+    if not ok:
+        raise HTTPException(404, "Window not found")
+    db.audit_log("maintenance_window_delete", username, f"id={window_id}", _client_ip(request))
+    return {"status": "ok"}
+
+
+# ── Approval Queue ──────────────────────────────────────────────────────────
+
+@router.get("/api/approvals/count")
+def api_approval_count(auth=Depends(_get_auth)):
+    """Get count of pending approvals (for badge in UI)."""
+    return {"count": db.count_pending_approvals()}
+
+
+@router.get("/api/approvals")
+def api_list_approvals(request: Request, auth=Depends(_get_auth)):
+    """List approvals, filtered by status."""
+    status_filter = request.query_params.get("status", "pending")
+    return db.list_approvals(status=status_filter)
+
+
+@router.get("/api/approvals/{approval_id}")
+def api_get_approval(approval_id: int, auth=Depends(_get_auth)):
+    """Get approval details."""
+    a = db.get_approval(approval_id)
+    if not a:
+        raise HTTPException(404, "Approval not found")
+    return a
+
+
+@router.post("/api/approvals/{approval_id}/decide")
+async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_require_operator)):
+    """Approve or deny a pending action."""
+    username, role = auth
+    body = await _read_body(request)
+    decision = body.get("decision", "")
+    if decision not in ("approved", "denied"):
+        raise HTTPException(400, "decision must be 'approved' or 'denied'")
+
+    approval = db.get_approval(approval_id)
+    if not approval:
+        raise HTTPException(404, "Approval not found")
+    if approval["status"] != "pending":
+        raise HTTPException(400, f"Approval already {approval['status']}")
+
+    ok = db.decide_approval(approval_id, decision, username)
+    if not ok:
+        raise HTTPException(500, "Failed to update approval")
+
+    # Check for graph workflow context — resume workflow if present
+    wf_ctx = db.get_workflow_context(approval_id)
+    if wf_ctx:
+        next_node_id = wf_ctx.get("approved_next") if decision == "approved" else wf_ctx.get("denied_next")
+        if next_node_id:
+            auto_id = wf_ctx.get("auto_id", "")
+            nodes_list = wf_ctx.get("nodes", [])
+            nodes = {n["id"]: n for n in nodes_list}
+            edges = wf_ctx.get("edges", [])
+            orig_triggered_by = wf_ctx.get("triggered_by", username)
+            from ..workflow_engine import _execute_node
+            threading.Thread(
+                target=_execute_node,
+                args=(auto_id, nodes, edges, next_node_id, orig_triggered_by),
+                daemon=True,
+            ).start()
+        else:
+            logger.info("Approval %s: no resume node for decision=%s — workflow ends",
+                        approval_id, decision)
+    elif decision == "approved":
+        # Legacy non-graph approval: execute remediation action
+        import json as _json
+        from ..remediation import execute_action
+        action_params = approval.get("action_params") or {}
+        if isinstance(action_params, str):
+            action_params = _json.loads(action_params)
+        result = execute_action(
+            approval["action_type"],
+            action_params,
+            triggered_by=username,
+            trigger_type="approval",
+            trigger_id=str(approval_id),
+            target=approval.get("target"),
+            approved_by=username,
+        )
+        db.update_approval_result(approval_id, _json.dumps(result))
+
+    ip = _client_ip(request)
+    db.audit_log("approval_decision", username,
+                 f"id={approval_id} decision={decision}", ip)
+    return {"status": "ok", "decision": decision}
+
+
+@router.get("/api/action-audit")
+def api_action_audit(request: Request, auth=Depends(_get_auth)):
+    """Query the action audit trail."""
+    limit = min(int(request.query_params.get("limit", "100")), 500)
+    trigger_type = request.query_params.get("trigger_type")
+    outcome = request.query_params.get("outcome")
+    return db.get_action_audit(limit=limit, trigger_type=trigger_type, outcome=outcome)
 
 
 @router.post("/api/webhooks/receive/{hook_id}")

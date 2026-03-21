@@ -5,9 +5,9 @@
 **Your homelab deserves a mission control.**
 
 Real-time monitoring · Remote agents · Predictive intelligence · 40+ integrations
-All from a single dashboard. No build step. No nonsense.
+All from a single dashboard.
 
-`FastAPI` · `Alpine.js` · `Chart.js` · `SQLite WAL`
+`FastAPI` · `Vue 3 + Vite` · `Chart.js` · `SQLite WAL` · `Pinia`
 
 <br>
 
@@ -135,7 +135,8 @@ Service topology, config drift detection, network maps, predictive disk intellig
 - 🗺️ **Service dependency topology** — force-directed graph with impact analysis
 - 🔀 **Configuration drift** — baseline checksums across agents, alert on changes
 - 🌐 **Tailscale network map** — visual node grid with online/offline status
-- 💾 **Predictive disk intelligence** — SMART trend analysis with failure prediction
+- 💾 **Predictive capacity planning** — multi-metric regression with seasonal decomposition and 68%/95% confidence intervals
+- 🏥 **Per-service health scoring** — weighted composite (uptime 40%, latency 25%, error rate 20%, headroom 15%)
 - 📝 **Real-time log streaming** — live tail via WebSocket, color-coded by priority
 - 📄 **Public status page** — component groups, 90-day uptime, no auth required
 
@@ -169,10 +170,15 @@ Service topology, config drift detection, network maps, predictive disk intellig
 
 ## ⚙️ Automation Engine
 
-- 🔧 **9 automation types** — script, webhook, service, workflow, condition, delay, notify, HTTP, agent_command
-- 🔀 **Workflow engine** — sequential/parallel steps with retry and exponential backoff
+- 🔧 **10 automation types** — script, webhook, service, workflow, condition, delay, notify, HTTP, agent_command, remediation
+- 🔀 **Visual workflow builder** — drag-and-drop nodes with conditional branching, approval gates, parallel splits, and delay nodes
 - ⏰ **Triggers** — cron, file system changes, RSS feeds, webhooks (HMAC validated), HA events
-- ✅ **Approval gates** — require manual approval before execution
+- ✅ **Approval gates** — queue actions for manual approval with auto-approve timeout
+- 🛡️ **Per-rule autonomy** — execute / approve / notify / disabled per alert rule
+- 🔧 **8 remediation actions** — restart container/service, flush DNS, trigger backup, failover DNS, scale container, run playbook
+- 🕐 **Maintenance windows** — named schedules with alert suppression and autonomy override
+- 📋 **Action audit trail** — full context for every automated action (trigger, outcome, approval, duration)
+- 📖 **Playbook templates** — 4 pre-built maintenance playbooks, customizable
 
 ---
 
@@ -185,7 +191,7 @@ Service topology, config drift detection, network maps, predictive disk intellig
 - ⌨️ **Keyboard shortcuts** — fully customizable hotkeys
 - 🔔 **Notification center** — bell icon with unread count + PWA push
 - 💻 **Embedded terminal** — WebSocket PTY via xterm.js (admin-only)
-- 📚 **API docs** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc`
+- 📚 **API docs** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc`, OpenAPI schema at `/api/openapi.json`
 
 ---
 
@@ -208,14 +214,13 @@ curl -sf "http://noba-server:8080/api/agent/install-script?key=YOUR_KEY" | sudo 
 ## 🗂️ Project Layout
 
 ```
-share/noba-web/server/    → Python backend (FastAPI, 160+ API routes)
-share/noba-web/static/    → Frontend (Alpine.js, Chart.js, vanilla CSS)
-share/noba-web/index.html → Dashboard UI
-share/noba-web/status.html→ Public status page
-share/noba-agent/         → Remote agent + installers (Linux, Windows)
-libexec/                  → Shell scripts (backup, disk check, cloud sync)
-dev/                      → Developer toolkit (8 tools)
-tests/                    → pytest test suite (622 tests)
+share/noba-web/server/       → Python backend (FastAPI, 13 routers, 235+ API routes)
+share/noba-web/frontend/src/ → Vue 3 frontend (80+ components, Pinia stores)
+share/noba-web/static/dist/  → Built Vue app (committed, no Node.js needed at runtime)
+share/noba-agent/            → Remote agent + installers (Linux, Windows)
+libexec/                     → Shell scripts (backup, disk check, cloud sync)
+dev/                         → Developer toolkit (8 tools)
+tests/                       → pytest test suite (1806 tests)
 ```
 
 ## 🧪 Developer Toolkit

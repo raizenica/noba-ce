@@ -157,12 +157,33 @@ def _execute_heal_agent_command(action_cfg: dict, rule_id: str) -> bool:
         return False
 
 
+# ── New action types delegated to remediation module ─────────────────────────
+_REMEDIATION_ACTION_TYPES = frozenset({
+    "flush_dns", "clear_cache", "trigger_backup",
+    "failover_dns", "scale_container", "run_playbook",
+})
+
+
 # ── Self-heal action executor ─────────────────────────────────────────────────
 def _execute_heal(action_cfg: dict, rule_id: str, read_settings_fn) -> bool:
     atype  = action_cfg.get("type", "")
     target = action_cfg.get("target", "").strip() if action_cfg.get("target") else ""
     if not atype:
         return False
+
+    # Delegate new action types to the remediation module
+    if atype in _REMEDIATION_ACTION_TYPES:
+        from . import remediation
+        params = {k: v for k, v in action_cfg.items() if k not in ("type",)}
+        result = remediation.execute_action(atype, params, triggered_by=f"heal:{rule_id}")
+        success = result.get("success", False)
+        if success:
+            logger.info("Heal remediation %s succeeded for rule %s: %s",
+                        atype, rule_id, result.get("output", ""))
+        else:
+            logger.warning("Heal remediation %s failed for rule %s: %s",
+                           atype, rule_id, result.get("error") or result.get("output", ""))
+        return success
 
     # agent_command doesn't use 'target' — it uses hostname/command/params
     if atype == "agent_command":
@@ -400,6 +421,8 @@ def in_maintenance_window(read_settings_fn) -> bool:
     from datetime import datetime
 
     from .scheduler import _match_cron
+
+    # Check YAML-configured windows (backward compat)
     cfg = read_settings_fn()
     windows = cfg.get("maintenanceWindows", [])
     now = datetime.now()
@@ -408,6 +431,16 @@ def in_maintenance_window(read_settings_fn) -> bool:
         _duration_min = int(window.get("duration_minutes", 60))  # noqa: F841
         if start_cron and _match_cron(start_cron, now):
             return True
+
+    # Also check DB-backed windows
+    try:
+        from .db import db
+        active = db.get_active_maintenance_windows()
+        if active:
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -437,6 +470,26 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             if not condition or not _safe_eval(condition, flat):
                 continue
 
+            # ── Autonomy enforcement ───────────────────────────────────────
+            autonomy = rule.get("autonomy", "execute")
+
+            # Check for maintenance window autonomy override and suppression
+            from .db import db as _db
+            active_windows = _db.get_active_maintenance_windows()
+            suppress_notifications = False
+            for window in active_windows:
+                if window.get("override_autonomy"):
+                    autonomy = window["override_autonomy"]
+                    break
+            for window in active_windows:
+                if window.get("suppress_alerts") is True:
+                    suppress_notifications = True
+                    break
+
+            # disabled: skip entirely — no notification, no action
+            if autonomy == "disabled":
+                continue
+
             now      = time.time()
             severity = rule.get("severity", "warning")
             message  = rule.get("message", condition)
@@ -446,17 +499,39 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
                 continue
 
             notif_cfg = cfg.get("notifications", {})
-            dispatch_notifications(severity, message, notif_cfg, channels)
+
+            # notify / approve: dispatch notification (possibly modified message)
+            # skip notification dispatch when a maintenance window suppresses alerts
+            if not suppress_notifications and autonomy in ("execute", "notify", "approve"):
+                if autonomy == "approve":
+                    dispatch_notifications(
+                        severity,
+                        f"[APPROVAL NEEDED] {message}",
+                        notif_cfg,
+                        channels,
+                    )
+                else:
+                    dispatch_notifications(severity, message, notif_cfg, channels)
 
             # Record alert in history
-            from .db import db as _db
             _db.insert_alert_history(rule_id, severity, message)
 
             # Auto-create incident
             try:
-                _db.insert_incident(severity, "alert", message, condition)
+                incident_id = _db.insert_incident(severity, "alert", message, condition)
             except Exception:
-                pass
+                incident_id = 0
+
+            # auto_close_alerts: if alert condition is met during a maintenance window
+            # with auto_close enabled and the alert was just inserted, resolve it immediately
+            if incident_id:
+                for window in active_windows:
+                    if window.get("auto_close_alerts"):
+                        try:
+                            _db.resolve_incident(incident_id)
+                        except Exception:
+                            pass
+                        break
 
             # Check escalation policies
             _check_escalation(rule, rule_id, severity, message, notif_cfg, read_settings_fn)
@@ -465,6 +540,25 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             if not action_cfg or not isinstance(action_cfg, dict):
                 continue
 
+            # notify: send notification only, no action
+            if autonomy == "notify":
+                continue
+
+            # approve: queue in approval DB, no immediate execution
+            if autonomy == "approve":
+                _db.insert_approval(
+                    automation_id=rule_id,
+                    trigger=f"alert:{rule_id}",
+                    trigger_source="alert",
+                    action_type=action_cfg.get("type", ""),
+                    action_params={k: v for k, v in action_cfg.items() if k != "type"},
+                    target=action_cfg.get("target"),
+                    requested_by=f"alert:{rule_id}",
+                )
+                logger.info("Autonomy=approve: queued action for rule %s", rule_id)
+                continue
+
+            # execute (default): proceed with immediate self-healing
             max_retries         = int(rule.get("max_retries", 3))
             circuit_break_after = int(rule.get("circuit_break_after", 5))
 

@@ -641,3 +641,723 @@ def get_user_dashboard(
     except Exception as e:
         logger.error("get_user_dashboard failed: %s", e)
         return None
+
+
+# ── Approval Queue ─────────────────────────────────────────────────────────────
+
+def _insert_approval(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    automation_id: str,
+    trigger: str,
+    trigger_source: str | None,
+    action_type: str,
+    action_params: dict,
+    target: str | None,
+    requested_by: str | None,
+    auto_approve_at: int | None = None,
+    run_id: int | None = None,
+) -> int | None:
+    """Insert a new approval request, return lastrowid."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "INSERT INTO approval_queue "
+                "(automation_id, run_id, trigger, trigger_source, action_type, "
+                "action_params, target, status, requested_at, requested_by, auto_approve_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    automation_id, run_id, trigger, trigger_source, action_type,
+                    json.dumps(action_params), target, "pending", now,
+                    requested_by, auto_approve_at,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except Exception as e:
+        logger.error("_insert_approval failed: %s", e)
+        return None
+
+
+def _list_approvals(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    status: str = "pending",
+) -> list[dict]:
+    """List approvals filtered by status, newest first."""
+    try:
+        with lock:
+            rows = conn.execute(
+                "SELECT id, automation_id, run_id, trigger, trigger_source, "
+                "action_type, action_params, target, status, requested_at, "
+                "requested_by, decided_at, decided_by, auto_approve_at, result "
+                "FROM approval_queue WHERE status = ? "
+                "ORDER BY requested_at DESC",
+                (status,),
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "automation_id": r[1], "run_id": r[2],
+                "trigger": r[3], "trigger_source": r[4],
+                "action_type": r[5],
+                "action_params": json.loads(r[6]) if r[6] else {},
+                "target": r[7], "status": r[8],
+                "requested_at": r[9], "requested_by": r[10],
+                "decided_at": r[11], "decided_by": r[12],
+                "auto_approve_at": r[13], "result": r[14],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("_list_approvals failed: %s", e)
+        return []
+
+
+def _get_approval(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+) -> dict | None:
+    """Fetch a single approval by id."""
+    try:
+        with lock:
+            r = conn.execute(
+                "SELECT id, automation_id, run_id, trigger, trigger_source, "
+                "action_type, action_params, target, status, requested_at, "
+                "requested_by, decided_at, decided_by, auto_approve_at, result "
+                "FROM approval_queue WHERE id = ?",
+                (approval_id,),
+            ).fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0], "automation_id": r[1], "run_id": r[2],
+            "trigger": r[3], "trigger_source": r[4],
+            "action_type": r[5],
+            "action_params": json.loads(r[6]) if r[6] else {},
+            "target": r[7], "status": r[8],
+            "requested_at": r[9], "requested_by": r[10],
+            "decided_at": r[11], "decided_by": r[12],
+            "auto_approve_at": r[13], "result": r[14],
+        }
+    except Exception as e:
+        logger.error("_get_approval failed: %s", e)
+        return None
+
+
+def _decide_approval(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+    decision: str,
+    decided_by: str,
+) -> bool:
+    """Set status to decision (approved/denied) only if currently pending."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "UPDATE approval_queue SET status=?, decided_at=?, decided_by=? "
+                "WHERE id=? AND status='pending'",
+                (decision, now, decided_by, approval_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        logger.error("_decide_approval failed: %s", e)
+        return False
+
+
+def _update_approval_result(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+    result: str,
+) -> None:
+    """Store the execution result for a resolved approval."""
+    try:
+        with lock:
+            conn.execute(
+                "UPDATE approval_queue SET result=? WHERE id=?",
+                (result, approval_id),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error("_update_approval_result failed: %s", e)
+
+
+def _auto_approve_expired(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> int:
+    """Auto-approve pending items whose auto_approve_at <= now. Return rowcount."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "UPDATE approval_queue SET status='auto_approved', decided_at=? "
+                "WHERE status='pending' AND auto_approve_at IS NOT NULL "
+                "AND auto_approve_at <= ?",
+                (now, now),
+            )
+            conn.commit()
+        return cur.rowcount
+    except Exception as e:
+        logger.error("_auto_approve_expired failed: %s", e)
+        return 0
+
+
+def _count_pending_approvals(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> int:
+    """Return count of pending approval requests."""
+    try:
+        with lock:
+            r = conn.execute(
+                "SELECT COUNT(*) FROM approval_queue WHERE status='pending'"
+            ).fetchone()
+        return r[0] if r else 0
+    except Exception as e:
+        logger.error("_count_pending_approvals failed: %s", e)
+        return 0
+
+
+def _save_workflow_context(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+    context: dict,
+) -> bool:
+    """Store graph workflow context JSON on an approval_queue row."""
+    try:
+        with lock:
+            conn.execute(
+                "UPDATE approval_queue SET workflow_context=? WHERE id=?",
+                (json.dumps(context), approval_id),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error("_save_workflow_context failed: %s", e)
+        return False
+
+
+def _get_workflow_context(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+) -> dict | None:
+    """Retrieve graph workflow context for an approval_queue row."""
+    try:
+        with lock:
+            r = conn.execute(
+                "SELECT workflow_context FROM approval_queue WHERE id=?",
+                (approval_id,),
+            ).fetchone()
+        if not r or not r[0]:
+            return None
+        return json.loads(r[0])
+    except Exception as e:
+        logger.error("_get_workflow_context failed: %s", e)
+        return None
+
+
+# ── Maintenance Windows ────────────────────────────────────────────────────────
+
+def _insert_maintenance_window(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    name: str,
+    schedule: str | None = None,
+    duration_min: int = 60,
+    one_off_start: int | None = None,
+    one_off_end: int | None = None,
+    suppress_alerts: bool = True,
+    override_autonomy: str | None = None,
+    auto_close_alerts: bool = False,
+    created_by: str | None = None,
+) -> int | None:
+    """Insert a maintenance window, return lastrowid."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "INSERT INTO maintenance_windows "
+                "(name, schedule, duration_min, one_off_start, one_off_end, "
+                "suppress_alerts, override_autonomy, auto_close_alerts, "
+                "enabled, created_by, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    name, schedule, duration_min, one_off_start, one_off_end,
+                    1 if suppress_alerts else 0,
+                    override_autonomy,
+                    1 if auto_close_alerts else 0,
+                    1, created_by, now,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except Exception as e:
+        logger.error("_insert_maintenance_window failed: %s", e)
+        return None
+
+
+def _list_maintenance_windows(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> list[dict]:
+    """Return all maintenance windows, newest first."""
+    try:
+        with lock:
+            rows = conn.execute(
+                "SELECT id, name, schedule, duration_min, one_off_start, one_off_end, "
+                "suppress_alerts, override_autonomy, auto_close_alerts, enabled, "
+                "created_by, created_at "
+                "FROM maintenance_windows ORDER BY created_at DESC"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "name": r[1], "schedule": r[2],
+                "duration_min": r[3], "one_off_start": r[4], "one_off_end": r[5],
+                "suppress_alerts": bool(r[6]), "override_autonomy": r[7],
+                "auto_close_alerts": bool(r[8]), "enabled": bool(r[9]),
+                "created_by": r[10], "created_at": r[11],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("_list_maintenance_windows failed: %s", e)
+        return []
+
+
+def _update_maintenance_window(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    window_id: int,
+    **kwargs,
+) -> bool:
+    """Update specified fields on a maintenance window."""
+    allowed = {
+        "name", "schedule", "duration_min", "one_off_start", "one_off_end",
+        "suppress_alerts", "override_autonomy", "auto_close_alerts", "enabled",
+    }
+    sets: list[str] = []
+    params: list = []
+    for k, v in kwargs.items():
+        if k not in allowed:
+            continue
+        if k in ("suppress_alerts", "auto_close_alerts", "enabled"):
+            v = 1 if v else 0
+        sets.append(f"{k} = ?")
+        params.append(v)
+    if not sets:
+        return False
+    params.append(window_id)
+    try:
+        with lock:
+            cur = conn.execute(
+                f"UPDATE maintenance_windows SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        logger.error("_update_maintenance_window failed: %s", e)
+        return False
+
+
+def _delete_maintenance_window(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    window_id: int,
+) -> bool:
+    """Delete a maintenance window. Return True if a row was deleted."""
+    try:
+        with lock:
+            cur = conn.execute(
+                "DELETE FROM maintenance_windows WHERE id = ?", (window_id,)
+            )
+            conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        logger.error("_delete_maintenance_window failed: %s", e)
+        return False
+
+
+# ── Action Audit Trail ─────────────────────────────────────────────────────────
+
+def _insert_action_audit(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    trigger_type: str,
+    trigger_id: str | None,
+    action_type: str,
+    action_params: dict | None,
+    target: str | None,
+    outcome: str,
+    duration_s: float | None = None,
+    output: str | None = None,
+    approved_by: str | None = None,
+    rollback_result: str | None = None,
+    error: str | None = None,
+) -> int | None:
+    """Record an automated action for audit."""
+    now = int(time.time())
+    try:
+        with lock:
+            cur = conn.execute(
+                "INSERT INTO action_audit "
+                "(timestamp, trigger_type, trigger_id, action_type, action_params, "
+                "target, outcome, duration_s, output, approved_by, rollback_result, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    now, trigger_type, trigger_id,
+                    action_type, json.dumps(action_params) if action_params else None,
+                    target, outcome, duration_s, output, approved_by,
+                    rollback_result, error,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except Exception as e:
+        logger.error("_insert_action_audit failed: %s", e)
+        return None
+
+
+def _get_action_audit(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    limit: int = 100,
+    trigger_type: str | None = None,
+    outcome: str | None = None,
+) -> list[dict]:
+    """Query action audit trail with optional filters."""
+    try:
+        clauses: list[str] = []
+        params: list = []
+        if trigger_type:
+            clauses.append("trigger_type = ?")
+            params.append(trigger_type)
+        if outcome:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with lock:
+            rows = conn.execute(
+                "SELECT id, timestamp, trigger_type, trigger_id, action_type, "
+                "action_params, target, outcome, duration_s, output, "
+                "approved_by, rollback_result, error "
+                f"FROM action_audit{where} ORDER BY timestamp DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "timestamp": r[1], "trigger_type": r[2],
+                "trigger_id": r[3], "action_type": r[4],
+                "action_params": json.loads(r[5]) if r[5] else None,
+                "target": r[6], "outcome": r[7], "duration_s": r[8],
+                "output": r[9], "approved_by": r[10],
+                "rollback_result": r[11], "error": r[12],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("_get_action_audit failed: %s", e)
+        return []
+
+
+def _get_active_maintenance_windows(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> list[dict]:
+    """Return windows that are currently active.
+
+    - One-off: active when one_off_start <= now <= one_off_end.
+    - Cron-based: active when any minute in the past duration_min minutes
+      matches the cron expression.
+    Disabled windows (enabled=0) are never returned.
+    """
+    from ..scheduler import _match_cron
+    from datetime import datetime, timezone
+
+    now = int(time.time())
+    try:
+        with lock:
+            rows = conn.execute(
+                "SELECT id, name, schedule, duration_min, one_off_start, one_off_end, "
+                "suppress_alerts, override_autonomy, auto_close_alerts, enabled, "
+                "created_by, created_at "
+                "FROM maintenance_windows WHERE enabled = 1"
+            ).fetchall()
+    except Exception as e:
+        logger.error("_get_active_maintenance_windows failed: %s", e)
+        return []
+
+    active = []
+    for r in rows:
+        window = {
+            "id": r[0], "name": r[1], "schedule": r[2],
+            "duration_min": r[3], "one_off_start": r[4], "one_off_end": r[5],
+            "suppress_alerts": bool(r[6]), "override_autonomy": r[7],
+            "auto_close_alerts": bool(r[8]), "enabled": bool(r[9]),
+            "created_by": r[10], "created_at": r[11],
+        }
+        one_off_start = r[4]
+        one_off_end = r[5]
+        schedule = r[2]
+        duration_min = r[3] or 60
+
+        if one_off_start is not None and one_off_end is not None:
+            # One-off window: directly check time range
+            if one_off_start <= now <= one_off_end:
+                active.append(window)
+        elif schedule:
+            # Cron-based: check if any minute in the last duration_min matches
+            matched = False
+            for offset in range(duration_min):
+                ts = now - offset * 60
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+                if _match_cron(schedule, dt):
+                    matched = True
+                    break
+            if matched:
+                active.append(window)
+
+    return active
+
+
+# ── Playbook Templates ────────────────────────────────────────────────────────
+
+def _list_playbook_templates(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> list[dict]:
+    """List all playbook templates."""
+    try:
+        with lock:
+            rows = conn.execute(
+                "SELECT id, name, description, category, config, version "
+                "FROM playbook_templates ORDER BY category, name"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "name": r[1], "description": r[2],
+                "category": r[3],
+                "config": json.loads(r[4]) if r[4] else {},
+                "version": r[5],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error("_list_playbook_templates failed: %s", e)
+        return []
+
+
+def _get_playbook_template(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    template_id: str,
+) -> dict | None:
+    """Get single template by id."""
+    try:
+        with lock:
+            r = conn.execute(
+                "SELECT id, name, description, category, config, version "
+                "FROM playbook_templates WHERE id = ?",
+                (template_id,),
+            ).fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0], "name": r[1], "description": r[2],
+            "category": r[3],
+            "config": json.loads(r[4]) if r[4] else {},
+            "version": r[5],
+        }
+    except Exception as e:
+        logger.error("_get_playbook_template failed: %s", e)
+        return None
+
+
+def _upsert_playbook_template(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    template_id: str,
+    name: str,
+    description: str | None,
+    category: str | None,
+    config: dict,
+    version: int = 1,
+) -> bool:
+    """Insert or update a playbook template."""
+    try:
+        with lock:
+            conn.execute(
+                "INSERT OR REPLACE INTO playbook_templates "
+                "(id, name, description, category, config, version) "
+                "VALUES (?,?,?,?,?,?)",
+                (template_id, name, description, category,
+                 json.dumps(config), version),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error("_upsert_playbook_template failed: %s", e)
+        return False
+
+
+def _seed_default_playbooks(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> None:
+    """Seed 4 default playbook templates using INSERT OR IGNORE."""
+    templates = [
+        {
+            "id": "update-all-agents",
+            "name": "Update All Agents",
+            "description": "Check for updates on all agents, wait, verify versions, and report results.",
+            "category": "maintenance",
+            "config": {
+                "nodes": [
+                    {"id": "n1", "type": "agent_command",
+                     "params": {"cmd_type": "update", "broadcast": True},
+                     "label": "Check Updates"},
+                    {"id": "n2", "type": "delay",
+                     "params": {"seconds": 60},
+                     "label": "Wait 60s"},
+                    {"id": "n3", "type": "agent_command",
+                     "params": {"cmd_type": "version_check", "broadcast": True},
+                     "label": "Verify Versions"},
+                    {"id": "n4", "type": "notify",
+                     "params": {"level": "info", "title": "Agent Updates Complete",
+                                "message": "All agents updated and verified."},
+                     "label": "Report"},
+                ],
+                "edges": [
+                    {"from": "n1", "to": "n2"},
+                    {"from": "n2", "to": "n3"},
+                    {"from": "n3", "to": "n4"},
+                ],
+                "entry": "n1",
+            },
+            "version": 1,
+        },
+        {
+            "id": "rolling-dns-restart",
+            "name": "Rolling DNS Restart",
+            "description": "Restart the primary DNS server, wait for propagation, verify DNS health, and notify.",
+            "category": "maintenance",
+            "config": {
+                "nodes": [
+                    {"id": "n1", "type": "service",
+                     "params": {"service": "named.service", "action": "restart"},
+                     "label": "Restart Primary DNS"},
+                    {"id": "n2", "type": "delay",
+                     "params": {"seconds": 30},
+                     "label": "Wait 30s"},
+                    {"id": "n3", "type": "condition",
+                     "params": {"metric": "dns_ok", "operator": "==", "threshold": 1},
+                     "label": "DNS OK?"},
+                    {"id": "n4", "type": "notify",
+                     "params": {"level": "info", "title": "DNS Restart Successful",
+                                "message": "Primary DNS restarted and healthy."},
+                     "label": "Success Notification"},
+                    {"id": "n5", "type": "notify",
+                     "params": {"level": "error", "title": "DNS Restart Failed",
+                                "message": "Primary DNS did not recover after restart."},
+                     "label": "Failure Notification"},
+                ],
+                "edges": [
+                    {"from": "n1", "to": "n2"},
+                    {"from": "n2", "to": "n3"},
+                    {"from": "n3", "to": "n4", "condition": True},
+                    {"from": "n3", "to": "n5", "condition": False},
+                ],
+                "entry": "n1",
+            },
+            "version": 1,
+        },
+        {
+            "id": "backup-verification",
+            "name": "Backup Verification",
+            "description": "Trigger a backup job, wait for completion, then report the result.",
+            "category": "backup",
+            "config": {
+                "nodes": [
+                    {"id": "n1", "type": "script",
+                     "params": {"script": "backup", "args": "--verify"},
+                     "label": "Trigger Backup"},
+                    {"id": "n2", "type": "delay",
+                     "params": {"seconds": 300},
+                     "label": "Wait 5 Min"},
+                    {"id": "n3", "type": "notify",
+                     "params": {"level": "info", "title": "Backup Verification Complete",
+                                "message": "Backup triggered and verification window passed."},
+                     "label": "Report"},
+                ],
+                "edges": [
+                    {"from": "n1", "to": "n2"},
+                    {"from": "n2", "to": "n3"},
+                ],
+                "entry": "n1",
+            },
+            "version": 1,
+        },
+        {
+            "id": "disk-cleanup",
+            "name": "Disk Cleanup",
+            "description": "Check disk usage; if above 85%, find large files, require approval, then run cleanup.",
+            "category": "maintenance",
+            "config": {
+                "nodes": [
+                    {"id": "n1", "type": "condition",
+                     "params": {"metric": "disk_percent", "operator": ">", "threshold": 85},
+                     "label": "Disk > 85%?"},
+                    {"id": "n2", "type": "script",
+                     "params": {"script": "diskcheck", "args": "--find-large"},
+                     "label": "Find Large Files"},
+                    {"id": "n3", "type": "approval_gate",
+                     "params": {"message": "Approve disk cleanup?", "timeout_s": 3600},
+                     "label": "Approval Gate"},
+                    {"id": "n4", "type": "script",
+                     "params": {"script": "diskcheck", "args": "--cleanup"},
+                     "label": "Execute Cleanup"},
+                    {"id": "n5", "type": "notify",
+                     "params": {"level": "info", "title": "Disk Cleanup Complete",
+                                "message": "Disk cleanup executed successfully."},
+                     "label": "Report"},
+                    {"id": "n6", "type": "notify",
+                     "params": {"level": "info", "title": "Disk OK",
+                                "message": "Disk usage is below threshold. No action needed."},
+                     "label": "No Action"},
+                ],
+                "edges": [
+                    {"from": "n1", "to": "n2", "condition": True},
+                    {"from": "n1", "to": "n6", "condition": False},
+                    {"from": "n2", "to": "n3"},
+                    {"from": "n3", "to": "n4"},
+                    {"from": "n4", "to": "n5"},
+                ],
+                "entry": "n1",
+            },
+            "version": 1,
+        },
+    ]
+    try:
+        with lock:
+            for t in templates:
+                conn.execute(
+                    "INSERT OR IGNORE INTO playbook_templates "
+                    "(id, name, description, category, config, version) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (
+                        t["id"], t["name"], t["description"], t["category"],
+                        json.dumps(t["config"]), t["version"],
+                    ),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.error("_seed_default_playbooks failed: %s", e)

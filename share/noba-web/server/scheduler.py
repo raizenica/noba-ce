@@ -193,6 +193,53 @@ class Scheduler:
                 continue
             self._trigger(auto)
 
+        # Every tick (60s), auto-approve expired pending approvals and execute them
+        self._process_auto_approvals()
+
+    def _process_auto_approvals(self) -> None:
+        """Auto-approve any pending approvals past their auto_approve_at time,
+        then execute all auto_approved items that have no result yet."""
+        count = db.auto_approve_expired()
+        if count:
+            logger.info("Auto-approved %d expired approval(s)", count)
+
+        # Execute auto_approved items that haven't been executed yet
+        try:
+            pending_exec = [
+                a for a in db.list_approvals(status="auto_approved")
+                if not a.get("result")
+            ]
+        except Exception as exc:
+            logger.error("Failed to list auto_approved approvals: %s", exc)
+            return
+
+        if not pending_exec:
+            return
+
+        import json as _json
+        from .remediation import execute_action
+
+        for approval in pending_exec:
+            try:
+                action_params = approval.get("action_params") or {}
+                if isinstance(action_params, str):
+                    action_params = _json.loads(action_params)
+                result = execute_action(
+                    approval["action_type"],
+                    action_params,
+                    triggered_by="auto_approve",
+                )
+                db.update_approval_result(approval["id"], _json.dumps(result))
+                logger.info(
+                    "Executed auto-approved action id=%d type=%s",
+                    approval["id"], approval["action_type"],
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to execute auto-approved action id=%d: %s",
+                    approval.get("id"), exc,
+                )
+
     def _trigger(self, auto: dict) -> None:
         """Submit an automation to the job runner."""
         # Workflow: chain steps
@@ -416,6 +463,14 @@ def _run_endpoint_check(monitor: dict) -> dict:
         error=result.get("error"),
     )
 
+    # Record into check history for trending/uptime
+    db.record_endpoint_check_history(
+        monitor["id"],
+        status=status,
+        response_ms=result.get("response_ms"),
+        error=result.get("error"),
+    )
+
     # Record response_ms as a metric for trending
     try:
         now_ts = int(time.time())
@@ -499,6 +554,14 @@ def _dispatch_agent_endpoint_check(monitor: dict) -> dict:
         response_ms=agent_result.get("response_ms"),
         status_code=code,
         cert_expiry_days=cert_expiry_days,
+        error=agent_result.get("error"),
+    )
+
+    # Record into check history for trending/uptime
+    db.record_endpoint_check_history(
+        monitor["id"],
+        status=status,
+        response_ms=agent_result.get("response_ms"),
         error=agent_result.get("error"),
     )
 

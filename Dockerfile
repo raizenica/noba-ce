@@ -18,9 +18,6 @@ WORKDIR /app
 # Copy application files (modular structure)
 COPY share/noba-web/server.py /app/server.py
 COPY share/noba-web/server/ /app/server/
-COPY share/noba-web/index.html /app/index.html
-COPY share/noba-web/manifest.json /app/manifest.json
-COPY share/noba-web/service-worker.js /app/service-worker.js
 COPY share/noba-web/static/ /app/static/
 
 # Copy agent script (served via /api/agent/update endpoint)
@@ -39,7 +36,7 @@ ENV NOBA_CONFIG=/app/config/config.yaml
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD curl -sf http://localhost:8080/api/status || exit 1
+    CMD curl -sf http://localhost:8080/api/status/public || exit 1
 
 EXPOSE 8080
 

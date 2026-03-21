@@ -44,6 +44,7 @@ def _cleanup_loop() -> None:
             db.prune_audit()
             db.prune_job_runs()
             db.prune_rollups()
+            db.prune_endpoint_check_history()
             # Checkpoint WAL to prevent unbounded growth on long-running instances
             try:
                 with db._lock:
@@ -182,7 +183,14 @@ async def lifespan(app: FastAPI):
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Noba Command Center", version=VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url="/api/redoc")
+app = FastAPI(
+    title="Noba Command Center",
+    version=VERSION,
+    lifespan=lifespan,
+    openapi_url="/api/openapi.json",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _cors_origins = os.environ.get("NOBA_CORS_ORIGINS", "").split(",")
@@ -197,7 +205,7 @@ app.add_middleware(
 
 
 # ── Security headers middleware ───────────────────────────────────────────────
-_DOCS_PATHS = ("/api/docs", "/api/redoc", "/openapi.json")
+_DOCS_PATHS = ("/api/docs", "/api/redoc", "/api/openapi.json")
 
 
 @app.middleware("http")
@@ -211,19 +219,7 @@ async def add_security_headers(request: Request, call_next):
 
 
 # ── Static / frontend ─────────────────────────────────────────────────────────
-@app.get("/")
-async def index():
-    return FileResponse(_WEB_DIR / "index.html")
-
-
-@app.get("/manifest.json")
-async def manifest():
-    return FileResponse(_WEB_DIR / "manifest.json", media_type="application/json")
-
-
-@app.get("/service-worker.js")
-async def service_worker():
-    return FileResponse(_WEB_DIR / "service-worker.js", media_type="application/javascript")
+_VUE_DIST = _WEB_DIR / "static" / "dist"
 
 
 class _CachedStaticFiles(StaticFiles):
@@ -237,8 +233,41 @@ class _CachedStaticFiles(StaticFiles):
             await send(msg)
         await super().__call__(scope, receive, _send_with_cache)
 
+
+# Serve Vite-built assets (hashed filenames = immutable)
+if (_VUE_DIST / "assets").exists():
+    app.mount("/assets", _CachedStaticFiles(directory=str(_VUE_DIST / "assets")), name="vue-assets")
+
+# Keep /static mount for favicons and other non-Vue static files
 app.mount("/static", _CachedStaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(_VUE_DIST / "manifest.json", media_type="application/json")
+
+
+@app.get("/service-worker.js")
+async def service_worker():
+    return FileResponse(_VUE_DIST / "service-worker.js", media_type="application/javascript")
+
+
+@app.get("/favicon.svg")
+async def favicon_svg():
+    return FileResponse(_VUE_DIST / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico")
+async def favicon_ico():
+    return FileResponse(_VUE_DIST / "favicon.ico", media_type="image/x-icon")
+
 
 # ── Include API routers ───────────────────────────────────────────────────────
 from .routers import api_router  # noqa: E402
 app.include_router(api_router)
+
+
+# ── SPA fallback (must be last) ──────────────────────────────────────────────
+@app.get("/{rest:path}")
+async def spa_fallback(rest: str = ""):
+    return FileResponse(_VUE_DIST / "index.html")
