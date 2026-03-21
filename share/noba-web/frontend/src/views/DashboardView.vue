@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import Sortable from 'sortablejs'
 import { useDashboardStore } from '../stores/dashboard'
 import { useSettingsStore } from '../stores/settings'
@@ -203,7 +203,7 @@ onMounted(() => {
     if (gridRef.value._sortable) return
     gridRef.value._sortable = Sortable.create(gridRef.value, {
       animation: 150,
-      handle: '.drag-handle',
+      handle: '.card-hdr',
       ghostClass: 'sortable-ghost',
       dragClass: 'sortable-drag',
       forceFallback: true,
@@ -222,6 +222,33 @@ onMounted(() => {
   }
   setTimeout(tryInit, 300)
 
+  // Masonry — exact v2 approach: observe each .card, set grid-row-end: span N
+  let _masonryObserver = null
+  function initMasonry() {
+    if (_masonryObserver) _masonryObserver.disconnect()
+    _masonryObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const card = entry.target
+        if (card.offsetParent === null) continue  // skip hidden cards
+        const height = card.getBoundingClientRect().height
+        const rowSpan = Math.ceil((height + 18) / 10)
+        card.style.gridRowEnd = `span ${rowSpan}`
+      }
+    })
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const grid = gridRef.value
+      if (grid) {
+        grid.querySelectorAll('.card').forEach(c => _masonryObserver.observe(c))
+      }
+    }))
+  }
+
+  // Start masonry after cards render
+  setTimeout(initMasonry, 500)
+})
+
+onUnmounted(() => {
+  if (gridRef.value?._sortable) gridRef.value._sortable.destroy()
 })
 </script>
 
