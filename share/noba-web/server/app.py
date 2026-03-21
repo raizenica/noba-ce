@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .collector import bg_collector, get_shutdown_flag
@@ -238,6 +238,22 @@ class _CachedStaticFiles(StaticFiles):
         await super().__call__(scope, receive, _send_with_cache)
 
 app.mount("/static", _CachedStaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+
+# ── Vue frontend (Phase 2 — test at /v3) ────────────────────────────────────
+_VUE_DIST = _WEB_DIR / "static" / "dist"
+
+if (_VUE_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_VUE_DIST / "assets")), name="vue-assets")
+
+
+@app.get("/v3/{rest:path}")
+@app.get("/v3")
+async def vue_app(rest: str = ""):
+    idx = _VUE_DIST / "index.html"
+    if idx.exists():
+        return FileResponse(idx)
+    return PlainTextResponse("Vue build not found. Run: scripts/build-frontend.sh", status_code=404)
+
 
 # ── Include API routers ───────────────────────────────────────────────────────
 from .routers import api_router  # noqa: E402
