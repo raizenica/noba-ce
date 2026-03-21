@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 
 from fastapi import HTTPException
 
@@ -405,3 +406,218 @@ def _run_parallel_workflow(auto_id: str, steps: list[str], triggered_by: str) ->
             )
         except RuntimeError as exc:
             logger.warning("Parallel workflow %s: step %d submit failed: %s", auto_id, idx, exc)
+
+
+# ── Graph Workflow execution ──────────────────────────────────────────────────
+
+def _get_next_node(node: dict, edges: list[dict]) -> str | None:
+    """Find the next node ID for non-branching nodes.
+
+    Returns the ``to`` value of the first edge whose ``from`` matches the
+    given node id, or ``None`` when no outgoing edge exists (end of workflow).
+    """
+    node_id = node["id"]
+    for edge in edges:
+        if edge["from"] == node_id:
+            return edge["to"]
+    return None
+
+
+def _run_graph_workflow(auto_id: str, config: dict, triggered_by: str) -> None:
+    """Execute a graph-based workflow with conditional branching and approval gates."""
+    nodes = {n["id"]: n for n in config.get("nodes", [])}
+    edges = config.get("edges", [])
+    entry = config.get("entry", "")
+
+    if not entry or entry not in nodes:
+        logger.error("Workflow %s: no valid entry node", auto_id)
+        return
+
+    _execute_node(auto_id, nodes, edges, entry, triggered_by)
+
+
+def _execute_node(
+    auto_id: str, nodes: dict, edges: list[dict], node_id: str, triggered_by: str,
+) -> None:
+    """Execute a single node and determine next node(s)."""
+    node = nodes.get(node_id)
+    if not node:
+        logger.error("Workflow %s: node %s not found", auto_id, node_id)
+        return
+
+    node_type = node.get("type", "")
+
+    if node_type == "action":
+        _execute_action_node(auto_id, nodes, edges, node, triggered_by)
+    elif node_type == "condition":
+        _execute_condition_node(auto_id, nodes, edges, node, triggered_by)
+    elif node_type == "approval_gate":
+        _execute_approval_gate(auto_id, nodes, edges, node, triggered_by)
+    elif node_type == "parallel":
+        _execute_parallel_node(auto_id, nodes, edges, node, triggered_by)
+    elif node_type == "delay":
+        _execute_delay_node(auto_id, nodes, edges, node, triggered_by)
+    elif node_type == "notification":
+        _execute_notification_node(auto_id, nodes, edges, node, triggered_by)
+    else:
+        logger.warning("Workflow %s: unknown node type %s", auto_id, node_type)
+
+
+def _execute_action_node(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Run an action node: build + submit via _AUTO_BUILDERS, then follow next node."""
+    node_config = node.get("config", {})
+    action_type = node_config.get("type", "")
+    action_cfg = node_config.get("config", {})
+
+    builder = _AUTO_BUILDERS.get(action_type)
+    if not builder:
+        logger.warning("Workflow %s: action node '%s' has unsupported type '%s'",
+                       auto_id, node["id"], action_type)
+        return
+
+    def make_process(_run_id: int) -> subprocess.Popen | None:
+        return builder(action_cfg)
+
+    next_id = _get_next_node(node, edges)
+
+    def on_complete(_run_id: int, status: str) -> None:
+        if status == "done" and next_id:
+            _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+        elif status != "done":
+            logger.info("Workflow %s: action node '%s' %s — stopping", auto_id, node["id"], status)
+
+    try:
+        job_runner.submit(
+            make_process,
+            automation_id=auto_id,
+            trigger=f"workflow:{auto_id}:node:{node['id']}",
+            triggered_by=triggered_by,
+            on_complete=on_complete,
+        )
+    except RuntimeError as exc:
+        logger.warning("Workflow %s: action node '%s' submit failed: %s", auto_id, node["id"], exc)
+
+
+def _execute_condition_node(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Evaluate an expression and branch to true_next or false_next."""
+    from .collector import bg_collector
+    from .alerts import _safe_eval
+
+    expression = node.get("expression", "")
+    stats = bg_collector.get() or {}
+    flat: dict = {}
+    for k, v in stats.items():
+        if isinstance(v, (int, float, str)):
+            flat[k] = v
+
+    result = _safe_eval(expression, flat) if expression else False
+    logger.info("Workflow %s: condition node '%s' expression=%r result=%s",
+                auto_id, node["id"], expression, result)
+
+    next_id = node.get("true_next") if result else node.get("false_next")
+    if next_id and next_id in nodes:
+        _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+    else:
+        logger.info("Workflow %s: condition node '%s' — no branch to follow (result=%s)",
+                    auto_id, node["id"], result)
+
+
+def _execute_approval_gate(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Insert an approval record and pause the workflow.
+
+    The workflow resumes when the approval is decided via api_decide_approval.
+    The full graph context is serialised into the approval row so it can be
+    resumed by the router.
+    """
+    approved_next = node.get("approved_next")
+    denied_next = node.get("denied_next")
+    action_type = node.get("action_type", "workflow_approval_gate")
+    action_params = node.get("action_params", {})
+    target = node.get("target")
+
+    context = {
+        "auto_id": auto_id,
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "approved_next": approved_next,
+        "denied_next": denied_next,
+        "triggered_by": triggered_by,
+    }
+
+    approval_id = db.insert_approval(
+        automation_id=auto_id,
+        trigger=f"graph_workflow:{auto_id}:node:{node['id']}",
+        trigger_source="graph_workflow",
+        action_type=action_type,
+        action_params=action_params,
+        target=target,
+        requested_by=triggered_by,
+    )
+    if approval_id is not None:
+        db.save_workflow_context(approval_id, context)
+        logger.info("Workflow %s: approval gate '%s' created approval id=%s — pausing",
+                    auto_id, node["id"], approval_id)
+    else:
+        logger.error("Workflow %s: approval gate '%s' — failed to insert approval",
+                     auto_id, node["id"])
+
+
+def _execute_parallel_node(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Fan out to all branches sequentially (v1 simplification), then follow join node."""
+    branches = node.get("branches", [])
+    for branch_id in branches:
+        if branch_id in nodes:
+            _execute_node(auto_id, nodes, edges, branch_id, triggered_by)
+        else:
+            logger.warning("Workflow %s: parallel node '%s' branch '%s' not found",
+                           auto_id, node["id"], branch_id)
+
+    join_id = node.get("join")
+    if join_id and join_id in nodes:
+        _execute_node(auto_id, nodes, edges, join_id, triggered_by)
+
+
+def _execute_delay_node(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Sleep for the configured duration, then follow the next node."""
+    seconds = node.get("seconds", 0)
+    logger.info("Workflow %s: delay node '%s' sleeping %s seconds", auto_id, node["id"], seconds)
+    time.sleep(seconds)
+    next_id = _get_next_node(node, edges)
+    if next_id:
+        _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+
+
+def _execute_notification_node(
+    auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+) -> None:
+    """Dispatch a notification and follow the next node."""
+    msg = node.get("message", "Workflow notification")
+    level = node.get("level", "info")
+    channels = node.get("channels")
+
+    try:
+        cfg = read_yaml_settings()
+        notif_cfg = cfg.get("notifications", {})
+        if notif_cfg:
+            from .alerts import dispatch_notifications
+            threading.Thread(
+                target=dispatch_notifications,
+                args=(level, msg, notif_cfg, channels),
+                daemon=True,
+            ).start()
+    except Exception as exc:
+        logger.error("Workflow %s: notification node '%s' failed: %s", auto_id, node["id"], exc)
+
+    next_id = _get_next_node(node, edges)
+    if next_id:
+        _execute_node(auto_id, nodes, edges, next_id, triggered_by)

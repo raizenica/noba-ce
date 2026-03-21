@@ -824,6 +824,46 @@ def _count_pending_approvals(
         return 0
 
 
+def _save_workflow_context(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+    context: dict,
+) -> bool:
+    """Store graph workflow context JSON on an approval_queue row."""
+    try:
+        with lock:
+            conn.execute(
+                "UPDATE approval_queue SET workflow_context=? WHERE id=?",
+                (json.dumps(context), approval_id),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error("_save_workflow_context failed: %s", e)
+        return False
+
+
+def _get_workflow_context(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    approval_id: int,
+) -> dict | None:
+    """Retrieve graph workflow context for an approval_queue row."""
+    try:
+        with lock:
+            r = conn.execute(
+                "SELECT workflow_context FROM approval_queue WHERE id=?",
+                (approval_id,),
+            ).fetchone()
+        if not r or not r[0]:
+            return None
+        return json.loads(r[0])
+    except Exception as e:
+        logger.error("_get_workflow_context failed: %s", e)
+        return None
+
+
 # ── Maintenance Windows ────────────────────────────────────────────────────────
 
 def _insert_maintenance_window(

@@ -71,11 +71,13 @@ from .automations import (
     _get_action_audit,
     _get_active_maintenance_windows,
     _get_approval,
+    _get_workflow_context,
     _insert_action_audit,
     _insert_approval,
     _insert_maintenance_window,
     _list_approvals,
     _list_maintenance_windows,
+    _save_workflow_context,
     _update_approval_result,
     _update_maintenance_window,
     delete_api_key as _delete_api_key,
@@ -592,6 +594,12 @@ class Database:
                     conn.commit()
             except Exception:
                 pass
+            # Migrate approval_queue: add workflow_context column if missing
+            try:
+                conn.execute("ALTER TABLE approval_queue ADD COLUMN workflow_context TEXT")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
 
     # ── Metrics ───────────────────────────────────────────────────────────────
     def insert_metrics(self, metrics: list[tuple]) -> None:
@@ -1154,6 +1162,12 @@ class Database:
 
     def count_pending_approvals(self) -> int:
         return _count_pending_approvals(self._get_conn(), self._lock)
+
+    def save_workflow_context(self, approval_id: int, context: dict) -> bool:
+        return _save_workflow_context(self._get_conn(), self._lock, approval_id, context)
+
+    def get_workflow_context(self, approval_id: int) -> dict | None:
+        return _get_workflow_context(self._get_conn(), self._lock, approval_id)
 
     # ── Maintenance Windows ───────────────────────────────────────────────────
     def insert_maintenance_window(self, **kwargs) -> int | None:

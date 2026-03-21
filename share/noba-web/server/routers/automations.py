@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 import subprocess
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -17,7 +18,8 @@ from ..deps import (
 )
 from ..runner import job_runner
 from ..workflow_engine import (
-    _AUTO_BUILDERS, _run_parallel_workflow, _run_workflow, _validate_auto_config,
+    _AUTO_BUILDERS, _run_graph_workflow, _run_parallel_workflow, _run_workflow,
+    _validate_auto_config,
 )
 from ..yaml_config import read_yaml_settings
 
@@ -205,8 +207,19 @@ async def api_automations_run(auto_id: str, request: Request, auth=Depends(_requ
                 except (KeyError, ValueError, IndexError):
                     pass
 
-    # Workflow: chain execution of steps
+    # Workflow: graph or flat step execution
     if auto["type"] == "workflow":
+        # Graph format (opt-in): config has "nodes" key
+        if config.get("nodes"):
+            threading.Thread(
+                target=_run_graph_workflow,
+                args=(auto_id, config, username),
+                daemon=True,
+            ).start()
+            db.audit_log("automation_run", username,
+                         f"Graph workflow '{auto['name']}' started", ip)
+            return {"success": True, "run_id": None, "workflow": True, "graph": True}
+        # Legacy flat steps format
         steps = config.get("steps", [])
         if not steps:
             raise HTTPException(400, "Workflow has no steps")
@@ -718,8 +731,27 @@ async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_
     if not ok:
         raise HTTPException(500, "Failed to update approval")
 
-    # If approved, execute the action
-    if decision == "approved":
+    # Check for graph workflow context — resume workflow if present
+    wf_ctx = db.get_workflow_context(approval_id)
+    if wf_ctx:
+        next_node_id = wf_ctx.get("approved_next") if decision == "approved" else wf_ctx.get("denied_next")
+        if next_node_id:
+            auto_id = wf_ctx.get("auto_id", "")
+            nodes_list = wf_ctx.get("nodes", [])
+            nodes = {n["id"]: n for n in nodes_list}
+            edges = wf_ctx.get("edges", [])
+            orig_triggered_by = wf_ctx.get("triggered_by", username)
+            from ..workflow_engine import _execute_node
+            threading.Thread(
+                target=_execute_node,
+                args=(auto_id, nodes, edges, next_node_id, orig_triggered_by),
+                daemon=True,
+            ).start()
+        else:
+            logger.info("Approval %s: no resume node for decision=%s — workflow ends",
+                        approval_id, decision)
+    elif decision == "approved":
+        # Legacy non-graph approval: execute remediation action
         import json as _json
         from ..remediation import execute_action
         action_params = approval.get("action_params") or {}
