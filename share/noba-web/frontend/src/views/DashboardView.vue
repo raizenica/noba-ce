@@ -24,9 +24,32 @@ import AutomationsCard    from '../components/cards/AutomationsCard.vue'
 import QuickActionsCard   from '../components/cards/QuickActionsCard.vue'
 import BookmarksCard      from '../components/cards/BookmarksCard.vue'
 
+// ── Integration card imports ──────────────────────────────────────────────────
+import PiholeCard       from '../components/cards/PiholeCard.vue'
+import AdguardCard      from '../components/cards/AdguardCard.vue'
+import UnifiCard        from '../components/cards/UnifiCard.vue'
+import SpeedtestCard    from '../components/cards/SpeedtestCard.vue'
+import TailscaleCard    from '../components/cards/TailscaleCard.vue'
+import TruenasCard      from '../components/cards/TruenasCard.vue'
+import PlexCard         from '../components/cards/PlexCard.vue'
+import DownloadsCard    from '../components/cards/DownloadsCard.vue'
+import JellyfinCard     from '../components/cards/JellyfinCard.vue'
+import LidarrCard       from '../components/cards/LidarrCard.vue'
+import ReadarrCard      from '../components/cards/ReadarrCard.vue'
+import BazarrCard       from '../components/cards/BazarrCard.vue'
+import HassCard         from '../components/cards/HassCard.vue'
+import FrigateCard      from '../components/cards/FrigateCard.vue'
+import KumaCard         from '../components/cards/KumaCard.vue'
+import ProxmoxCard      from '../components/cards/ProxmoxCard.vue'
+import VaultwardenCard  from '../components/cards/VaultwardenCard.vue'
+import VpnCard          from '../components/cards/VpnCard.vue'
+import EnergyCard       from '../components/cards/EnergyCard.vue'
+import CameraFeedsCard  from '../components/cards/CameraFeedsCard.vue'
+import RecoveryCard     from '../components/cards/RecoveryCard.vue'
+
 const dashboardStore = useDashboardStore()
 const settingsStore  = useSettingsStore()
-const { get }        = useApi()
+const { get, post, del } = useApi()
 
 // ── Glance mode ──────────────────────────────────────────────────────────────
 const glanceMode = ref(false)
@@ -129,8 +152,47 @@ function catBadgeClass(status) {
   return 'bd'
 }
 
+// ── Custom dashboards ─────────────────────────────────────────────────────────
+const savedDashboards     = ref([])
+const saveDashboardName   = ref('')
+const showSaveModal       = ref(false)
+
+async function fetchDashboards() {
+  try {
+    savedDashboards.value = await get('/api/dashboards')
+  } catch { /* silent */ }
+}
+
+async function saveDashboard() {
+  const name = saveDashboardName.value.trim()
+  if (!name) return
+  try {
+    const config = { vis: { ...settingsStore.vis } }
+    await post('/api/dashboards', { name, config_json: JSON.stringify(config), shared: false })
+    saveDashboardName.value = ''
+    showSaveModal.value = false
+    await fetchDashboards()
+  } catch { /* silent */ }
+}
+
+async function loadDashboard(dashboard) {
+  try {
+    const config = JSON.parse(dashboard.config_json)
+    if (config.vis) Object.assign(settingsStore.vis, config.vis)
+  } catch { /* silent */ }
+}
+
+async function deleteDashboard(id) {
+  if (!confirm('Delete this saved dashboard?')) return
+  try {
+    await del('/api/dashboards/' + id)
+    await fetchDashboards()
+  } catch { /* silent */ }
+}
+
 onMounted(() => {
   fetchHealthScore()
+  fetchDashboards()
 })
 </script>
 
@@ -266,37 +328,123 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- ── Card grid ───────────────────────────────────────────────────────── -->
-    <!--
-      Cards are added in Tasks 9-10.
-      Usage pattern:
-        <SystemHealthCard v-if="showCard('core')" />
+    <!-- ── Custom dashboards toolbar ──────────────────────────────────────── -->
+    <div style="display:flex;align-items:center;gap:.5rem;margin:.75rem 0;flex-wrap:wrap">
+      <select
+        v-if="savedDashboards.length > 0"
+        class="theme-select"
+        style="font-size:.75rem;padding:.3rem .5rem"
+        @change="e => { const d = savedDashboards.find(x => String(x.id) === e.target.value); if (d) loadDashboard(d); e.target.value = '' }"
+      >
+        <option value="">Load dashboard…</option>
+        <option
+          v-for="d in savedDashboards"
+          :key="d.id"
+          :value="d.id"
+        >{{ d.name }}</option>
+      </select>
 
-      Row content pattern (uses existing CSS, no extra component needed):
-        <div class="row">
-          <span class="row-label">Label</span>
-          <span class="row-val">Value</span>
-        </div>
-    -->
+      <button
+        class="btn btn-xs btn-secondary"
+        type="button"
+        title="Save current layout"
+        @click="showSaveModal = !showSaveModal"
+      >
+        <i class="fas fa-save"></i> Save Layout
+      </button>
+
+      <template v-if="showSaveModal">
+        <input
+          v-model="saveDashboardName"
+          class="field-input"
+          type="text"
+          placeholder="Dashboard name…"
+          style="font-size:.75rem;padding:.3rem .5rem;max-width:180px"
+          @keyup.enter="saveDashboard"
+        >
+        <button
+          class="btn btn-xs"
+          type="button"
+          :disabled="!saveDashboardName.trim()"
+          @click="saveDashboard"
+        >Save</button>
+      </template>
+
+      <button
+        v-if="savedDashboards.length > 0"
+        class="btn btn-xs btn-secondary"
+        type="button"
+        style="margin-left:.25rem"
+        title="Manage saved dashboards"
+        @click="showSaveModal = false"
+      >
+        <i class="fas fa-trash"></i>
+      </button>
+      <template v-if="savedDashboards.length > 0">
+        <span
+          v-for="d in savedDashboards"
+          :key="'del-' + d.id"
+          style="display:none"
+        ></span>
+      </template>
+    </div>
+
+    <!-- ── Card grid ───────────────────────────────────────────────────────── -->
     <div class="grid" :class="{ 'glance-mode': glanceMode }">
-      <CoreSystemCard     v-if="showCard('core')"          />
-      <SystemHealthCard                                     />
-      <UptimeCard                                           />
-      <NetworkIoCard      v-if="showCard('netio')"         />
-      <HardwareCard       v-if="showCard('hw')"            />
-      <StorageCard        v-if="showCard('storage')"       />
-      <DiskHealthCard     v-if="showCard('scrutiny')"      />
-      <DiskIoCard         v-if="showCard('diskIo')"        />
-      <NetworkRadarCard   v-if="showCard('radar')"         />
-      <ProcessesCard      v-if="showCard('procs')"         />
-      <BatteryCard        v-if="showCard('battery')"       />
-      <AgentsCard         v-if="showCard('agents')"        />
-      <CertExpiryCard     v-if="showCard('certExpiry')"    />
-      <DevicePresenceCard                                   />
-      <ContainersCard     v-if="showCard('containers')"    />
-      <AutomationsCard    v-if="showCard('automations')"   />
-      <QuickActionsCard   v-if="showCard('actions')"       />
-      <BookmarksCard      v-if="showCard('bookmarks')"     />
+      <!-- System cards -->
+      <CoreSystemCard     v-if="showCard('core')"                                        />
+      <SystemHealthCard                                                                   />
+      <UptimeCard                                                                         />
+      <NetworkIoCard      v-if="showCard('netio')"                                       />
+      <HardwareCard       v-if="showCard('hw')"                                          />
+      <StorageCard        v-if="showCard('storage')"                                     />
+      <DiskHealthCard     v-if="showCard('scrutiny')"                                    />
+      <DiskIoCard         v-if="showCard('diskIo')"                                      />
+      <NetworkRadarCard   v-if="showCard('radar')"                                       />
+      <ProcessesCard      v-if="showCard('procs')"                                       />
+      <BatteryCard        v-if="showCard('battery')"                                     />
+      <AgentsCard         v-if="showCard('agents')"                                      />
+      <CertExpiryCard     v-if="showCard('certExpiry')"                                  />
+      <DevicePresenceCard                                                                 />
+      <ContainersCard     v-if="showCard('containers')"                                  />
+      <AutomationsCard    v-if="showCard('automations')"                                 />
+      <QuickActionsCard   v-if="showCard('actions')"                                     />
+      <BookmarksCard      v-if="showCard('bookmarks')"                                   />
+
+      <!-- DNS / Network integrations -->
+      <PiholeCard      v-if="showCard('pihole')      && settingsStore.data.piholeUrl"    />
+      <AdguardCard     v-if="showCard('adguard')     && settingsStore.data.adguardUrl"   />
+      <UnifiCard       v-if="showCard('unifi')       && settingsStore.data.unifiUrl"     />
+      <SpeedtestCard   v-if="showCard('speedtest')   && settingsStore.data.speedtestUrl" />
+      <TailscaleCard   v-if="showCard('tailscale')   && dashboardStore.live.tailscale"   />
+
+      <!-- Storage integrations -->
+      <TruenasCard     v-if="showCard('truenas')     && settingsStore.data.truenasUrl"   />
+
+      <!-- Media integrations -->
+      <PlexCard        v-if="showCard('plex')        && settingsStore.data.plexUrl"      />
+      <DownloadsCard   v-if="showCard('downloads')   && (settingsStore.data.qbitUrl || settingsStore.data.radarrUrl || settingsStore.data.sonarrUrl)" />
+      <JellyfinCard    v-if="showCard('jellyfin')    && settingsStore.data.jellyfinUrl"  />
+      <LidarrCard      v-if="showCard('lidarr')      && settingsStore.data.lidarrUrl"    />
+      <ReadarrCard     v-if="showCard('readarr')     && settingsStore.data.readarrUrl"   />
+      <BazarrCard      v-if="showCard('bazarr')      && settingsStore.data.bazarrUrl"    />
+
+      <!-- Home automation -->
+      <HassCard        v-if="showCard('hass')        && settingsStore.data.hassUrl"      />
+      <FrigateCard     v-if="showCard('frigate')     && settingsStore.data.frigateUrl"   />
+
+      <!-- Infrastructure integrations -->
+      <KumaCard        v-if="showCard('kuma')        && settingsStore.data.kumaUrl"      />
+      <ProxmoxCard     v-if="showCard('proxmox')     && settingsStore.data.proxmoxUrl"   />
+      <VaultwardenCard v-if="showCard('vaultwarden') && settingsStore.data.vaultwardenUrl" />
+      <VpnCard         v-if="showCard('vpn')         && dashboardStore.live.vpn"         />
+
+      <!-- Data-driven cards (no URL needed) -->
+      <EnergyCard      v-if="(dashboardStore.live.energy || []).length > 0"              />
+      <CameraFeedsCard v-if="(dashboardStore.live.cameraFeeds || []).length > 0"         />
+
+      <!-- Admin-only -->
+      <RecoveryCard    v-if="showCard('recovery')"                                        />
     </div>
 
     <!-- Glance-mode toggle — floats over the header area via slot or direct button -->

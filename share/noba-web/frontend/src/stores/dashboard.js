@@ -22,6 +22,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
     esphome: null, piKvm: null, gitea: null, gitlab: null,
     github: null, paperless: null, vaultwarden: null,
     unifiProtect: null,
+    tailscale: null, frigate: null, vpn: null,
+    energy: [], cameraFeeds: [], kuma: [],
   })
 
   let _es = null
