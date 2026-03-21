@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import Sortable from 'sortablejs'
 import { useDashboardStore } from '../stores/dashboard'
 import { useSettingsStore } from '../stores/settings'
@@ -221,6 +221,40 @@ onMounted(() => {
     }
   }
   setTimeout(tryInit, 300)
+
+  // Masonry layout — measure card heights and set grid-row-end: span N
+  function layoutMasonry() {
+    const grid = gridRef.value
+    if (!grid) return
+    const rowHeight = 10 // matches grid-auto-rows: 10px
+    const gap = 14 // ~0.875rem
+    for (const card of grid.children) {
+      // Reset so we can measure natural height
+      card.style.gridRowEnd = ''
+      const contentHeight = card.getBoundingClientRect().height
+      const span = Math.ceil((contentHeight + gap) / (rowHeight + gap)) + 1
+      card.style.gridRowEnd = `span ${span}`
+    }
+  }
+
+  // ResizeObserver triggers masonry recalc when any card changes size
+  const startMasonry = () => {
+    if (!gridRef.value) return
+    layoutMasonry()
+    const obs = new ResizeObserver(() => layoutMasonry())
+    obs.observe(gridRef.value)
+    for (const child of gridRef.value.children) {
+      obs.observe(child)
+    }
+    gridRef.value._masonryObs = obs
+  }
+
+  // Start masonry after cards have rendered
+  setTimeout(startMasonry, 600)
+})
+
+onUnmounted(() => {
+  if (gridRef.value?._masonryObs) gridRef.value._masonryObs.disconnect()
 })
 </script>
 
