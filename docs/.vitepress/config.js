@@ -34,11 +34,13 @@ export default defineConfig({
             { text: 'Infrastructure', link: '/guide/infrastructure' },
             { text: 'Automations', link: '/guide/automations' },
             { text: 'Security Posture', link: '/guide/security' },
+            { text: 'Remote Terminal', link: '/guide/terminal' },
           ],
         },
         {
           text: 'Advanced',
           items: [
+            { text: 'Self-Healing', link: '/guide/healing' },
             { text: 'Workflow Builder', link: '/guide/workflows' },
             { text: 'Approval Queue', link: '/guide/approvals' },
             { text: 'Maintenance Windows', link: '/guide/maintenance' },
@@ -68,6 +70,7 @@ export default defineConfig({
             { text: 'Agents', link: '/api/agents' },
             { text: 'Automations', link: '/api/automations' },
             { text: 'Monitoring', link: '/api/monitoring' },
+            { text: 'Healing', link: '/api/healing' },
           ],
         },
       ],

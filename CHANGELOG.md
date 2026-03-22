@@ -6,6 +6,13 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ### Added
 - **Self-healing pipeline** — Replaced inline alert self-healing with a layered pipeline architecture. Six modules in `server/healing/`: correlation (immediate-on-first with absorption window), planner (escalation chains with adaptive scoring that skips low-effectiveness actions), executor (async action execution with condition-based verification), governor (graduated trust with circuit breaker and promotion), ledger (outcome recording with suggestion engine), and agent runtime (policy distribution to remote agents). New DB tables: `heal_ledger`, `trust_state`, `heal_suggestions`. New API router with 6 endpoints (`/api/healing/ledger`, `/api/healing/effectiveness`, `/api/healing/suggestions`, `/api/healing/trust`, dismiss, promote). Hourly scheduler integration for suggestion generation and trust promotion evaluation. 4 new remediation action types: `run`, `webhook`, `automation`, `agent_command`. 58 new tests across 10 test files.
+- **Remote terminal** — Full interactive PTY terminal in the agent detail modal using xterm.js. Browser connects via WebSocket to the server, which bridges to the agent's WebSocket. Agent spawns a real PTY shell (`pty.openpty()` on Linux, `subprocess.Popen` on Windows) with live streaming output. Supports interactive commands (`vim`, `htop`, `ssh`, `sudo`), terminal resize, ANSI colors, and cursor positioning.
+- **Healing dashboard** — New `/#/healing` view with three tabs: Ledger (filterable outcome table with auto-refresh), Trust (card grid with admin-only promotion), and Suggestions (dismissable cards for operators). Per-agent healing tab in the agent detail modal.
+- **Agent auto-update** — Server compares agent-reported version against installed version on each heartbeat. Queues `update_agent` command automatically when a newer version is available.
+- **Windows agent support** — Full PowerShell integration for remote terminal, service management (`Get-Service`, `Start/Stop/Restart-Service`), log retrieval (`Get-EventLog`), service listing, DNS flush, and network diagnostics. Heal runtime uses Windows-appropriate commands.
+
+### Security
+- **Role-based terminal access** — PTY sessions enforce least privilege. Admin users get full shell access; operator users get a restricted shell (`su - noba-agent`/`nobody` on Linux, PowerShell Constrained Language Mode on Windows). Role is injected server-side and cannot be spoofed by the browser.
 
 ### Security
 - **Settings endpoint credential disclosure** — `GET /api/settings` returned all integration credentials (40+ passwords, tokens, API keys) in plaintext to any authenticated user including viewers. Now redacts secret fields for non-admin users using `is_secret_key()`.
