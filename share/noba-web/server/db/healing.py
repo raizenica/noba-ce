@@ -187,7 +187,7 @@ def upsert_trust_state(
 ) -> None:
     """Insert or update trust state; track promotions/demotions."""
     now = int(time.time())
-    _LEVELS = ["notify", "suggest", "execute"]
+    _LEVELS = ["notify", "approve", "execute"]
 
     with lock:
         existing = conn.execute(
