@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 import threading
 
+from .connectivity_monitor import ConnectivityMonitor
 from .correlation import HealCorrelator
+from .dependency_graph import DependencyGraph
 from .executor import HealExecutor
 from .governor import check_circuit_breaker, effective_trust
 from .models import HealEvent, HealOutcome, HealPlan
@@ -37,17 +39,67 @@ class HealPipeline:
         self._correlator = HealCorrelator()
         self._planner = HealPlanner()
         self._executor = HealExecutor(settle_times=settle_times)
+        self._dep_graph: DependencyGraph | None = None
+        self._connectivity = ConnectivityMonitor()
+        self._active_alerts: set[str] = set()  # currently-failing targets
+        self._active_alerts_lock = threading.Lock()
         self.on_outcome = None  # optional callback for testing
 
     def update_rule_config(self, rule_id: str, config: dict) -> None:
         """Update or add a rule's config (thread-safe)."""
         self._rules_cfg[rule_id] = config
 
+    def load_dependency_graph(self, config: list[dict]) -> None:
+        """Load dependency graph from YAML config."""
+        self._dep_graph = DependencyGraph.from_config(config)
+        logger.info("Dependency graph loaded: %d nodes", len(self._dep_graph.all_nodes()))
+
     def handle_heal_event(self, event: HealEvent) -> None:
         """Non-blocking pipeline entry point. Safe to call from any thread."""
         request = self._correlator.correlate(event)
         if request is None:
             return  # absorbed
+
+        # Track this target as actively alerting
+        with self._active_alerts_lock:
+            self._active_alerts.add(event.target)
+
+        # Site isolation check
+        if self._dep_graph:
+            node = self._dep_graph.get_node(event.target)
+            if node and node.site and self._connectivity.should_suppress_healing(node.site):
+                logger.info(
+                    "Healing suppressed for %s — site %s is connectivity-suspect",
+                    event.target, node.site,
+                )
+                return
+
+            # Root cause check: if any ancestor of this target is also actively
+            # failing, this target's failure is likely a downstream symptom — suppress
+            if node and node.depends_on:
+                with self._active_alerts_lock:
+                    current_alerts = set(self._active_alerts)
+
+                # Check if any ancestor is failing
+                ancestors = self._dep_graph.get_ancestors(event.target)
+                failing_ancestors = [a for a in ancestors if a.target in current_alerts]
+
+                if failing_ancestors:
+                    # Check if the failing ancestor is external (unhealable)
+                    root_ancestor = failing_ancestors[-1]  # highest
+                    if root_ancestor.node_type == "external":
+                        logger.info(
+                            "Healing suppressed for %s — root cause %s is external (unhealable)",
+                            event.target, root_ancestor.target,
+                        )
+                        return
+
+                    # Root cause is a healable service/infra — suppress downstream
+                    logger.info(
+                        "Healing suppressed for %s — upstream dependency %s is also failing",
+                        event.target, failing_ancestors[0].target,
+                    )
+                    return
 
         rule_cfg = self._rules_cfg.get(event.rule_id, {})
         chain = rule_cfg.get("escalation_chain", [
@@ -123,6 +175,8 @@ class HealPipeline:
                 self.on_outcome(outcome)
 
             if outcome.verified:
+                with self._active_alerts_lock:
+                    self._active_alerts.discard(plan.request.primary_target)
                 self._planner.clear_escalation(plan.request.correlation_key)
                 return
 
