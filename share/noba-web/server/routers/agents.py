@@ -189,6 +189,35 @@ async def api_agent_report(request: Request):
         except Exception as exc:
             logger.warning("Failed to ingest heal reports from %s: %s", hostname, exc)
 
+    # Auto-update: compare agent version against server's copy
+    agent_version = body.get("agent_version", "")
+    if agent_version and pending is not None:
+        try:
+            server_agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
+            if server_agent_path.exists():
+                # Extract VERSION from first 50 lines
+                with open(server_agent_path) as f:
+                    for line in f:
+                        if line.startswith("VERSION"):
+                            server_version = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if server_version != agent_version:
+                                # Queue update if not already pending
+                                if not any(c.get("type") == "update_agent" for c in pending):
+                                    pending.append({
+                                        "id": f"auto-update-{int(time.time())}",
+                                        "type": "update_agent",
+                                        "params": {},
+                                        "queued_by": "auto-update",
+                                        "queued_at": int(time.time()),
+                                    })
+                                    logger.info(
+                                        "Auto-update queued for %s: %s -> %s",
+                                        hostname, agent_version, server_version,
+                                    )
+                            break
+        except Exception:
+            pass
+
     return {"status": "ok", "commands": pending, "heal_policy": heal_policy}
 
 

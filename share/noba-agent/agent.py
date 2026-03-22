@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 
 # ── Configuration ────────────────────────────────────────────────────────────
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 DEFAULT_INTERVAL = 30
 DEFAULT_CONFIG = (
     os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "noba-agent", "agent.yaml")
