@@ -4,6 +4,19 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **Settings endpoint credential disclosure** — `GET /api/settings` returned all integration credentials (40+ passwords, tokens, API keys) in plaintext to any authenticated user including viewers. Now redacts secret fields for non-admin users using `is_secret_key()`.
+- **Agent command auth escalation** — `POST /api/agents/bulk-command` and `POST /api/agents/{hostname}/command` allowed viewer-role users to dispatch agent commands. Raised to `_require_operator`.
+- **OIDC token-in-fragment** — Replaced `/#token=...` redirect with one-time code exchange pattern. Backend issues a 60-second single-use code; frontend exchanges it via `POST /api/auth/oidc/exchange`. Prevents token leakage through browser history and Referer headers.
+- **OIDC password marker** — Changed `"oidc:external"` to `"!oidc:disabled"` to ensure OIDC-only accounts can never match any password hash format.
+- **Proxmox path traversal** — Added regex validation (`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`) on `{node}` path parameter across all 3 Proxmox endpoints. Added `vtype` allowlist validation (`qemu`/`lxc`).
+- **qBittorrent cookie leakage** — Login and data requests now use the same dedicated `httpx.Client` context manager instead of leaking cookies to the shared client.
+- **Auth level tightening** — Raised 10 under-protected endpoints: agent stream logs, log viewer, action log (→ operator); automations export, IaC exports ×3 (→ admin); dashboard CRUD ×3 (→ operator).
+- **HTTP method corrections** — Changed `GET /api/notifications/test` and `GET /api/agents/{hostname}/network-stats` to POST (both trigger side effects).
+
+### Changed
+- **Claude Code skills updated for Vue 3** — Deploy and test skills now reference vitest + Vite build instead of deleted Alpine.js files. New `/build-frontend` skill for standalone frontend builds. Security-reviewer agent updated for Vue 3 patterns (v-html, Pinia stores, useApi composable). New api-auditor agent for auth-level and HTTP method consistency audits.
+
 ### Changed
 - **Predictive intelligence + workflow orchestration (v3 Phase 5)** — Multi-metric capacity prediction with seasonal decomposition and 68%/95% confidence intervals. Per-service weighted health scoring (uptime 40%, latency 25%, error rate 20%, headroom 15%) backed by endpoint check history. Visual workflow builder with conditional branching, approval gates, parallel execution, and delay nodes. 4 pre-built maintenance playbook templates (agent update, DNS restart, backup verify, disk cleanup). Vue UI: prediction dashboard card with confidence band chart, infrastructure prediction panel, workflow builder with SVG canvas, playbook library.
 - **Advanced automation engine (v3 Phase 4)** — Added 8 remediation action types (restart_container, restart_service, flush_dns, clear_cache, trigger_backup, failover_dns, scale_container, run_playbook) with validation and health checks. Per-rule autonomy levels (execute/approve/notify/disabled). DB-backed approval queue with auto-approve timeout. Named maintenance windows with alert suppression and autonomy override. Enhanced action audit trail. Vue UI: approval queue with header badge, maintenance window CRUD with active indicator, autonomy selector in alert rules, action audit table.

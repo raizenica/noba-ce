@@ -44,13 +44,22 @@ function onKeyDown(e) {
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
 
-  // Handle OIDC callback token from URL hash
+  // Handle OIDC callback: exchange one-time code for auth token
   const hash = window.location.hash
-  if (hash && hash.includes('token=')) {
-    const params = new URLSearchParams(hash.substring(hash.indexOf('?')))
-    const token = params.get('token')
-    if (token) {
-      auth.setToken(token)
+  if (hash && hash.includes('oidc_code=')) {
+    const codeMatch = hash.match(/oidc_code=([^&]+)/)
+    if (codeMatch) {
+      try {
+        const res = await fetch('/api/auth/oidc/exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: codeMatch[1] }),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          auth.setToken(data.token)
+        }
+      } catch { /* OIDC exchange failed */ }
       window.history.replaceState({}, '', '/#/dashboard')
     }
   }
