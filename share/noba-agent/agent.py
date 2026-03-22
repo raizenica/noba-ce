@@ -2508,6 +2508,13 @@ def _cmd_verify_backup(params: dict, _ctx: dict) -> dict:
         return {"status": "error", "error": f"Unknown verification_type: {vtype}"}
 
 
+def _cmd_refresh_capabilities(_params: dict, _ctx: dict) -> dict:
+    """Force a capability re-probe on the next report cycle."""
+    global _last_capability_probe
+    _last_capability_probe = 0
+    return {"status": "ok", "message": "Capabilities will be re-probed on next report"}
+
+
 def execute_commands(commands: list, ctx: dict) -> list:
     """Execute a list of commands and return results."""
     results = []
@@ -2567,6 +2574,8 @@ def execute_commands(commands: list, ctx: dict) -> list:
         "security_scan": _cmd_security_scan,
         # Backup verification
         "verify_backup": _cmd_verify_backup,
+        # Capability refresh
+        "refresh_capabilities": _cmd_refresh_capabilities,
     }
     for cmd in commands[:20]:  # Max 20 commands per cycle
         cmd_type = cmd.get("type", "")
@@ -2766,6 +2775,135 @@ class HealRuntime:
             reports = self._reports[:]
             self._reports.clear()
             return reports
+
+
+# ── Capability Probing ────────────────────────────────────────────────────────
+
+_last_capability_probe: float = 0
+_CAPABILITY_PROBE_INTERVAL = 21600  # 6 hours
+
+
+def probe_capabilities() -> dict:
+    """Probe the host for OS info and available tools.
+
+    Returns a dict matching the CapabilityManifest shape:
+      os, distro, distro_version, kernel, init_system,
+      is_wsl, is_container, capabilities (dict of tool -> {available, version?})
+    """
+    import shutil
+
+    os_name = platform.system().lower()
+
+    # ── Distro / version ──────────────────────────────────────────────────
+    distro = os_name
+    distro_version = platform.version()
+    if os_name == "linux":
+        try:
+            with open("/etc/os-release") as f:
+                osr = {}
+                for line in f:
+                    if "=" in line:
+                        k, _, v = line.strip().partition("=")
+                        osr[k] = v.strip('"')
+                distro = osr.get("ID", "linux")
+                distro_version = osr.get("VERSION_ID", distro_version)
+        except OSError:
+            pass
+    elif os_name == "darwin":
+        distro = "macos"
+    elif os_name == "windows":
+        distro = "windows"
+
+    kernel = platform.release()
+
+    # ── Init system ───────────────────────────────────────────────────────
+    init_system = "unknown"
+    if os_name == "linux":
+        if os.path.isdir("/run/systemd/system"):
+            init_system = "systemd"
+        elif os.path.isfile("/sbin/openrc"):
+            init_system = "openrc"
+    elif os_name == "darwin":
+        init_system = "launchd"
+    elif os_name == "windows":
+        init_system = "windows_scm"
+
+    # ── WSL detection ─────────────────────────────────────────────────────
+    is_wsl = False
+    if os_name == "linux":
+        try:
+            with open("/proc/version") as f:
+                pv = f.read().lower()
+                is_wsl = "microsoft" in pv or "wsl" in pv
+        except OSError:
+            pass
+
+    # ── Container detection ───────────────────────────────────────────────
+    is_container = False
+    if os_name == "linux":
+        if os.path.exists("/.dockerenv"):
+            is_container = True
+        else:
+            try:
+                with open("/proc/1/cgroup") as f:
+                    if "docker" in f.read():
+                        is_container = True
+            except OSError:
+                pass
+
+    # ── Tool probing ──────────────────────────────────────────────────────
+    capabilities: dict[str, dict] = {}
+
+    if os_name == "windows":
+        win_tools = [
+            "powershell", "wevtutil", "sfc", "chkdsk", "sc",
+            "docker", "podman", "tailscale",
+        ]
+        for tool in win_tools:
+            try:
+                r = subprocess.run(
+                    ["where", tool],
+                    capture_output=True, timeout=5,
+                )
+                capabilities[tool] = {"available": r.returncode == 0}
+            except Exception:
+                capabilities[tool] = {"available": False}
+    else:
+        unix_tools = [
+            "docker", "podman", "systemctl", "rc-service",
+            "apt", "dnf", "apk", "pacman",
+            "certbot", "zfs", "btrfs", "tailscale",
+            "iptables", "nftables", "logrotate", "fstrim",
+            "ip", "ifconfig", "kill", "shutdown",
+            "journalctl", "mdadm",
+        ]
+        for tool in unix_tools:
+            capabilities[tool] = {"available": shutil.which(tool) is not None}
+
+    # Get versions for key tools
+    _version_cmds = {
+        "docker": ["docker", "--version"],
+        "tailscale": ["tailscale", "version"],
+    }
+    for tool, cmd in _version_cmds.items():
+        if capabilities.get(tool, {}).get("available"):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if r.returncode == 0 and r.stdout.strip():
+                    capabilities[tool]["version"] = r.stdout.strip().split("\n")[0]
+            except Exception:
+                pass
+
+    return {
+        "os": os_name,
+        "distro": distro,
+        "distro_version": distro_version,
+        "kernel": kernel,
+        "init_system": init_system,
+        "is_wsl": is_wsl,
+        "is_container": is_container,
+        "capabilities": capabilities,
+    }
 
 
 # ── Reporting ────────────────────────────────────────────────────────────────
@@ -3208,6 +3346,16 @@ def main():
             heal_reports = heal_runtime.drain_reports()
             if heal_reports:
                 metrics["_heal_reports"] = heal_reports
+
+            # Attach capability manifest periodically (every 6h or on first report)
+            global _last_capability_probe
+            now_ts = time.time()
+            if now_ts - _last_capability_probe > _CAPABILITY_PROBE_INTERVAL:
+                try:
+                    metrics["_capabilities"] = probe_capabilities()
+                    _last_capability_probe = now_ts
+                except Exception as e:
+                    print(f"[agent] Capability probe failed: {e}", file=sys.stderr)
 
             if args.dry_run:
                 print(json.dumps(metrics, indent=2))
