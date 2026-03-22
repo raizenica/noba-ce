@@ -343,11 +343,13 @@ async def agent_terminal_ws(hostname: str, ws: WebSocket):
         """Forward agent results to browser."""
         try:
             while True:
-                msg = await asyncio.get_event_loop().run_in_executor(None, q.get)
+                msg = await q.get()
                 try:
                     await ws.send_json(msg)
                 except Exception:
                     break
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 
