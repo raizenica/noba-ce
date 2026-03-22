@@ -196,6 +196,20 @@ class Scheduler:
         # Every tick (60s), auto-approve expired pending approvals and execute them
         self._process_auto_approvals()
 
+        # Hourly: generate heal suggestions and evaluate trust promotions
+        if now.minute == 0:  # once per hour
+            try:
+                from .healing.ledger import generate_suggestions
+                from .healing.governor import evaluate_promotions
+                generate_suggestions(db)
+                promotion_suggestions = evaluate_promotions(db)
+                for s in promotion_suggestions:
+                    db.insert_heal_suggestion(**s)
+                if promotion_suggestions:
+                    logger.info("Trust governor: %d promotion suggestion(s)", len(promotion_suggestions))
+            except Exception as exc:
+                logger.error("Heal suggestion generation failed: %s", exc)
+
     def _process_auto_approvals(self) -> None:
         """Auto-approve any pending approvals past their auto_approve_at time,
         then execute all auto_approved items that have no result yet."""

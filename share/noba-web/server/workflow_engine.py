@@ -233,7 +233,7 @@ def _build_auto_condition_process(config: dict) -> subprocess.Popen | None:
                                 stderr=subprocess.STDOUT, start_new_session=True)
     # Late imports to avoid circular dependency: collector -> alerts -> workflow_engine
     from .collector import bg_collector
-    from .alerts import _safe_eval
+    from .healing.condition_eval import safe_eval as _safe_eval
     stats = bg_collector.get() or {}
     flat: dict = {}
     for k, v in stats.items():
@@ -499,7 +499,7 @@ def _execute_condition_node(
 ) -> None:
     """Evaluate an expression and branch to true_next or false_next."""
     from .collector import bg_collector
-    from .alerts import _safe_eval
+    from .healing.condition_eval import safe_eval as _safe_eval
 
     expression = node.get("expression", "")
     stats = bg_collector.get() or {}

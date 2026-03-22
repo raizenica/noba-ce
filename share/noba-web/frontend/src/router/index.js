@@ -10,6 +10,7 @@ const routes = [
   { path: '/infrastructure', name: 'infrastructure', component: () => import('../views/InfrastructureView.vue') },
   { path: '/automations', name: 'automations', component: () => import('../views/AutomationsView.vue') },
   { path: '/logs', name: 'logs', component: () => import('../views/LogsView.vue') },
+  { path: '/healing', name: 'healing', component: () => import('../views/HealingView.vue') },
   { path: '/security', name: 'security', component: () => import('../views/SecurityView.vue') },
   { path: '/settings/:tab?', name: 'settings', component: () => import('../views/SettingsView.vue') },
 ]

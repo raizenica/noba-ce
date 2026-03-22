@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import operator
-import re
 import subprocess
 import threading
 import time
@@ -12,6 +10,10 @@ import urllib.parse
 import urllib.request
 
 from .config import NOTIFICATION_COOLDOWN
+from .healing.condition_eval import (  # noqa: F401
+    safe_eval as _safe_eval,
+    safe_eval_single as _safe_eval_single,
+)
 
 logger = logging.getLogger("noba")
 
@@ -83,37 +85,6 @@ class AlertState:
 
 _alert_state = AlertState()
 
-
-# ── Safe condition evaluator ──────────────────────────────────────────────────
-_OPS = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operator.le,
-        "==": operator.eq, "!=": operator.ne}
-
-
-def _safe_eval_single(condition_str: str, flat: dict) -> bool:
-    """Evaluate a single metric comparison (e.g. 'cpu_percent > 90')."""
-    s = condition_str.replace("flat['", "").replace('flat["', "").replace("']", "").replace('"]', "")
-    m = re.match(r"^\s*([a-zA-Z0-9_\[\]\.]+)\s*(>|<|>=|<=|==|!=)\s*([0-9\.-]+)\s*$", s)
-    if not m:
-        logger.warning("Malformed alert condition (parse failed): %s", condition_str)
-        return False
-    metric, op, val = m.groups()
-    if metric not in flat:
-        return False
-    try:
-        return _OPS[op](float(flat[metric]), float(val))
-    except (ValueError, TypeError):
-        logger.warning("Malformed alert condition (bad value): %s=%r", metric, flat[metric])
-        return False
-
-
-def _safe_eval(condition_str: str, flat: dict) -> bool:
-    """Evaluate a condition string, supporting AND/OR composite conditions."""
-    # Support AND/OR composite conditions
-    if " AND " in condition_str:
-        return all(_safe_eval_single(part.strip(), flat) for part in condition_str.split(" AND "))
-    if " OR " in condition_str:
-        return any(_safe_eval_single(part.strip(), flat) for part in condition_str.split(" OR "))
-    return _safe_eval_single(condition_str, flat)
 
 
 # ── Self-heal: agent_command helper ───────────────────────────────────────────
@@ -544,61 +515,31 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
             if not action_cfg or not isinstance(action_cfg, dict):
                 continue
 
-            # notify: send notification only, no action
-            if autonomy == "notify":
-                continue
+            # ── Healing pipeline integration ──────────────────────────
+            try:
+                from .healing import get_pipeline
+                from .healing.models import HealEvent
 
-            # approve: queue in approval DB, no immediate execution
-            if autonomy == "approve":
-                _db.insert_approval(
-                    automation_id=rule_id,
-                    trigger=f"alert:{rule_id}",
-                    trigger_source="alert",
-                    action_type=action_cfg.get("type", ""),
-                    action_params={k: v for k, v in action_cfg.items() if k != "type"},
-                    target=action_cfg.get("target"),
-                    requested_by=f"alert:{rule_id}",
+                heal_event = HealEvent(
+                    source="alert",
+                    rule_id=rule_id,
+                    condition=condition,
+                    target=action_cfg.get("target", ""),
+                    severity=severity,
+                    timestamp=now,
+                    metrics=dict(flat),
                 )
-                logger.info("Autonomy=approve: queued action for rule %s", rule_id)
-                continue
+                # Build rules config from alert rule
+                chain = rule.get("escalation_chain", [])
+                if not chain and action_cfg:
+                    # Legacy: single action, wrap as chain
+                    chain = [{"action": action_cfg.get("type", ""), "params": {k: v for k, v in action_cfg.items() if k != "type"}}]
 
-            # execute (default): proceed with immediate self-healing
-            max_retries         = int(rule.get("max_retries", 3))
-            circuit_break_after = int(rule.get("circuit_break_after", 5))
-
-            _alert_state.append_trigger(rule_id, now)
-            state = _alert_state.heal_state(rule_id)
-
-            if _alert_state.trigger_count(rule_id) >= circuit_break_after:
-                if not state["circuit_open"]:
-                    _alert_state.update_heal(rule_id, circuit_open=True, circuit_open_at=now)
-                    logger.warning("Heal circuit OPEN for rule %s", rule_id)
-                    dispatch_notifications(
-                        "danger",
-                        f'[Circuit Open] Rule "{rule_id}" triggered {_alert_state.trigger_count(rule_id)}× in 1 hour. '
-                        "Auto-healing suspended.",
-                        notif_cfg, channels,
-                    )
-                continue
-
-            if state["circuit_open"] and now - state["circuit_open_at"] >= 3600:
-                _alert_state.update_heal(rule_id, circuit_open=False, retries=0, trigger_times=[])
-                logger.info("Heal circuit CLOSED for rule %s", rule_id)
-
-            if state["circuit_open"]:
-                continue
-
-            if state["retries"] >= max_retries:
-                logger.warning("Max retries reached for rule %s", rule_id)
-                continue
-
-            retries = _alert_state.increment_retries(rule_id)
-            success = _execute_heal(action_cfg, rule_id, read_settings_fn)
-            if success:
-                logger.info("Heal succeeded for rule %s (attempt %d)", rule_id, retries)
-                _alert_state.reset_retries(rule_id)
-            else:
-                logger.warning("Heal attempt %d/%d failed for rule %s", retries, max_retries, rule_id)
+                pipeline = get_pipeline()  # module-level singleton
+                pipeline.update_rule_config(rule_id, {"escalation_chain": chain})
+                pipeline.handle_heal_event(heal_event)
+            except Exception as exc:
+                logger.error("Healing pipeline error for rule %s: %s", rule_id, exc)
 
         except Exception as e:
             logger.error("Error evaluating rule %s: %s", rule.get("id"), e)

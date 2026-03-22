@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import AppModal from '../ui/AppModal.vue'
 import ChartWrapper from '../ui/ChartWrapper.vue'
+import RemoteTerminal from './RemoteTerminal.vue'
 import { useApi } from '../../composables/useApi'
 
 const props = defineProps({
@@ -66,6 +67,20 @@ async function fetchHistory(metric) {
   finally { historyLoading.value = false }
 }
 
+// ── Healing outcomes ─────────────────────────────────────────────────────────
+const healOutcomes = ref([])
+const healLoading  = ref(false)
+
+async function fetchHealOutcomes() {
+  if (!props.hostname) return
+  healLoading.value = true
+  try {
+    const data = await get(`/api/healing/ledger?target=${encodeURIComponent(props.hostname)}&limit=20`)
+    healOutcomes.value = Array.isArray(data) ? data : []
+  } catch { /* silent */ }
+  finally { healLoading.value = false }
+}
+
 // ── Command results ───────────────────────────────────────────────────────────
 const agentDetail   = ref(null)
 const detailLoading = ref(false)
@@ -122,6 +137,7 @@ watch(activeTab, (tab) => {
   if (tab === 'history') {
     nextTick(() => fetchHistory(historyMetric.value))
   }
+  if (tab === 'healing') fetchHealOutcomes()
 })
 </script>
 
@@ -151,7 +167,7 @@ watch(activeTab, (tab) => {
       <!-- Tabs -->
       <div style="display:flex;gap:.3rem;margin-bottom:.8rem">
         <button
-          v-for="tab in ['overview', 'processes', 'results', 'history']"
+          v-for="tab in ['overview', 'processes', 'results', 'history', 'healing', 'terminal']"
           :key="tab"
           class="btn btn-xs"
           :class="activeTab === tab ? 'btn-primary' : ''"
@@ -287,6 +303,40 @@ watch(activeTab, (tab) => {
           <ChartWrapper :config="historyChartConfig" />
         </div>
         <div v-else-if="!historyLoading" class="empty-msg">No history data for last 24h.</div>
+      </div>
+
+      <!-- healing tab -->
+      <div v-if="activeTab === 'healing'">
+        <div v-if="healLoading" class="empty-msg"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+        <div v-else-if="healOutcomes.length === 0" class="empty-msg">No healing activity for this agent.</div>
+        <div v-else style="display:flex;flex-direction:column;gap:.4rem;max-height:360px;overflow-y:auto">
+          <div
+            v-for="o in healOutcomes"
+            :key="o.id"
+            style="border:1px solid var(--border);border-radius:4px;padding:.5rem .6rem;background:var(--surface-2)"
+          >
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+              <div style="display:flex;gap:.3rem;align-items:center">
+                <span class="badge ba" style="font-size:.55rem">{{ o.action_type }}</span>
+                <span class="badge" :class="o.verified === 1 ? 'bs' : o.action_success === 0 ? 'bd' : 'bw'" style="font-size:.55rem">
+                  {{ o.verified === 1 ? 'verified' : o.action_success === 1 ? 'unverified' : o.action_success === 0 ? 'failed' : 'notify' }}
+                </span>
+                <span v-if="o.trust_level" style="font-size:.6rem;color:var(--text-muted)">{{ o.trust_level }}</span>
+              </div>
+              <span style="font-size:.6rem;color:var(--text-muted)">{{ o.created_at ? new Date(o.created_at * 1000).toLocaleString() : '--' }}</span>
+            </div>
+            <div style="font-size:.7rem;color:var(--text-muted)">
+              <span style="margin-right:.5rem"><b>Rule:</b> {{ o.rule_id || '--' }}</span>
+              <span style="margin-right:.5rem"><b>Step:</b> {{ o.escalation_step||0 }}</span>
+              <span><b>Duration:</b> {{ (o.duration_s||0).toFixed(1) }}s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Terminal tab -->
+      <div v-if="activeTab === 'terminal'">
+        <RemoteTerminal :hostname="hostname" :visible="activeTab === 'terminal'" />
       </div>
     </div>
 

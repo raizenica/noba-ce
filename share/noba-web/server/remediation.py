@@ -63,6 +63,30 @@ ACTION_TYPES = {
         "description": "Execute a maintenance playbook (automation)",
         "timeout_s": 600,
     },
+    "run": {
+        "risk": "medium",
+        "params": {"command": str},
+        "description": "Execute a shell command",
+        "timeout_s": 60,
+    },
+    "webhook": {
+        "risk": "low",
+        "params": {"url": str},
+        "description": "Fire an HTTP webhook",
+        "timeout_s": 10,
+    },
+    "automation": {
+        "risk": "medium",
+        "params": {"automation_id": str},
+        "description": "Trigger a stored automation by ID",
+        "timeout_s": 300,
+    },
+    "agent_command": {
+        "risk": "medium",
+        "params": {"hostname": str, "command": str},
+        "description": "Send command to a remote agent",
+        "timeout_s": 30,
+    },
 }
 
 
@@ -259,6 +283,81 @@ def _handle_run_playbook(params):
     return {"success": False, "output": "Playbook must be a workflow automation"}
 
 
+def _handle_run(params):
+    import shlex
+    command = params.get("command", "")
+    if not command:
+        return {"success": False, "output": "No command specified"}
+    r = subprocess.run(shlex.split(command), timeout=60, capture_output=True, text=True)
+    return {"success": r.returncode == 0, "output": (r.stdout + r.stderr)[:500]}
+
+
+def _handle_webhook(params):
+    import urllib.request
+    url = params.get("url", "")
+    method = params.get("method", "POST").upper()
+    if not url or not url.startswith(("http://", "https://")):
+        return {"success": False, "output": "Invalid URL"}
+    req = urllib.request.Request(url, method=method)
+    for k, v in (params.get("headers") or {}).items():
+        req.add_header(str(k).replace("\n", ""), str(v).replace("\n", ""))
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ok = 200 <= r.getcode() < 300
+            return {"success": ok, "output": f"HTTP {r.getcode()}"}
+    except Exception as e:
+        return {"success": False, "output": str(e)}
+
+
+def _handle_automation(params):
+    auto_id = params.get("automation_id", "")
+    if not auto_id:
+        return {"success": False, "output": "No automation_id"}
+    from .db import db as _db
+    auto = _db.get_automation(auto_id)
+    if not auto:
+        return {"success": False, "output": f"Automation not found: {auto_id}"}
+    from .workflow_engine import _AUTO_BUILDERS, _run_workflow
+    from .runner import job_runner
+    if auto["type"] == "workflow":
+        steps = auto["config"].get("steps", [])
+        if steps:
+            _run_workflow(auto["id"], steps, "remediation")
+            return {"success": True, "output": f"Workflow started: {auto['name']}"}
+        return {"success": False, "output": "Workflow has no steps"}
+    builder = _AUTO_BUILDERS.get(auto["type"])
+    if not builder:
+        return {"success": False, "output": f"Unknown automation type: {auto['type']}"}
+    config = auto["config"]
+    try:
+        job_runner.submit(
+            lambda _rid: builder(config),
+            automation_id=auto["id"],
+            trigger="remediation",
+            triggered_by="remediation",
+        )
+        return {"success": True, "output": f"Automation triggered: {auto['name']}"}
+    except RuntimeError as exc:
+        return {"success": False, "output": str(exc)}
+
+
+def _handle_agent_command(params):
+    from .agent_store import queue_agent_command_and_wait
+    hostname = params.get("hostname", "")
+    cmd_type = params.get("command", "")
+    cmd_params = params.get("params", {})
+    timeout = int(params.get("timeout", 30))
+    if not hostname or not cmd_type:
+        return {"success": False, "output": "Missing hostname or command"}
+    result = queue_agent_command_and_wait(
+        hostname, cmd_type, cmd_params, timeout=timeout, queued_by="remediation",
+    )
+    if result is None:
+        return {"success": False, "output": "Agent command timed out"}
+    status = result.get("status", "error")
+    return {"success": status != "error", "output": f"Agent command: {status}"}
+
+
 def _health_check(action_type, params):
     """Post-action health check. Returns True if healthy."""
     import time as _time
@@ -292,4 +391,8 @@ _HANDLERS = {
     "failover_dns": _handle_failover_dns,
     "scale_container": _handle_scale_container,
     "run_playbook": _handle_run_playbook,
+    "run": _handle_run,
+    "webhook": _handle_webhook,
+    "automation": _handle_automation,
+    "agent_command": _handle_agent_command,
 }

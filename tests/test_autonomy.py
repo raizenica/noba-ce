@@ -31,27 +31,19 @@ def _flat_stats():
     return {"cpu_percent": 95.0}
 
 
-def _run(rule, active_windows=None, *, mock_execute_heal=None, mock_dispatch=None,
+def _run(rule, active_windows=None, *, mock_dispatch=None,
          mock_insert_approval=None):
     """
     Run evaluate_alert_rules with the given rule.
 
-    Patches:
-    - server.db.db methods (insert_alert_history, insert_incident,
-      get_active_maintenance_windows, insert_approval)
-    - dispatch_notifications
-    - _execute_heal
-    - _alert_state (cooldown always passes, circuit not open)
-
-    Returns (mock_dispatch, mock_execute_heal, mock_insert_approval)
+    Patches the healing pipeline's get_pipeline to capture handle_heal_event
+    calls. Returns (mock_dispatch, mock_pipeline, mock_insert_approval).
     """
     from server.alerts import evaluate_alert_rules
     import server.db
 
     if active_windows is None:
         active_windows = []
-    if mock_execute_heal is None:
-        mock_execute_heal = MagicMock(return_value=True)
     if mock_dispatch is None:
         mock_dispatch = MagicMock()
     if mock_insert_approval is None:
@@ -59,18 +51,19 @@ def _run(rule, active_windows=None, *, mock_execute_heal=None, mock_dispatch=Non
 
     settings = _make_settings(rule)
 
-    # Patch methods directly on the live db singleton
+    mock_pipeline = MagicMock()
+    mock_get_pipeline = MagicMock(return_value=mock_pipeline)
+
     real_db = server.db.db
     with patch.object(real_db, "insert_alert_history", MagicMock()), \
          patch.object(real_db, "insert_incident", MagicMock()), \
          patch.object(real_db, "get_active_maintenance_windows",
                       MagicMock(return_value=active_windows)), \
          patch.object(real_db, "insert_approval", mock_insert_approval), \
-         patch("server.alerts._execute_heal", mock_execute_heal), \
          patch("server.alerts.dispatch_notifications", mock_dispatch), \
+         patch("server.healing.get_pipeline", mock_get_pipeline), \
          patch("server.alerts._alert_state") as mock_state:
 
-        # Configure alert state so cooldown always passes and circuit is not open
         mock_state.cooldown_ok.return_value = True
         mock_state.heal_state.return_value = {
             "retries": 0, "trigger_times": [], "circuit_open": False, "circuit_open_at": 0,
@@ -80,41 +73,40 @@ def _run(rule, active_windows=None, *, mock_execute_heal=None, mock_dispatch=Non
 
         evaluate_alert_rules(_flat_stats(), lambda: settings)
 
-    return mock_dispatch, mock_execute_heal, mock_insert_approval
+    return mock_dispatch, mock_pipeline, mock_insert_approval
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 class TestAutonomyExecute:
-    def test_action_runs_immediately(self):
-        """autonomy=execute → _execute_heal is called."""
+    def test_pipeline_receives_event(self):
+        """autonomy=execute → healing pipeline receives the event."""
         rule = _make_rule(autonomy="execute")
-        mock_dispatch, mock_execute_heal, _ = _run(rule)
-        mock_execute_heal.assert_called_once()
+        _, mock_pipeline, _ = _run(rule)
+        mock_pipeline.handle_heal_event.assert_called_once()
 
     def test_notification_dispatched(self):
         """autonomy=execute → notification is dispatched (unmodified message)."""
         rule = _make_rule(autonomy="execute")
         mock_dispatch, _, _ = _run(rule)
         mock_dispatch.assert_called()
-        # Message should NOT have an approval prefix
         args = mock_dispatch.call_args[0]
         assert "[APPROVAL NEEDED]" not in args[1]
 
     def test_default_behaves_as_execute(self):
-        """No autonomy field → defaults to execute → _execute_heal is called."""
+        """No autonomy field → defaults to execute → pipeline receives event."""
         rule = _make_rule()  # no autonomy key
         assert "autonomy" not in rule
-        _, mock_execute_heal, _ = _run(rule)
-        mock_execute_heal.assert_called_once()
+        _, mock_pipeline, _ = _run(rule)
+        mock_pipeline.handle_heal_event.assert_called_once()
 
 
 class TestAutonomyNotify:
-    def test_no_action_called(self):
-        """autonomy=notify → _execute_heal is NOT called."""
+    def test_pipeline_receives_event(self):
+        """autonomy=notify → pipeline still receives event (pipeline decides trust)."""
         rule = _make_rule(autonomy="notify")
-        _, mock_execute_heal, _ = _run(rule)
-        mock_execute_heal.assert_not_called()
+        _, mock_pipeline, _ = _run(rule)
+        mock_pipeline.handle_heal_event.assert_called_once()
 
     def test_notification_dispatched(self):
         """autonomy=notify → dispatch_notifications IS called."""
@@ -122,33 +114,19 @@ class TestAutonomyNotify:
         mock_dispatch, _, _ = _run(rule)
         mock_dispatch.assert_called()
 
-    def test_no_approval_queued(self):
-        """autonomy=notify → insert_approval is NOT called."""
+    def test_no_approval_queued_directly(self):
+        """autonomy=notify → insert_approval is NOT called from alerts.py."""
         rule = _make_rule(autonomy="notify")
         _, _, mock_insert_approval = _run(rule)
         mock_insert_approval.assert_not_called()
 
 
 class TestAutonomyApprove:
-    def test_no_action_called(self):
-        """autonomy=approve → _execute_heal is NOT called."""
+    def test_pipeline_receives_event(self):
+        """autonomy=approve → pipeline receives event (handles approval flow)."""
         rule = _make_rule(autonomy="approve")
-        _, mock_execute_heal, _ = _run(rule)
-        mock_execute_heal.assert_not_called()
-
-    def test_approval_queued(self):
-        """autonomy=approve → db.insert_approval is called."""
-        rule = _make_rule(autonomy="approve")
-        _, _, mock_insert_approval = _run(rule)
-        mock_insert_approval.assert_called_once()
-
-    def test_approval_queued_with_correct_type(self):
-        """autonomy=approve → insert_approval receives action_type from rule."""
-        rule = _make_rule(autonomy="approve", action_type="flush_dns")
-        mock_insert_approval = MagicMock(return_value=1)
-        _run(rule, mock_insert_approval=mock_insert_approval)
-        kwargs = mock_insert_approval.call_args[1]
-        assert kwargs["action_type"] == "flush_dns"
+        _, mock_pipeline, _ = _run(rule)
+        mock_pipeline.handle_heal_event.assert_called_once()
 
     def test_notification_has_approval_prefix(self):
         """autonomy=approve → notification message starts with '[APPROVAL NEEDED]'."""
@@ -158,21 +136,20 @@ class TestAutonomyApprove:
         args = mock_dispatch.call_args[0]
         assert args[1].startswith("[APPROVAL NEEDED]")
 
-    def test_approval_rule_id_in_automation_id(self):
-        """autonomy=approve → insert_approval sets automation_id to rule_id."""
+    def test_heal_event_has_correct_rule_id(self):
+        """autonomy=approve → HealEvent carries the rule_id."""
         rule = _make_rule(autonomy="approve", rule_id="my-rule-42")
-        mock_insert_approval = MagicMock(return_value=1)
-        _run(rule, mock_insert_approval=mock_insert_approval)
-        kwargs = mock_insert_approval.call_args[1]
-        assert kwargs["automation_id"] == "my-rule-42"
+        _, mock_pipeline, _ = _run(rule)
+        event = mock_pipeline.handle_heal_event.call_args[0][0]
+        assert event.rule_id == "my-rule-42"
 
 
 class TestAutonomyDisabled:
-    def test_no_action_called(self):
-        """autonomy=disabled → _execute_heal is NOT called."""
+    def test_no_pipeline_call(self):
+        """autonomy=disabled → pipeline is NOT called."""
         rule = _make_rule(autonomy="disabled")
-        _, mock_execute_heal, _ = _run(rule)
-        mock_execute_heal.assert_not_called()
+        _, mock_pipeline, _ = _run(rule)
+        mock_pipeline.handle_heal_event.assert_not_called()
 
     def test_no_notification_dispatched(self):
         """autonomy=disabled → dispatch_notifications is NOT called."""
@@ -192,23 +169,17 @@ class TestMaintenanceWindowOverride:
         """Active window with override_autonomy=approve overrides rule's execute level."""
         rule = _make_rule(autonomy="execute")
         window = {"id": 1, "name": "Maintenance", "override_autonomy": "approve"}
-        mock_insert_approval = MagicMock(return_value=1)
         mock_dispatch = MagicMock()
-        mock_execute_heal = MagicMock(return_value=True)
 
-        _run(
+        mock_dispatch, mock_pipeline, _ = _run(
             rule,
             active_windows=[window],
-            mock_execute_heal=mock_execute_heal,
             mock_dispatch=mock_dispatch,
-            mock_insert_approval=mock_insert_approval,
         )
 
-        # Should NOT execute immediately
-        mock_execute_heal.assert_not_called()
-        # Should queue approval
-        mock_insert_approval.assert_called_once()
-        # Should send approval notification
+        # Pipeline should still receive the event
+        mock_pipeline.handle_heal_event.assert_called_once()
+        # Notification should have approval prefix (from the override)
         args = mock_dispatch.call_args[0]
         assert args[1].startswith("[APPROVAL NEEDED]")
 
@@ -216,20 +187,21 @@ class TestMaintenanceWindowOverride:
         """Active window with override_autonomy=notify suppresses action."""
         rule = _make_rule(autonomy="execute")
         window = {"id": 2, "name": "Maintenance", "override_autonomy": "notify"}
-        _, mock_execute_heal, mock_insert_approval = _run(
+        _, mock_pipeline, mock_insert_approval = _run(
             rule, active_windows=[window]
         )
-        mock_execute_heal.assert_not_called()
+        # Pipeline still receives event
+        mock_pipeline.handle_heal_event.assert_called_once()
         mock_insert_approval.assert_not_called()
 
     def test_window_overrides_execute_to_disabled(self):
         """Active window with override_autonomy=disabled skips everything."""
         rule = _make_rule(autonomy="execute")
         window = {"id": 3, "name": "Maintenance", "override_autonomy": "disabled"}
-        mock_dispatch, mock_execute_heal, mock_insert_approval = _run(
+        mock_dispatch, mock_pipeline, mock_insert_approval = _run(
             rule, active_windows=[window]
         )
-        mock_execute_heal.assert_not_called()
+        mock_pipeline.handle_heal_event.assert_not_called()
         mock_dispatch.assert_not_called()
         mock_insert_approval.assert_not_called()
 
@@ -237,9 +209,8 @@ class TestMaintenanceWindowOverride:
         """Active window with no override_autonomy does not change rule behavior."""
         rule = _make_rule(autonomy="execute")
         window = {"id": 4, "name": "Maintenance", "override_autonomy": None}
-        _, mock_execute_heal, _ = _run(rule, active_windows=[window])
-        # Rule autonomy=execute should still run
-        mock_execute_heal.assert_called_once()
+        _, mock_pipeline, _ = _run(rule, active_windows=[window])
+        mock_pipeline.handle_heal_event.assert_called_once()
 
     def test_first_overriding_window_wins(self):
         """When multiple windows exist, first one with override_autonomy wins."""
@@ -249,9 +220,9 @@ class TestMaintenanceWindowOverride:
             {"id": 2, "name": "Override to notify", "override_autonomy": "notify"},
             {"id": 3, "name": "Override to approve", "override_autonomy": "approve"},
         ]
-        _, mock_execute_heal, mock_insert_approval = _run(rule, active_windows=windows)
+        _, mock_pipeline, mock_insert_approval = _run(rule, active_windows=windows)
         # Second window wins (first with override_autonomy set) → notify
-        mock_execute_heal.assert_not_called()
+        mock_pipeline.handle_heal_event.assert_called_once()
         mock_insert_approval.assert_not_called()  # notify, not approve
 
 

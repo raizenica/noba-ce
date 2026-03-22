@@ -292,7 +292,7 @@ def api_alert_rule_test(rule_id: str, auth=Depends(_require_admin)):
     rule = next((r for r in rules if r.get("id") == rule_id), None)
     if not rule:
         raise HTTPException(404, "Rule not found")
-    from ..alerts import _safe_eval  # noqa: PLC0415
+    from ..healing.condition_eval import safe_eval as _safe_eval  # noqa: PLC0415
 
     stats = _deps.bg_collector.get() or {}
     flat = {}

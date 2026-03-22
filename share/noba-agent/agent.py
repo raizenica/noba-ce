@@ -34,7 +34,11 @@ import urllib.request
 # ── Configuration ────────────────────────────────────────────────────────────
 VERSION = "2.1.0"
 DEFAULT_INTERVAL = 30
-DEFAULT_CONFIG = "/etc/noba-agent.yaml"
+DEFAULT_CONFIG = (
+    os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "noba-agent", "agent.yaml")
+    if platform.system().lower() == "windows"
+    else "/etc/noba-agent.yaml"
+)
 # Mount types to exclude from disk reporting
 _SKIP_FSTYPES = frozenset({
     "squashfs", "tmpfs", "devtmpfs", "devfs", "overlay", "aufs",
@@ -634,11 +638,18 @@ def _cmd_exec(params: dict, ctx: dict) -> dict:
     cmd_id = ctx.get("_current_cmd_id", "")
     ws_send = ctx.get("_ws_send")  # Optional: WebSocket send callback
 
+    # On Windows, wrap in powershell for richer output
+    if _PLATFORM == "windows":
+        shell_cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd]
+    else:
+        shell_cmd = cmd  # shell=True on Linux/macOS
+
     if ws_send and cmd_id:
         # Streaming mode: read output line-by-line and send via WebSocket
         try:
             proc = subprocess.Popen(
-                cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                shell_cmd, shell=(_PLATFORM != "windows"),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
             output_lines: list[str] = []
@@ -670,7 +681,8 @@ def _cmd_exec(params: dict, ctx: dict) -> dict:
     # Batch mode: run and capture
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            shell_cmd, shell=(_PLATFORM != "windows"),
+            capture_output=True, text=True, timeout=timeout,
         )
         return {
             "status": "ok" if result.returncode == 0 else "error",
@@ -685,16 +697,22 @@ def _cmd_exec(params: dict, ctx: dict) -> dict:
 
 
 def _cmd_restart_service(params: dict, ctx: dict) -> dict:
-    """Restart a systemd service."""
+    """Restart a service (systemd on Linux, sc on Windows)."""
     import re
     service = params.get("service", "")
-    if not service or not re.match(r'^[a-zA-Z0-9@._-]+$', service) or len(service) > 128:
+    if not service or not re.match(r'^[a-zA-Z0-9@._\- ]+$', service) or len(service) > 128:
         return {"status": "error", "error": "Invalid service name"}
     try:
-        result = subprocess.run(
-            ["sudo", "-n", "systemctl", "restart", service],
-            capture_output=True, text=True, timeout=30,
-        )
+        if _PLATFORM == "windows":
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"Restart-Service '{service}' -Force"],
+                capture_output=True, text=True, timeout=30,
+            )
+        else:
+            result = subprocess.run(
+                ["sudo", "-n", "systemctl", "restart", service],
+                capture_output=True, text=True, timeout=30,
+            )
         return {
             "status": "ok" if result.returncode == 0 else "error",
             "exit_code": result.returncode,
@@ -752,18 +770,33 @@ def _cmd_ping(_params: dict, _ctx: dict) -> dict:
 
 
 def _cmd_get_logs(params: dict, _ctx: dict) -> dict:
-    """Fetch recent journalctl logs for a service or system-wide."""
+    """Fetch recent logs (journalctl on Linux, wevtutil on Windows)."""
     unit = params.get("unit", "")
     lines = min(params.get("lines", 50), 200)
     priority = params.get("priority", "")  # e.g., "err" for errors only
-    cmd = ["journalctl", "--no-pager", "-n", str(lines)]
-    if unit:
+
+    if _PLATFORM == "windows":
+        log_name = unit or "System"
         import re
-        if not re.match(r'^[a-zA-Z0-9@._-]+$', unit):
-            return {"status": "error", "error": "Invalid unit name"}
-        cmd.extend(["-u", unit])
-    if priority:
-        cmd.extend(["-p", priority])
+        if not re.match(r'^[a-zA-Z0-9@._\- ]+$', log_name):
+            return {"status": "error", "error": "Invalid log name"}
+        cmd = ["powershell", "-NoProfile", "-Command",
+               f"Get-EventLog -LogName '{log_name}' -Newest {lines} | Format-Table -AutoSize | Out-String -Width 300"]
+        if priority:
+            level_map = {"emerg": "1", "alert": "1", "crit": "1", "err": "Error",
+                         "warning": "Warning", "notice": "Information", "info": "Information"}
+            entry_type = level_map.get(priority, priority)
+            cmd = ["powershell", "-NoProfile", "-Command",
+                   f"Get-EventLog -LogName '{log_name}' -Newest {lines} -EntryType {entry_type} | Format-Table -AutoSize | Out-String -Width 300"]
+    else:
+        cmd = ["journalctl", "--no-pager", "-n", str(lines)]
+        if unit:
+            import re
+            if not re.match(r'^[a-zA-Z0-9@._-]+$', unit):
+                return {"status": "error", "error": "Invalid unit name"}
+            cmd.extend(["-u", unit])
+        if priority:
+            cmd.extend(["-p", priority])
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         return {"status": "ok", "stdout": result.stdout[:_CMD_MAX_OUTPUT]}
@@ -772,16 +805,22 @@ def _cmd_get_logs(params: dict, _ctx: dict) -> dict:
 
 
 def _cmd_check_service(params: dict, _ctx: dict) -> dict:
-    """Get detailed systemd service status."""
+    """Get service status (systemd on Linux, sc on Windows)."""
     import re
     service = params.get("service", "")
-    if not service or not re.match(r'^[a-zA-Z0-9@._-]+$', service):
+    if not service or not re.match(r'^[a-zA-Z0-9@._\- ]+$', service):
         return {"status": "error", "error": "Invalid service name"}
     try:
-        result = subprocess.run(
-            ["systemctl", "status", service, "--no-pager"],
-            capture_output=True, text=True, timeout=10,
-        )
+        if _PLATFORM == "windows":
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"Get-Service '{service}' | Format-List *"],
+                capture_output=True, text=True, timeout=10,
+            )
+        else:
+            result = subprocess.run(
+                ["systemctl", "status", service, "--no-pager"],
+                capture_output=True, text=True, timeout=10,
+            )
         return {"status": "ok", "stdout": result.stdout[:_CMD_MAX_OUTPUT], "exit_code": result.returncode}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -794,10 +833,16 @@ def _cmd_network_test(params: dict, _ctx: dict) -> dict:
     mode = params.get("mode", "ping")  # "ping" or "trace"
     if not target or not re.match(r'^[a-zA-Z0-9._:-]+$', target):
         return {"status": "error", "error": "Invalid target"}
-    if mode == "trace":
-        cmd = ["traceroute", "-n", "-m", "10", "-w", "2", target]
+    if _PLATFORM == "windows":
+        if mode == "trace":
+            cmd = ["tracert", "-d", "-h", "10", "-w", "2000", target]
+        else:
+            cmd = ["ping", "-n", "4", "-w", "2000", target]
     else:
-        cmd = ["ping", "-c", "4", "-W", "2", target]
+        if mode == "trace":
+            cmd = ["traceroute", "-n", "-m", "10", "-w", "2", target]
+        else:
+            cmd = ["ping", "-c", "4", "-W", "2", target]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         return {"status": "ok", "stdout": result.stdout[:_CMD_MAX_OUTPUT]}
@@ -1081,7 +1126,8 @@ def _cmd_list_services(_params: dict, _ctx: dict) -> dict:
     elif _PLATFORM == "darwin":
         out = _safe_run(["launchctl", "list"], timeout=15)
     elif _PLATFORM == "windows":
-        out = _safe_run(["sc", "query", "type=", "service", "state=", "all"], timeout=15)
+        out = _safe_run(["powershell", "-NoProfile", "-Command",
+                         "Get-Service | Format-Table Name,Status,DisplayName -AutoSize | Out-String -Width 300"], timeout=15)
     elif _PLATFORM == "linux":
         out = _safe_run(["service", "--status-all"], timeout=15)
     else:
@@ -1098,7 +1144,22 @@ def _cmd_service_control(params: dict, _ctx: dict) -> dict:
         return {"status": "error", "error": "Invalid service name"}
     if action not in ("start", "stop", "restart", "enable", "disable", "status"):
         return {"status": "error", "error": f"Invalid action: {action}"}
-    if _PLATFORM == "linux" and _HAS_SYSTEMD:
+    if _PLATFORM == "windows":
+        if action == "status":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Get-Service '{service}' | Format-List *"]
+        elif action == "start":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Start-Service '{service}'"]
+        elif action == "stop":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Stop-Service '{service}' -Force"]
+        elif action == "restart":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Restart-Service '{service}' -Force"]
+        elif action == "enable":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Set-Service '{service}' -StartupType Automatic"]
+        elif action == "disable":
+            cmd = ["powershell", "-NoProfile", "-Command", f"Set-Service '{service}' -StartupType Disabled"]
+        else:
+            return {"status": "error", "error": f"Unsupported action on Windows: {action}"}
+    elif _PLATFORM == "linux" and _HAS_SYSTEMD:
         if action in ("start", "stop", "restart", "enable", "disable"):
             cmd = ["sudo", "-n", "systemctl", action, service]
         else:
@@ -2525,10 +2586,192 @@ def execute_commands(commands: list, ctx: dict) -> list:
     return results
 
 
+# ── Agent Heal Runtime ────────────────────────────────────────────────────────
+
+import operator as _op
+import re as _re
+
+_HEAL_OPS = {
+    ">": _op.gt, "<": _op.lt, ">=": _op.ge, "<=": _op.le,
+    "==": _op.eq, "!=": _op.ne,
+}
+
+_HEAL_COND_RE = _re.compile(
+    r"^\s*([a-zA-Z0-9_\[\]\.]+)\s*(>|<|>=|<=|==|!=)\s*([0-9\.-]+)\s*$"
+)
+
+
+def _heal_eval_single(cond: str, flat: dict) -> bool:
+    """Evaluate a single metric comparison (e.g. 'cpu_percent > 90')."""
+    m = _HEAL_COND_RE.match(cond)
+    if not m:
+        return False
+    metric, op, val = m.groups()
+    if metric not in flat:
+        return False
+    try:
+        return _HEAL_OPS[op](float(flat[metric]), float(val))
+    except (ValueError, TypeError):
+        return False
+
+
+def _heal_eval(cond: str, flat: dict) -> bool:
+    """Evaluate a condition string, supporting AND/OR."""
+    if " AND " in cond:
+        return all(_heal_eval_single(p.strip(), flat) for p in cond.split(" AND "))
+    if " OR " in cond:
+        return any(_heal_eval_single(p.strip(), flat) for p in cond.split(" OR "))
+    return _heal_eval_single(cond, flat)
+
+
+def _heal_flatten(metrics: dict) -> dict:
+    """Flatten metrics dict for condition evaluation."""
+    flat: dict = {}
+    for k, v in metrics.items():
+        if isinstance(v, (int, float, str)):
+            flat[k] = v
+        elif isinstance(v, list):
+            for i, item in enumerate(v):
+                if isinstance(item, dict):
+                    for sk, sv in item.items():
+                        if isinstance(sv, (int, float)):
+                            flat[f"{k}[{i}].{sk}"] = sv
+    return flat
+
+
+# Map heal action types to existing agent command handlers
+if _PLATFORM == "windows":
+    _HEAL_ACTION_MAP = {
+        "restart_container": ("container_control", lambda p: {"name": p.get("container", ""), "action": "restart"}),
+        "restart_service": ("restart_service", lambda p: {"service": p.get("service", p.get("target", ""))}),
+        "clear_cache": ("exec", lambda p: {"command": p.get("command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; Write-Output 'Cache cleared'")}),
+        "flush_dns": ("exec", lambda p: {"command": p.get("command", "Clear-DnsClientCache; ipconfig /flushdns")}),
+    }
+else:
+    _HEAL_ACTION_MAP = {
+        "restart_container": ("container_control", lambda p: {"name": p.get("container", ""), "action": "restart"}),
+        "restart_service": ("restart_service", lambda p: {"service": p.get("service", p.get("target", ""))}),
+        "clear_cache": ("exec", lambda p: {"command": p.get("command", "sync && echo 3 > /proc/sys/vm/drop_caches")}),
+        "flush_dns": ("exec", lambda p: {"command": p.get("command", "systemd-resolve --flush-caches 2>/dev/null || resolvectl flush-caches 2>/dev/null || true")}),
+    }
+
+
+class HealRuntime:
+    """Agent-side heal runtime: evaluates server-provided rules locally."""
+
+    def __init__(self) -> None:
+        self._policy: dict = {}
+        self._cooldowns: dict[str, float] = {}  # rule_id -> earliest_next_run
+        self._reports: list[dict] = []
+        self._lock = threading.Lock()
+
+    def update_policy(self, policy: dict) -> None:
+        """Update the heal policy from server heartbeat response."""
+        with self._lock:
+            self._policy = policy
+
+    def evaluate(self, metrics: dict, ctx: dict) -> None:
+        """Evaluate heal rules against current metrics and execute if needed."""
+        with self._lock:
+            rules = self._policy.get("rules", [])
+            if not rules:
+                return
+
+        flat = _heal_flatten(metrics)
+        now = time.time()
+
+        for rule in rules:
+            rule_id = rule.get("rule_id", "")
+            condition = rule.get("condition", "")
+            action_type = rule.get("action_type", "")
+            trust = rule.get("trust_level", "notify")
+
+            if not condition or not action_type:
+                continue
+
+            # Only execute actions the agent is trusted to run
+            if trust != "execute":
+                continue
+
+            # Check cooldown
+            with self._lock:
+                if now < self._cooldowns.get(rule_id, 0):
+                    continue
+
+            # Evaluate condition
+            if not _heal_eval(condition, flat):
+                continue
+
+            # Set cooldown immediately to prevent rapid re-firing
+            cooldown_s = rule.get("cooldown_s", 300)
+            with self._lock:
+                self._cooldowns[rule_id] = now + cooldown_s
+
+            # Execute via existing command handlers
+            mapping = _HEAL_ACTION_MAP.get(action_type)
+            if not mapping:
+                continue
+
+            cmd_type, param_builder = mapping
+            params = param_builder(rule.get("action_params", {}))
+            metrics_before = dict(flat)
+            start = time.time()
+
+            print(f"[agent-heal] Executing {action_type} for rule {rule_id}")
+
+            # Reuse existing command handlers
+            handlers = {
+                "exec": _cmd_exec,
+                "restart_service": _cmd_restart_service,
+                "container_control": _cmd_container_control,
+            }
+            handler = handlers.get(cmd_type)
+            if not handler:
+                continue
+
+            try:
+                result = handler(params, ctx)
+            except Exception as e:
+                result = {"status": "error", "error": str(e)}
+
+            success = result.get("status") == "ok"
+            duration = round(time.time() - start, 2)
+
+            # Verify: re-check condition after settle
+            time.sleep(min(rule.get("verify_delay", 5), 15))
+            fresh = _heal_flatten(collect_metrics())
+            verified = not _heal_eval(condition, fresh)
+
+            status_str = "verified" if verified else ("success" if success else "failed")
+            print(f"[agent-heal] {action_type} for {rule_id}: {status_str} ({duration}s)")
+
+            report_entry = {
+                "rule_id": rule_id,
+                "condition": condition,
+                "action_type": action_type,
+                "action_params": rule.get("action_params", {}),
+                "success": success,
+                "verified": verified,
+                "duration_s": duration,
+                "metrics_before": metrics_before,
+                "metrics_after": dict(fresh),
+                "trust_level": trust,
+            }
+            with self._lock:
+                self._reports.append(report_entry)
+
+    def drain_reports(self) -> list[dict]:
+        """Return and clear buffered heal reports for the next heartbeat."""
+        with self._lock:
+            reports = self._reports[:]
+            self._reports.clear()
+            return reports
+
+
 # ── Reporting ────────────────────────────────────────────────────────────────
 
-def report(server: str, api_key: str, metrics: dict) -> tuple[bool, list]:
-    """Send metrics to NOBA server. Returns (success, pending_commands)."""
+def report(server: str, api_key: str, metrics: dict) -> tuple[bool, dict]:
+    """Send metrics to NOBA server. Returns (success, response_body)."""
     url = f"{server.rstrip('/')}/api/agent/report"
     data = json.dumps(metrics).encode("utf-8")
     req = urllib.request.Request(
@@ -2544,10 +2787,10 @@ def report(server: str, api_key: str, metrics: dict) -> tuple[bool, list]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 body = json.loads(resp.read())
-                return True, body.get("commands", [])
-            return False, []
+                return True, body
+            return False, {}
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
-        return False, []
+        return False, {}
 
 
 # ── WebSocket background thread ──────────────────────────────────────────────
@@ -2654,6 +2897,7 @@ def main():
     consecutive_failures = 0
     max_backoff = 300  # 5 minutes max between retries
     cmd_results = []  # Results from previous cycle's commands
+    heal_runtime = HealRuntime()
     ctx = {"server": server, "api_key": api_key, "interval": interval}
 
     # Start WebSocket thread for real-time commands
@@ -2684,17 +2928,22 @@ def main():
             stream_data = collect_stream_data()
             if stream_data:
                 metrics["_stream_data"] = stream_data
+            # Attach heal reports from previous cycle
+            heal_reports = heal_runtime.drain_reports()
+            if heal_reports:
+                metrics["_heal_reports"] = heal_reports
 
             if args.dry_run:
                 print(json.dumps(metrics, indent=2))
                 break
 
-            ok, commands = report(server, api_key, metrics)
+            ok, resp_body = report(server, api_key, metrics)
             if ok:
                 if consecutive_failures > 0:
                     print(f"[agent] Connection restored after {consecutive_failures} failures")
                 consecutive_failures = 0
                 # Execute any pending commands from server
+                commands = resp_body.get("commands", [])
                 if commands:
                     print(f"[agent] Received {len(commands)} command(s)")
                     cmd_results = execute_commands(commands, ctx)
@@ -2702,6 +2951,12 @@ def main():
                     if ctx.get("interval") != interval:
                         interval = ctx["interval"]
                         print(f"[agent] Interval changed to {interval}s")
+                # Update heal policy from server
+                heal_policy = resp_body.get("heal_policy", {})
+                if heal_policy:
+                    heal_runtime.update_policy(heal_policy)
+                # Evaluate heal rules against current metrics
+                heal_runtime.evaluate(metrics, ctx)
             else:
                 consecutive_failures += 1
                 if consecutive_failures <= 3 or consecutive_failures % 10 == 0:

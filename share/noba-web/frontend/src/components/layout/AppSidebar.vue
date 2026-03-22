@@ -80,6 +80,11 @@ function onlineAgentCount() {
         <span class="nav-label">Logs</span>
       </router-link>
 
+      <router-link class="sidebar-nav-item" :class="{ active: route.name === 'healing' }" to="/healing">
+        <i class="fas fa-heartbeat nav-icon"></i>
+        <span class="nav-label">Healing</span>
+      </router-link>
+
       <router-link class="sidebar-nav-item" :class="{ active: route.name === 'security' }" to="/security">
         <i class="fas fa-shield-alt nav-icon"></i>
         <span class="nav-label">Security</span>

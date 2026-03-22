@@ -4,6 +4,9 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Self-healing pipeline** — Replaced inline alert self-healing with a layered pipeline architecture. Six modules in `server/healing/`: correlation (immediate-on-first with absorption window), planner (escalation chains with adaptive scoring that skips low-effectiveness actions), executor (async action execution with condition-based verification), governor (graduated trust with circuit breaker and promotion), ledger (outcome recording with suggestion engine), and agent runtime (policy distribution to remote agents). New DB tables: `heal_ledger`, `trust_state`, `heal_suggestions`. New API router with 6 endpoints (`/api/healing/ledger`, `/api/healing/effectiveness`, `/api/healing/suggestions`, `/api/healing/trust`, dismiss, promote). Hourly scheduler integration for suggestion generation and trust promotion evaluation. 4 new remediation action types: `run`, `webhook`, `automation`, `agent_command`. 58 new tests across 10 test files.
+
 ### Security
 - **Settings endpoint credential disclosure** — `GET /api/settings` returned all integration credentials (40+ passwords, tokens, API keys) in plaintext to any authenticated user including viewers. Now redacts secret fields for non-admin users using `is_secret_key()`.
 - **Agent command auth escalation** — `POST /api/agents/bulk-command` and `POST /api/agents/{hostname}/command` allowed viewer-role users to dispatch agent commands. Raised to `_require_operator`.

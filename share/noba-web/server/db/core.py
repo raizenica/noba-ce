@@ -162,6 +162,20 @@ from .status_page import (  # noqa: F401
     update_status_incident as _update_status_incident,
 )
 
+from .healing import (
+    insert_heal_outcome as _insert_heal_outcome,
+    get_heal_outcomes as _get_heal_outcomes,
+    get_heal_success_rate as _get_heal_success_rate,
+    get_mean_time_to_resolve as _get_mean_time_to_resolve,
+    get_escalation_frequency as _get_escalation_frequency,
+    upsert_trust_state as _upsert_trust_state,
+    get_trust_state as _get_trust_state,
+    list_trust_states as _list_trust_states,
+    insert_heal_suggestion as _insert_heal_suggestion,
+    list_heal_suggestions as _list_heal_suggestions,
+    dismiss_heal_suggestion as _dismiss_heal_suggestion,
+)
+
 logger = logging.getLogger("noba")
 
 
@@ -204,7 +218,9 @@ class Database:
 
     def _init_schema(self) -> None:
         import os
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        parent = os.path.dirname(self._path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with self._lock:
             conn = self._get_conn()
             conn.executescript("""
@@ -623,6 +639,33 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_tokens_expires
                     ON tokens(expires_at);
+
+                CREATE TABLE IF NOT EXISTS heal_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    correlation_key TEXT, rule_id TEXT, condition TEXT, target TEXT,
+                    action_type TEXT, action_params TEXT, escalation_step INTEGER,
+                    action_success INTEGER, verified INTEGER, duration_s REAL,
+                    metrics_before TEXT, metrics_after TEXT, trust_level TEXT,
+                    source TEXT, approval_id INTEGER, created_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_heal_ledger_lookup
+                    ON heal_ledger(rule_id, condition, target, created_at);
+
+                CREATE TABLE IF NOT EXISTS trust_state (
+                    rule_id TEXT PRIMARY KEY,
+                    current_level TEXT DEFAULT 'notify', ceiling TEXT DEFAULT 'execute',
+                    promoted_at INTEGER, demoted_at INTEGER,
+                    promotion_count INTEGER DEFAULT 0, demotion_count INTEGER DEFAULT 0,
+                    last_evaluated INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS heal_suggestions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT, severity TEXT, message TEXT, rule_id TEXT,
+                    suggested_action TEXT, evidence TEXT,
+                    dismissed INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER,
+                    UNIQUE(category, rule_id)
+                );
             """)
             # Migrate existing databases: add assigned_to column if missing
             try:
@@ -1307,3 +1350,40 @@ class Database:
             self._get_conn(), self._lock,
             template_id, name, description, category, config, version=version,
         )
+
+    def init(self) -> None:
+        """No-op public alias kept for test compatibility (schema init runs in __init__)."""
+
+    # ── Healing Pipeline ──────────────────────────────────────────────────────
+    def insert_heal_outcome(self, **kw) -> int:
+        return _insert_heal_outcome(self._get_conn(), self._lock, **kw)
+
+    def get_heal_outcomes(self, **kw) -> list[dict]:
+        return _get_heal_outcomes(self._get_conn(), self._lock, **kw)
+
+    def get_heal_success_rate(self, action_type: str, condition: str, **kw) -> float:
+        return _get_heal_success_rate(self._get_conn(), self._lock, action_type, condition, **kw)
+
+    def get_mean_time_to_resolve(self, condition: str, **kw) -> float | None:
+        return _get_mean_time_to_resolve(self._get_conn(), self._lock, condition, **kw)
+
+    def get_escalation_frequency(self, rule_id: str, **kw) -> dict:
+        return _get_escalation_frequency(self._get_conn(), self._lock, rule_id, **kw)
+
+    def upsert_trust_state(self, rule_id: str, current_level: str, ceiling: str) -> None:
+        _upsert_trust_state(self._get_conn(), self._lock, rule_id, current_level, ceiling)
+
+    def get_trust_state(self, rule_id: str) -> dict | None:
+        return _get_trust_state(self._get_conn(), self._lock, rule_id)
+
+    def list_trust_states(self) -> list[dict]:
+        return _list_trust_states(self._get_conn(), self._lock)
+
+    def insert_heal_suggestion(self, **kw) -> int:
+        return _insert_heal_suggestion(self._get_conn(), self._lock, **kw)
+
+    def list_heal_suggestions(self, **kw) -> list[dict]:
+        return _list_heal_suggestions(self._get_conn(), self._lock, **kw)
+
+    def dismiss_heal_suggestion(self, suggestion_id: int) -> None:
+        _dismiss_heal_suggestion(self._get_conn(), self._lock, suggestion_id)

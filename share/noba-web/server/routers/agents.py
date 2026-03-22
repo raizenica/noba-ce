@@ -159,7 +159,35 @@ async def api_agent_report(request: Request):
         for h in stale_cmds:
             del _agent_commands[h]
     logger.info("Agent report", extra={"hostname": hostname, "ip": body.get("_ip")})
-    return {"status": "ok", "commands": pending}
+
+    # Include heal policy if available
+    heal_policy = {}
+    try:
+        from ..healing.agent_runtime import build_agent_policy
+        cfg = read_yaml_settings()
+        alert_rules = cfg.get("alertRules", [])
+        rules_cfg = {}
+        for rule in alert_rules:
+            rid = rule.get("id", "")
+            if rid:
+                rules_cfg[rid] = {
+                    "escalation_chain": rule.get("escalation_chain", []),
+                    "condition": rule.get("condition", ""),
+                }
+        heal_policy = build_agent_policy(hostname, rules_cfg, db)
+    except Exception:
+        pass
+
+    # Ingest heal reports if present
+    heal_reports = body.pop("_heal_reports", None)
+    if heal_reports and isinstance(heal_reports, list):
+        try:
+            from ..healing.agent_runtime import ingest_agent_heal_reports
+            ingest_agent_heal_reports(hostname, heal_reports, db)
+        except Exception as exc:
+            logger.warning("Failed to ingest heal reports from %s: %s", hostname, exc)
+
+    return {"status": "ok", "commands": pending, "heal_policy": heal_policy}
 
 
 # ── Agent WebSocket (Phase 1b) ───────────────────────────────────────────────
