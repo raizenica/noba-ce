@@ -1,10 +1,14 @@
 """Noba -- Healing pipeline API endpoints."""
 from __future__ import annotations
 
+import json
 import logging
+import secrets
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..agent_store import _agent_cmd_lock, _agent_commands, _agent_data, _agent_data_lock
 from ..deps import _get_auth, _require_admin, _require_operator, db
 
 logger = logging.getLogger("noba")
@@ -61,3 +65,43 @@ async def api_promote_trust(rule_id: str, request: Request, auth=Depends(_requir
     username, _ = auth
     db.audit_log("trust_promote", username, f"{rule_id}: {state['current_level']} -> {target_level}")
     return {"success": True, "rule_id": rule_id, "new_level": target_level}
+
+
+@router.get("/api/healing/capabilities/{hostname}")
+def api_get_capabilities(hostname: str, auth=Depends(_get_auth)):
+    """Return the capability manifest for a given agent hostname."""
+    row = db.get_capability_manifest(hostname)
+    if row is None:
+        raise HTTPException(404, f"No manifest for {hostname}")
+    # Parse the manifest JSON string into a dict
+    try:
+        manifest_data = json.loads(row["manifest"])
+    except (json.JSONDecodeError, KeyError):
+        manifest_data = {}
+    return {
+        "hostname": row["hostname"],
+        "manifest": manifest_data,
+        "probed_at": row.get("probed_at"),
+        "degraded_capabilities": json.loads(row.get("degraded_capabilities") or "[]"),
+    }
+
+
+@router.post("/api/healing/capabilities/{hostname}/refresh")
+def api_refresh_capabilities(hostname: str, auth=Depends(_require_operator)):
+    """Queue a refresh_capabilities command to the named agent."""
+    with _agent_data_lock:
+        known = hostname in _agent_data
+    if not known:
+        raise HTTPException(404, f"No known agent: {hostname}")
+    cmd_id = secrets.token_hex(8)
+    username, _ = auth
+    cmd = {
+        "id": cmd_id,
+        "type": "refresh_capabilities",
+        "params": {},
+        "queued_by": username,
+        "queued_at": int(time.time()),
+    }
+    with _agent_cmd_lock:
+        _agent_commands.setdefault(hostname, []).append(cmd)
+    return {"status": "refresh_queued", "hostname": hostname}
