@@ -175,6 +175,20 @@ from .healing import (
     list_heal_suggestions as _list_heal_suggestions,
     dismiss_heal_suggestion as _dismiss_heal_suggestion,
 )
+from .integrations import (
+    upsert_manifest as _upsert_manifest,
+    get_manifest as _get_manifest,
+    mark_capability_degraded as _mark_capability_degraded,
+    insert_instance as _insert_instance,
+    get_instance as _get_instance,
+    list_instances as _list_instances,
+    update_health as _update_integration_health,
+    delete_instance as _delete_instance,
+    add_to_group as _add_to_group,
+    remove_from_group as _remove_from_group,
+    list_group as _list_group,
+    list_groups as _list_groups,
+)
 
 logger = logging.getLogger("noba")
 
@@ -665,6 +679,33 @@ class Database:
                     suggested_action TEXT, evidence TEXT,
                     dismissed INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER,
                     UNIQUE(category, rule_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS integration_instances (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    url TEXT,
+                    auth_config TEXT NOT NULL,
+                    site TEXT,
+                    tags TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    health_status TEXT DEFAULT 'unknown',
+                    last_seen INTEGER,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS integration_groups (
+                    group_name TEXT NOT NULL,
+                    instance_id TEXT NOT NULL REFERENCES integration_instances(id),
+                    PRIMARY KEY (group_name, instance_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS capability_manifests (
+                    hostname TEXT PRIMARY KEY,
+                    manifest TEXT NOT NULL,
+                    probed_at INTEGER NOT NULL,
+                    degraded_capabilities TEXT DEFAULT '[]'
                 );
             """)
             # Migrate existing databases: add assigned_to column if missing
@@ -1387,3 +1428,44 @@ class Database:
 
     def dismiss_heal_suggestion(self, suggestion_id: int) -> None:
         _dismiss_heal_suggestion(self._get_conn(), self._lock, suggestion_id)
+
+    # ── Integration Instances ─────────────────────────────────────────────────
+    def insert_integration_instance(self, **kw) -> None:
+        _insert_instance(self._get_conn(), self._lock, **kw)
+
+    def get_integration_instance(self, instance_id: str) -> dict | None:
+        return _get_instance(self._get_conn(), self._lock, instance_id)
+
+    def list_integration_instances(
+        self, *, category: str | None = None, site: str | None = None
+    ) -> list[dict]:
+        return _list_instances(self._get_conn(), self._lock, category=category, site=site)
+
+    def update_integration_health(self, instance_id: str, health_status: str) -> None:
+        _update_integration_health(self._get_conn(), self._lock, instance_id, health_status)
+
+    def delete_integration_instance(self, instance_id: str) -> None:
+        _delete_instance(self._get_conn(), self._lock, instance_id)
+
+    # ── Integration Groups ────────────────────────────────────────────────────
+    def add_to_integration_group(self, group_name: str, instance_id: str) -> None:
+        _add_to_group(self._get_conn(), self._lock, group_name, instance_id)
+
+    def remove_from_integration_group(self, group_name: str, instance_id: str) -> None:
+        _remove_from_group(self._get_conn(), self._lock, group_name, instance_id)
+
+    def list_integration_group(self, group_name: str) -> list[dict]:
+        return _list_group(self._get_conn(), self._lock, group_name)
+
+    def list_integration_groups(self) -> list[str]:
+        return _list_groups(self._get_conn(), self._lock)
+
+    # ── Capability Manifests ──────────────────────────────────────────────────
+    def upsert_capability_manifest(self, hostname: str, manifest: str) -> None:
+        _upsert_manifest(self._get_conn(), self._lock, hostname, manifest)
+
+    def get_capability_manifest(self, hostname: str) -> dict | None:
+        return _get_manifest(self._get_conn(), self._lock, hostname)
+
+    def mark_capability_degraded(self, hostname: str, tool_name: str) -> None:
+        _mark_capability_degraded(self._get_conn(), self._lock, hostname, tool_name)
