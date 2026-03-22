@@ -269,3 +269,110 @@ def mark_capability_degraded(
             (json.dumps(current), hostname),
         )
         conn.commit()
+
+
+# ── Dependency Graph ───────────────────────────────────────────────────────────
+
+def insert_dependency(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    *,
+    target: str,
+    node_type: str,
+    depends_on: str | None = None,
+    health_check: str | None = None,
+    site: str | None = None,
+    auto_discovered: bool = False,
+    confirmed: bool = False,
+) -> None:
+    """Insert a dependency graph node."""
+    now = int(time.time())
+    with lock:
+        conn.execute(
+            """
+            INSERT INTO dependency_graph
+                (target, node_type, depends_on, health_check, site,
+                 auto_discovered, confirmed, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (target, node_type, depends_on, health_check, site,
+             int(auto_discovered), int(confirmed), now),
+        )
+        conn.commit()
+
+
+def list_dependencies(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+) -> list[dict]:
+    """List all dependency graph nodes."""
+    with lock:
+        cur = conn.execute("SELECT * FROM dependency_graph ORDER BY target")
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+    return [dict(zip(cols, row)) for row in rows]
+
+
+def get_dependency(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    target: str,
+) -> dict | None:
+    """Get a single dependency node by target."""
+    with lock:
+        cur = conn.execute(
+            "SELECT * FROM dependency_graph WHERE target = ?", (target,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cur.description]
+    return dict(zip(cols, row))
+
+
+def delete_dependency(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    target: str,
+) -> None:
+    """Delete a dependency node."""
+    with lock:
+        conn.execute(
+            "DELETE FROM dependency_graph WHERE target = ?", (target,)
+        )
+        conn.commit()
+
+
+def upsert_dependency(
+    conn: sqlite3.Connection,
+    lock: threading.Lock,
+    *,
+    target: str,
+    node_type: str,
+    depends_on: str | None = None,
+    health_check: str | None = None,
+    site: str | None = None,
+    auto_discovered: bool = False,
+    confirmed: bool = False,
+) -> None:
+    """Insert or update a dependency node."""
+    now = int(time.time())
+    with lock:
+        conn.execute(
+            """
+            INSERT INTO dependency_graph
+                (target, node_type, depends_on, health_check, site,
+                 auto_discovered, confirmed, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target) DO UPDATE SET
+                node_type        = excluded.node_type,
+                depends_on       = excluded.depends_on,
+                health_check     = excluded.health_check,
+                site             = excluded.site,
+                auto_discovered  = excluded.auto_discovered,
+                confirmed        = excluded.confirmed
+            """,
+            (target, node_type, depends_on, health_check, site,
+             int(auto_discovered), int(confirmed), now),
+        )
+        conn.commit()

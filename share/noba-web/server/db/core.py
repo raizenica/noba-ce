@@ -189,6 +189,13 @@ from .integrations import (
     list_group as _list_group,
     list_groups as _list_groups,
 )
+from .integrations import (  # noqa: E402
+    insert_dependency as _dep_graph_insert,
+    list_dependencies as _dep_graph_list,
+    get_dependency as _dep_graph_get,
+    delete_dependency as _dep_graph_delete,
+    upsert_dependency as _dep_graph_upsert,
+)
 
 logger = logging.getLogger("noba")
 
@@ -706,6 +713,18 @@ class Database:
                     manifest TEXT NOT NULL,
                     probed_at INTEGER NOT NULL,
                     degraded_capabilities TEXT DEFAULT '[]'
+                );
+
+                CREATE TABLE IF NOT EXISTS dependency_graph (
+                    id INTEGER PRIMARY KEY,
+                    target TEXT NOT NULL UNIQUE,
+                    depends_on TEXT,
+                    node_type TEXT NOT NULL,
+                    health_check TEXT,
+                    site TEXT,
+                    auto_discovered INTEGER DEFAULT 0,
+                    confirmed INTEGER DEFAULT 0,
+                    created_at INTEGER NOT NULL
                 );
             """)
             # Migrate existing databases: add assigned_to column if missing
@@ -1469,3 +1488,19 @@ class Database:
 
     def mark_capability_degraded(self, hostname: str, tool_name: str) -> None:
         _mark_capability_degraded(self._get_conn(), self._lock, hostname, tool_name)
+
+    # ── Dependency Graph ──────────────────────────────────────────────────────
+    def insert_dep_graph_node(self, **kw) -> None:
+        _dep_graph_insert(self._get_conn(), self._lock, **kw)
+
+    def list_dep_graph_nodes(self) -> list[dict]:
+        return _dep_graph_list(self._get_conn(), self._lock)
+
+    def get_dep_graph_node(self, target: str) -> dict | None:
+        return _dep_graph_get(self._get_conn(), self._lock, target)
+
+    def delete_dep_graph_node(self, target: str) -> None:
+        _dep_graph_delete(self._get_conn(), self._lock, target)
+
+    def upsert_dep_graph_node(self, **kw) -> None:
+        _dep_graph_upsert(self._get_conn(), self._lock, **kw)

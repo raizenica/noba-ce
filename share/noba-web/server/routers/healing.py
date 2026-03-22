@@ -86,6 +86,92 @@ def api_get_capabilities(hostname: str, auth=Depends(_get_auth)):
     }
 
 
+@router.get("/api/healing/dependencies")
+def api_list_dependencies(auth=Depends(_get_auth)):
+    """Return all dependency graph nodes from the DB."""
+    return db.list_dep_graph_nodes()
+
+
+@router.post("/api/healing/dependencies/validate")
+async def api_validate_dependencies(request: Request, auth=Depends(_require_operator)):
+    """Validate a dependency config list for cycles and missing references."""
+    from ..deps import _read_body
+    body = await _read_body(request)
+    config: list = body.get("config", [])
+
+    errors: list[str] = []
+
+    # Build a set of known targets from the config
+    targets = {node["target"] for node in config if isinstance(node, dict) and "target" in node}
+
+    # Check for required fields and missing references
+    for node in config:
+        if not isinstance(node, dict):
+            errors.append("Each config entry must be an object.")
+            continue
+        target = node.get("target")
+        node_type = node.get("node_type")
+        if not target:
+            errors.append("A node is missing the required 'target' field.")
+        if not node_type:
+            errors.append(f"Node '{target}' is missing the required 'node_type' field.")
+        depends_on_raw = node.get("depends_on")
+        if depends_on_raw:
+            try:
+                deps = json.loads(depends_on_raw) if isinstance(depends_on_raw, str) else depends_on_raw
+                for dep in deps:
+                    # Strip optional type prefix (e.g. "network:site-a" -> "site-a")
+                    dep_target = dep.split(":", 1)[-1] if ":" in dep else dep
+                    if dep_target not in targets:
+                        errors.append(
+                            f"Node '{target}' depends on '{dep}' which is not defined in this config."
+                        )
+            except (json.JSONDecodeError, TypeError):
+                errors.append(f"Node '{target}' has malformed 'depends_on' value.")
+
+    # Cycle detection via DFS
+    if not errors:
+        adj: dict[str, list[str]] = {}
+        for node in config:
+            if not isinstance(node, dict):
+                continue
+            t = node.get("target", "")
+            depends_on_raw = node.get("depends_on")
+            deps: list[str] = []
+            if depends_on_raw:
+                try:
+                    raw_deps = json.loads(depends_on_raw) if isinstance(depends_on_raw, str) else depends_on_raw
+                    deps = [d.split(":", 1)[-1] if ":" in d else d for d in raw_deps]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            adj[t] = [d for d in deps if d in targets]
+
+        visited: set[str] = set()
+        in_stack: set[str] = set()
+
+        def _has_cycle(node: str) -> bool:
+            visited.add(node)
+            in_stack.add(node)
+            for neighbour in adj.get(node, []):
+                if neighbour not in visited:
+                    if _has_cycle(neighbour):
+                        return True
+                elif neighbour in in_stack:
+                    return True
+            in_stack.discard(node)
+            return False
+
+        for t in targets:
+            if t not in visited:
+                if _has_cycle(t):
+                    errors.append("Cycle detected in dependency graph.")
+                    break
+
+    if errors:
+        return {"valid": False, "errors": errors}
+    return {"valid": True}
+
+
 @router.post("/api/healing/capabilities/{hostname}/refresh")
 def api_refresh_capabilities(hostname: str, auth=Depends(_require_operator)):
     """Queue a refresh_capabilities command to the named agent."""
