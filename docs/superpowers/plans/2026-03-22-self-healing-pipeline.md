@@ -621,6 +621,26 @@ def get_heal_success_rate(
     return round((successes / total) * 100, 1) if total > 0 else 0.0
 
 
+def get_mean_time_to_resolve(
+    conn: sqlite3.Connection, lock: threading.Lock,
+    condition: str, target: str | None = None,
+    window_hours: int = 720,
+) -> float | None:
+    cutoff = int(time.time()) - window_hours * 3600
+    sql = (
+        "SELECT AVG(duration_s) as avg_duration "
+        "FROM heal_ledger "
+        "WHERE condition = ? AND verified = 1 AND created_at >= ?"
+    )
+    params: list = [condition, cutoff]
+    if target:
+        sql += " AND target = ?"
+        params.append(target)
+    with lock:
+        row = conn.execute(sql, params).fetchone()
+    return round(row["avg_duration"], 2) if row and row["avg_duration"] is not None else None
+
+
 def get_escalation_frequency(
     conn: sqlite3.Connection, lock: threading.Lock,
     rule_id: str, window_hours: int = 720,
@@ -804,6 +824,7 @@ from .healing import (
     insert_heal_outcome as _insert_heal_outcome,
     get_heal_outcomes as _get_heal_outcomes,
     get_heal_success_rate as _get_heal_success_rate,
+    get_mean_time_to_resolve as _get_mean_time_to_resolve,
     get_escalation_frequency as _get_escalation_frequency,
     upsert_trust_state as _upsert_trust_state,
     get_trust_state as _get_trust_state,
@@ -825,6 +846,9 @@ def get_heal_outcomes(self, **kw) -> list[dict]:
 
 def get_heal_success_rate(self, action_type, condition, **kw) -> float:
     return _get_heal_success_rate(self._get_conn(), self._lock, action_type, condition, **kw)
+
+def get_mean_time_to_resolve(self, condition, **kw) -> float | None:
+    return _get_mean_time_to_resolve(self._get_conn(), self._lock, condition, **kw)
 
 def get_escalation_frequency(self, rule_id, **kw) -> dict:
     return _get_escalation_frequency(self._get_conn(), self._lock, rule_id, **kw)
@@ -1008,7 +1032,7 @@ class HealCorrelator:
 
     @staticmethod
     def _make_key(event: HealEvent) -> str:
-        return f"{event.target}"
+        return f"{event.target}:{event.rule_id}"
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1053,13 +1077,11 @@ class TestRunAction:
         err = validate_action("run", {})
         assert err is not None
 
-    @patch("subprocess.run")
+    @patch("server.remediation.subprocess.run")
     def test_execute_run_success(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        from server.remediation import execute_action
-        with patch("server.remediation._db_module") as mock_db:
-            mock_db.insert_action_audit = MagicMock()
-            result = execute_action("run", {"command": "echo hello"})
+        from server.remediation import _handle_run
+        result = _handle_run({"command": "echo hello"})
         assert result["success"] is True
 
 
@@ -2222,6 +2244,10 @@ class HealPipeline:
         self._executor = HealExecutor(settle_times=settle_times)
         self.on_outcome = None  # optional callback for testing
 
+    def update_rule_config(self, rule_id: str, config: dict) -> None:
+        """Update or add a rule's config (thread-safe)."""
+        self._rules_cfg[rule_id] = config
+
     def handle_heal_event(self, event: HealEvent) -> None:
         """Non-blocking pipeline entry point. Safe to call from any thread."""
         request = self._correlator.correlate(event)
@@ -2318,9 +2344,28 @@ class HealPipeline:
         self._executor.execute(plan, on_complete=on_complete)
 
 
+_singleton: HealPipeline | None = None
+_singleton_lock = threading.Lock()
+
+
 def create_pipeline(db, rules_cfg: dict, settle_times: dict | None = None) -> HealPipeline:
-    """Factory function for creating a pipeline instance."""
+    """Factory function for creating a pipeline instance (used in tests)."""
     return HealPipeline(db, rules_cfg, settle_times=settle_times)
+
+
+def get_pipeline() -> HealPipeline:
+    """Get or create the module-level singleton pipeline.
+
+    Uses the shared DB instance from deps. Correlation and escalation state
+    persist across calls — this is critical for correct behavior.
+    """
+    global _singleton
+    if _singleton is None:
+        with _singleton_lock:
+            if _singleton is None:
+                from ..db import db as _db
+                _singleton = HealPipeline(_db, {})
+    return _singleton
 ```
 
 - [ ] **Step 4: Run integration tests**
@@ -2355,7 +2400,7 @@ In `share/noba-web/server/alerts.py`, in the `evaluate_alert_rules` function, af
 ```python
 # ── Healing pipeline integration ──────────────────────────
 try:
-    from .healing import create_pipeline
+    from .healing import get_pipeline
     from .healing.models import HealEvent
 
     heal_event = HealEvent(
@@ -2372,10 +2417,9 @@ try:
     if not chain and action_cfg:
         # Legacy: single action, wrap as chain
         chain = [{"action": action_cfg.get("type", ""), "params": {k: v for k, v in action_cfg.items() if k != "type"}}]
-    rules_cfg = {rule_id: {"escalation_chain": chain}}
 
-    from .db import db as _pipeline_db
-    pipeline = create_pipeline(_pipeline_db, rules_cfg)
+    pipeline = get_pipeline()  # module-level singleton
+    pipeline.update_rule_config(rule_id, {"escalation_chain": chain})
     pipeline.handle_heal_event(heal_event)
 except Exception as exc:
     logger.error("Healing pipeline error for rule %s: %s", rule_id, exc)
