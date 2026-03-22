@@ -20,6 +20,7 @@ const scrollEl     = ref(null)
 const inputEl      = ref(null)
 let ws             = null
 let reconnectTimer = null
+let gotStreamData  = false
 
 // ── Scroll to bottom ─────────────────────────────────────────────────────────
 function scrollBottom() {
@@ -69,26 +70,35 @@ function connect() {
       }
 
       if (msg.type === 'stream') {
-        pushLine(msg.line || '', 'output')
+        gotStreamData = true
+        const line = (msg.line || '').trimEnd()
+        if (line) pushLine(line, 'output')
         return
       }
 
       if (msg.type === 'result' || msg.status) {
-        let output = ''
-        if (msg.stdout) output = msg.stdout
-        else if (msg.message) output = msg.message
-        else if (msg.error) output = msg.error
-        else output = JSON.stringify(msg, null, 2)
-
         const isError = msg.status === 'error' || (msg.exit_code !== undefined && msg.exit_code !== 0)
-        // Split into lines, skip empty ones, push as block
-        const cleaned = output.replace(/\r\n/g, '\n').split('\n').filter(l => l.trim()).join('\n')
-        if (cleaned) pushLine(cleaned, isError ? 'error' : 'output')
+
+        // If we already got streamed output, skip stdout (it's a duplicate)
+        if (!gotStreamData) {
+          let output = ''
+          if (msg.stdout) output = msg.stdout
+          else if (msg.message) output = msg.message
+          else if (msg.error) output = msg.error
+          else output = JSON.stringify(msg, null, 2)
+
+          const cleaned = output.replace(/\r\n/g, '\n').split('\n').filter(l => l.trim()).join('\n')
+          if (cleaned) pushLine(cleaned, isError ? 'error' : 'output')
+        } else if (msg.error && isError) {
+          // Still show errors even if we streamed
+          pushLine(msg.error, 'error')
+        }
 
         if (msg.exit_code !== undefined && msg.exit_code !== 0) {
           pushLine(`(exit code: ${msg.exit_code})`, 'system')
         }
 
+        gotStreamData = false
         sending.value = false
         return
       }
@@ -150,6 +160,7 @@ function execute() {
   }
 
   sending.value = true
+  gotStreamData = false
   ws.send(JSON.stringify({ type: 'exec', command: cmd, timeout: 30 }))
 }
 
@@ -268,7 +279,6 @@ onUnmounted(() => disconnect())
   flex: 1;
   overflow-y: auto;
   padding: .5rem .6rem;
-  min-height: 200px;
   max-height: 400px;
 }
 .term-line {
