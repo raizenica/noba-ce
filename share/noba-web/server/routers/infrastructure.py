@@ -357,7 +357,10 @@ def _pmx_headers(cfg: dict) -> dict:
     user_full = user if "@" in user else f"{user}@pam"
     tname = cfg.get("proxmoxTokenName", "")
     tval = cfg.get("proxmoxTokenValue", "")
-    return {"Authorization": f"PVEAPIToken={user_full}!{tname}={tval}", "Accept": "application/json"}
+    # If tname already contains '!' it's a full token ID (e.g. "root@pam!noba-api"),
+    # so use it directly.  Otherwise prepend user_full!.
+    token_id = tname if "!" in tname else f"{user_full}!{tname}"
+    return {"Authorization": f"PVEAPIToken={token_id}={tval}", "Accept": "application/json"}
 
 
 def _validate_pmx_node(node: str) -> None:
