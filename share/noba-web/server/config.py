@@ -46,13 +46,13 @@ WEB_KEYS = frozenset([
     "radarrUrl", "radarrKey", "sonarrUrl", "sonarrKey", "qbitUrl", "qbitUser", "qbitPass",
     "customActions", "automations", "wanTestIp", "lanTestIp",
     "alertRules",
-    "proxmoxUrl", "proxmoxUser", "proxmoxTokenName", "proxmoxTokenValue",
+    "proxmoxUrl", "proxmoxUser", "proxmoxTokenName", "proxmoxTokenValue", "proxmoxVerifySsl",
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
     "gotifyEnabled",   "gotifyUrl",        "gotifyAppToken",
     "adguardUrl", "adguardUser", "adguardPass",
     "jellyfinUrl", "jellyfinKey",
     "hassUrl", "hassToken",
-    "unifiUrl", "unifiUser", "unifiPass", "unifiSite",
+    "unifiUrl", "unifiUser", "unifiPass", "unifiSite", "unifiVerifySsl",
     "speedtestUrl",
     "customMetricScripts",
     # Round 1 – Automation
@@ -74,7 +74,7 @@ WEB_KEYS = frozenset([
     # Round 5 – IoT
     "homebridgeUrl", "homebridgeUser", "homebridgePass",
     "z2mUrl", "esphomeUrl",
-    "unifiProtectUrl", "unifiProtectUser", "unifiProtectPass",
+    "unifiProtectUrl", "unifiProtectUser", "unifiProtectPass", "unifiProtectVerifySsl",
     "pikvmUrl", "pikvmUser", "pikvmPass",
     "hassEventTriggers", "hassSensors", "cameraFeeds",
     # Round 6 – Security
@@ -82,7 +82,7 @@ WEB_KEYS = frozenset([
     "ldapUrl", "ldapBaseDn", "ldapBindDn", "ldapBindPassword",
     "ipWhitelist", "auditRetentionDays", "require2fa",
     # Round 9 – DevOps
-    "k8sUrl", "k8sToken", "giteaUrl", "giteaToken",
+    "k8sUrl", "k8sToken", "k8sVerifySsl", "giteaUrl", "giteaToken",
     "gitlabUrl", "gitlabToken", "githubToken",
     "paperlessUrl", "paperlessToken",
     "vaultwardenUrl", "vaultwardenToken",
@@ -92,7 +92,7 @@ WEB_KEYS = frozenset([
     # RSS triggers
     "rssTriggers",
     # Round 10 – Deep features
-    "piholePassword",
+    "piholePassword", "dnsService",
     "siteMap", "siteNames",
     "frigateUrl",
     "serviceDependencies",
