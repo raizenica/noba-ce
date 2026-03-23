@@ -149,7 +149,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          pacman -Syu --noconfirm base-devel git
+          pacman -Syu --noconfirm base-devel git python
 
       - name: Build Arch package
         run: |
