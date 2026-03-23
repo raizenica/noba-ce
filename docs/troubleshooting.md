@@ -21,6 +21,7 @@
     - [IaC exports show "no data collected"](#11b-iac-exports-show-no-data-collected-even-with-agent-connected)
 12. [Dashboard layout corruption after navigation](#12-dashboard-layout-corruption-after-navigation)
 13. [Browser shows stale UI after update](#13-browser-shows-stale-ui-after-update)
+    - [Security edge-case reference](#13a-security-edge-case-reference)
 14. [Log analysis tips](#14-log-analysis-tips)
 15. [Resetting to defaults](#15-resetting-to-defaults)
 
@@ -658,6 +659,29 @@ In Docker, rebuild with `--no-cache`:
 ```bash
 docker compose build --no-cache && docker compose up -d
 ```
+
+---
+
+## 13a. Security edge-case reference
+
+The following edge cases have been tested against a live NOBA deployment and verified:
+
+| Input | Expected | Actual |
+|-------|----------|--------|
+| Invalid/expired JWT token | 401 | 401 |
+| Missing `Authorization` header | 401 | 401 |
+| SQL injection in URL paths | Reject | Connection reset (safe) |
+| SQL injection in login fields | 401 | 401 (parameterized queries) |
+| Path traversal (`../../etc/passwd`) | 404 | SPA fallback (non-API) / "API route not found" (API) |
+| XSS in names (`<script>`) | Stored raw | JSON responses only; Vue 3 auto-escapes on render |
+| 1 MB payload | 413 | 413 (rejected) |
+| Rapid failed logins | Rate-limit | Locked after 2 failures |
+| Nonexistent resource IDs | 404 | Clear error messages |
+| Duplicate user creation | 409 | "User already exists" |
+| Invalid automation type | 400 | Lists valid types in error |
+| Negative/giant range params | Clamp | Clamped by `_int_param` validators |
+
+> **Note:** NOBA uses parameterized SQL queries throughout (no string interpolation), FastAPI's Pydantic validation on path parameters, and Vue 3's auto-escaping for template rendering. The main security boundary is the JWT authentication layer + role-based access control.
 
 ---
 
