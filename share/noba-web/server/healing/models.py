@@ -45,6 +45,9 @@ class HealOutcome:
     metrics_before: dict = field(default_factory=dict)
     metrics_after: dict | None = None
     approval_id: int | None = None
+    # Extended audit trail: risk_level, snapshot_id, rollback_status,
+    # dependency_root, suppressed_by, maintenance_window_id, instance_id
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass

@@ -775,6 +775,22 @@ class Database:
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+            # Migrate heal_ledger: add extended audit trail columns if missing
+            _extended_columns = [
+                ("heal_ledger", "risk_level", "TEXT"),
+                ("heal_ledger", "snapshot_id", "INTEGER"),
+                ("heal_ledger", "rollback_status", "TEXT"),
+                ("heal_ledger", "dependency_root", "TEXT"),
+                ("heal_ledger", "suppressed_by", "TEXT"),
+                ("heal_ledger", "maintenance_window_id", "INTEGER"),
+                ("heal_ledger", "instance_id", "TEXT"),
+            ]
+            for table, col, col_type in _extended_columns:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass  # column already exists
+            conn.commit()
         # Seed default playbook templates (outside the with-lock block so
         # _seed_default_playbooks can acquire the lock itself without deadlocking)
         _seed_default_playbooks(self._get_conn(), self._lock)

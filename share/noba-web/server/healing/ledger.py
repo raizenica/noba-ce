@@ -15,6 +15,13 @@ def record(outcome: HealOutcome, db) -> int:
     """Record a HealOutcome to the DB."""
     plan = outcome.plan
     event = plan.request.events[0] if plan.request.events else None
+    # Extract recognised extended audit trail fields from outcome.extra
+    _extended_keys = {
+        "risk_level", "snapshot_id", "rollback_status",
+        "dependency_root", "suppressed_by", "maintenance_window_id",
+        "instance_id",
+    }
+    extra_kwargs = {k: v for k, v in outcome.extra.items() if k in _extended_keys}
     return db.insert_heal_outcome(
         correlation_key=plan.request.correlation_key,
         rule_id=event.rule_id if event else "",
@@ -31,6 +38,7 @@ def record(outcome: HealOutcome, db) -> int:
         trust_level=plan.trust_level,
         source=event.source if event else "unknown",
         approval_id=outcome.approval_id,
+        **extra_kwargs,
     )
 
 
