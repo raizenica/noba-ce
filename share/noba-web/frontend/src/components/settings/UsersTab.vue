@@ -2,10 +2,12 @@
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
+import { useModalsStore } from '../../stores/modals'
 import AppModal from '../ui/AppModal.vue'
 
 const authStore = useAuthStore()
 const { post } = useApi()
+const modals = useModalsStore()
 
 const userList = ref([])
 const usersLoading = ref(false)
@@ -58,7 +60,7 @@ async function addUser() {
 }
 
 async function confirmRemoveUser(username) {
-  if (!confirm(`Remove user "${username}"?`)) return
+  if (!await modals.confirm(`Remove user "${username}"?`)) return
   try {
     await post('/api/admin/users', { action: 'remove', username })
     actionMsg.value = `User "${username}" removed.`

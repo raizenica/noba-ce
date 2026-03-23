@@ -158,15 +158,22 @@ describe('LoginView', () => {
   })
 
   it('button is disabled while loading', async () => {
-    // Use a promise we control so loading stays true during the check
+    // Use a promise we control so the login POST stays pending
     let resolveLogin
     const loginPromise = new Promise((res) => { resolveLogin = res })
 
-    global.fetch = vi.fn().mockReturnValueOnce(loginPromise)
+    // First call: GET /api/auth/providers (on mount) — resolve immediately
+    // Second call: POST /api/login (from auth.login) — stays pending
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
+      .mockReturnValueOnce(loginPromise)
 
     const wrapper = mount(LoginView, {
       global: { plugins: [router] },
     })
+
+    // Wait for mount's provider fetch to settle
+    await new Promise((r) => setTimeout(r, 0))
 
     await wrapper.find('input[type="text"]').setValue('alice')
     await wrapper.find('input[type="password"]').setValue('secret')
@@ -183,11 +190,23 @@ describe('LoginView', () => {
     resolveLogin({ ok: false, json: async () => ({}) })
   })
 
-  it('renders SSO link', () => {
+  it('shows social login provider buttons when none configured', async () => {
+    // No providers configured — should show greyed-out placeholder buttons
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ([]),
+    })
+
     const wrapper = mount(LoginView, {
       global: { plugins: [router] },
     })
-    const ssoLink = wrapper.find('a[href="/api/auth/oidc/login"]')
-    expect(ssoLink.exists()).toBe(true)
+
+    // Wait for mount's provider fetch
+    await new Promise((r) => setTimeout(r, 0))
+    await wrapper.vm.$nextTick()
+
+    // Should show placeholder provider names (greyed out)
+    expect(wrapper.text()).toContain('Google')
+    expect(wrapper.text()).toContain('GitHub')
   })
 })

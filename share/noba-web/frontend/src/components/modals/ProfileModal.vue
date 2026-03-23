@@ -112,7 +112,7 @@ async function createApiKey() {
 }
 
 async function deleteApiKey(keyId) {
-  if (!confirm('Delete this API key?')) return
+  if (!await modals.confirm('Delete this API key?')) return
   try {
     await del(`/api/admin/api-keys/${keyId}`)
     notif.addToast('API key deleted', 'success')

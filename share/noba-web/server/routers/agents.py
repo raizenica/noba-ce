@@ -19,7 +19,7 @@ from ..agent_config import (
     validate_command_params,
 )
 from ..agent_store import (
-    _agent_cmd_lock, _agent_cmd_results, _agent_commands,
+    _agent_cmd_lock, _agent_cmd_ready, _agent_cmd_results, _agent_commands,
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
     _agent_stream_lines, _agent_stream_lines_lock, _STREAM_LINES_MAX,
     _agent_streams, _agent_streams_lock,
@@ -78,11 +78,12 @@ async def api_agent_report(request: Request):
             logger.error("Failed to store capability manifest for %s: %s", hostname, exc)
     cmd_results = body.pop("_cmd_results", None)
     if cmd_results:
-        with _agent_cmd_lock:
+        with _agent_cmd_ready:
             existing = _agent_cmd_results.get(hostname, [])
             existing.extend(cmd_results)
             # Keep only last 50 results
             _agent_cmd_results[hostname] = existing[-50:]
+            _agent_cmd_ready.notify_all()
         for cr in cmd_results:
             cr_id = cr.get("id", "")
             if cr_id:
@@ -285,10 +286,11 @@ async def agent_websocket(ws: WebSocket):
                 msg_type = "result"
 
             if is_result:
-                with _agent_cmd_lock:
+                with _agent_cmd_ready:
                     _agent_cmd_results.setdefault(hostname, []).append(msg)
                     if len(_agent_cmd_results[hostname]) > 50:
                         _agent_cmd_results[hostname] = _agent_cmd_results[hostname][-50:]
+                    _agent_cmd_ready.notify_all()
                 # Forward to browser terminal subscribers
                 notify_terminal_subscribers(hostname, msg)
                 # Complete command in history DB (same as HTTP report path)
@@ -1072,7 +1074,7 @@ async def api_agent_file_upload(request: Request):
         raise HTTPException(413, "Chunk too large")
 
     # Initialize transfer on first chunk
-    with _transfer_lock:
+    async with _transfer_lock:
         if transfer_id not in _transfers:
             _transfers[transfer_id] = {
                 "hostname": hostname,
@@ -1089,7 +1091,7 @@ async def api_agent_file_upload(request: Request):
     with open(chunk_path, "wb") as f:
         f.write(body)
 
-    with _transfer_lock:
+    async with _transfer_lock:
         _transfers[transfer_id]["received_chunks"].add(chunk_index)
         received = len(_transfers[transfer_id]["received_chunks"])
         complete = received == total_chunks
@@ -1119,11 +1121,11 @@ async def api_agent_file_upload(request: Request):
             actual = h.hexdigest()
             if actual != expected:
                 os.remove(final_path)
-                with _transfer_lock:
+                async with _transfer_lock:
                     _transfers.pop(transfer_id, None)
                 raise HTTPException(422, f"Checksum mismatch: expected {expected}, got {actual}")
 
-        with _transfer_lock:
+        async with _transfer_lock:
             _transfers[transfer_id]["final_path"] = final_path
             _transfers[transfer_id]["complete"] = True
 
@@ -1140,7 +1142,7 @@ async def api_agent_file_download(transfer_id: str, request: Request):
     if not _validate_agent_key(key):
         raise HTTPException(401, "Invalid agent key")
 
-    with _transfer_lock:
+    async with _transfer_lock:
         transfer = _transfers.get(transfer_id)
     if not transfer:
         raise HTTPException(404, "Transfer not found")
@@ -1181,7 +1183,7 @@ async def api_agent_transfer(hostname: str, request: Request, auth=Depends(_requ
     with open(file_path, "wb") as f:
         f.write(body)
 
-    with _transfer_lock:
+    async with _transfer_lock:
         _transfers[transfer_id] = {
             "hostname": hostname,
             "filename": filename,

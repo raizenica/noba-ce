@@ -52,16 +52,14 @@ async def _cleanup_loop() -> None:
     _backoff = 0
     try:
         while True:
-            await _aio.sleep(300)
             try:
                 token_store.cleanup()
                 rate_limiter.cleanup()
+                _backoff = 0
             except Exception as e:
                 logger.warning("Cleanup tick failed: %s", e)
                 _backoff = min(_backoff + 5, 60)
-                await _aio.sleep(_backoff)
-                continue
-            _backoff = 0
+            await _aio.sleep(300 + _backoff)
             counter += 1
             if counter >= 12:
                 counter = 0
@@ -101,7 +99,7 @@ async def _cleanup_transfers() -> None:
         while True:
             await _asyncio.sleep(900)
             now = int(time.time())
-            with _transfer_lock:
+            async with _transfer_lock:
                 expired = [tid for tid, t in _transfers.items()
                            if now - t.get("created_at", 0) > _TRANSFER_MAX_AGE]
                 for tid in expired:
@@ -110,13 +108,18 @@ async def _cleanup_transfers() -> None:
                     final = transfer.get("final_path", "")
                     if final:
                         _safe_remove(final, _TRANSFER_DIR)
-                    # Clean up orphaned chunks
-                    try:
-                        for fname in os.listdir(_TRANSFER_DIR):
-                            if fname.startswith(tid):
-                                _safe_remove(os.path.join(_TRANSFER_DIR, fname), _TRANSFER_DIR)
-                    except OSError as e:
-                        logger.debug("transfer chunk cleanup: %s", e)
+            # Clean up orphaned chunks outside the lock — single listdir
+            if expired:
+                try:
+                    all_files = os.listdir(_TRANSFER_DIR)
+                except OSError as e:
+                    logger.debug("transfer chunk cleanup listdir: %s", e)
+                    all_files = []
+                for fname in all_files:
+                    for tid in expired:
+                        if fname.startswith(tid):
+                            _safe_remove(os.path.join(_TRANSFER_DIR, fname), _TRANSFER_DIR)
+                            break
             if expired:
                 logger.info("[cleanup] Removed %d expired transfer(s)", len(expired))
     except _asyncio.CancelledError:
@@ -138,18 +141,21 @@ async def lifespan(app: FastAPI):
     # warm up psutil CPU measurement
     import psutil
     psutil.cpu_percent(interval=None)
-    plugin_manager.discover(app=app, db=db)
-    plugin_manager.start()
-    from .scheduler import scheduler
-    scheduler.start()
-    from .scheduler import fs_watcher
-    fs_watcher.start()
-    from .scheduler import rss_watcher
-    rss_watcher.start()
-    from .scheduler import endpoint_checker
-    endpoint_checker.start()
-    from .scheduler import drift_checker
-    drift_checker.start()
+    try:
+        plugin_manager.discover(app=app, db=db)
+        plugin_manager.start()
+    except Exception:
+        logger.exception("Plugin system failed to start")
+    from .scheduler import scheduler, fs_watcher, rss_watcher, endpoint_checker, drift_checker
+    for name, component in [
+        ("scheduler", scheduler), ("fs_watcher", fs_watcher),
+        ("rss_watcher", rss_watcher), ("endpoint_checker", endpoint_checker),
+        ("drift_checker", drift_checker),
+    ]:
+        try:
+            component.start()
+        except Exception:
+            logger.exception("Failed to start %s", name)
     db.catchup_rollups()
     # Load persisted agents (show as offline until they report)
     from .agent_store import _agent_data, _agent_data_lock
@@ -168,18 +174,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to load persisted agents: %s", e)
     # Start file transfer cleanup background task (Phase 1c)
-    import asyncio as _asyncio
     _transfer_cleanup_task = _asyncio.create_task(_cleanup_transfers())
     logger.info("Noba v%s started (%d plugins)", VERSION, plugin_manager.count)
     yield
     _cleanup_task.cancel()
     _transfer_cleanup_task.cancel()
-    rss_watcher.stop()
-    endpoint_checker.stop()
-    drift_checker.stop()
-    from .scheduler import fs_watcher as _fw
-    _fw.stop()
-    scheduler.stop()
+    for component in [rss_watcher, endpoint_checker, drift_checker, fs_watcher, scheduler]:
+        try:
+            component.stop()
+        except Exception:
+            pass
     job_runner.shutdown()
     plugin_manager.stop()
     get_shutdown_flag().set()
@@ -235,7 +239,7 @@ _DOCS_PATHS = ("/api/docs", "/api/redoc", "/api/openapi.json")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     # Skip strict CSP for Swagger/ReDoc (they load external CSS/JS)
-    if not request.url.path.startswith(_DOCS_PATHS):
+    if request.url.path not in _DOCS_PATHS:
         for k, v in SECURITY_HEADERS.items():
             response.headers[k] = v
     return response
@@ -247,22 +251,30 @@ _VUE_DIST = _WEB_DIR / "static" / "dist"
 
 class _CachedStaticFiles(StaticFiles):
     """StaticFiles subclass that adds Cache-Control headers."""
+    def __init__(self, *args, max_age: int = 3600, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cache_header = f"public, max-age={max_age}".encode()
+
     async def __call__(self, scope, receive, send):
+        cache_val = self._cache_header
+
         async def _send_with_cache(msg):
             if msg["type"] == "http.response.start":
                 headers = [(k, v) for k, v in msg.get("headers", []) if k != b"cache-control"]
-                headers.append((b"cache-control", b"public, max-age=3600"))
+                headers.append((b"cache-control", cache_val))
                 msg["headers"] = headers
             await send(msg)
         await super().__call__(scope, receive, _send_with_cache)
 
 
-# Serve Vite-built assets (hashed filenames = immutable)
+# Serve Vite-built assets (hashed filenames = immutable, long cache)
 if (_VUE_DIST / "assets").exists():
-    app.mount("/assets", _CachedStaticFiles(directory=str(_VUE_DIST / "assets")), name="vue-assets")
+    app.mount("/assets", _CachedStaticFiles(
+        directory=str(_VUE_DIST / "assets"), max_age=31536000), name="vue-assets")
 
-# Keep /static mount for favicons and other non-Vue static files
-app.mount("/static", _CachedStaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+# Keep /static mount for favicons and other non-Vue static files (short cache)
+app.mount("/static", _CachedStaticFiles(
+    directory=str(_WEB_DIR / "static"), max_age=300), name="static")
 
 
 @app.get("/manifest.json")
@@ -296,9 +308,9 @@ async def health():
     """Health check endpoint for monitoring and load balancers."""
     checks: dict = {"status": "ok", "timestamp": int(time.time())}
 
-    # DB check
+    # DB check — exercises connection, lock, and WAL read path
     try:
-        db.get_history("cpu_percent", range_hours=0, resolution=1)
+        db.execute_write(lambda conn: conn.execute("SELECT 1").fetchone())
         checks["db"] = "ok"
     except Exception:
         checks["db"] = "error"
@@ -313,4 +325,7 @@ async def health():
 # ── SPA fallback (must be last) ──────────────────────────────────────────────
 @app.get("/{rest:path}")
 async def spa_fallback(rest: str = ""):
+    if rest.startswith("api/"):
+        from fastapi import HTTPException
+        raise HTTPException(404, "API route not found")
     return FileResponse(_VUE_DIST / "index.html")

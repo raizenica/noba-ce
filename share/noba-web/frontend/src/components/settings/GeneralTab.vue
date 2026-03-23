@@ -2,17 +2,65 @@
 import { ref, onMounted } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { useAuthStore } from '../../stores/auth'
+import { useNotificationsStore } from '../../stores/notifications'
 import { useApi } from '../../composables/useApi'
+import { useModalsStore } from '../../stores/modals'
 
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
-const { post } = useApi()
+const notify = useNotificationsStore()
+const { get, post } = useApi()
+const modals = useModalsStore()
 
 const saving = ref(false)
 const saveMsg = ref('')
 
+// ── Self-update ──────────────────────────────────────────────────────────────
+const updateInfo = ref(null)
+const updateChecking = ref(false)
+const updateApplying = ref(false)
+const updateResult = ref(null)
+
+async function checkForUpdates() {
+  updateChecking.value = true
+  updateResult.value = null
+  try {
+    const data = await get('/api/system/update/check')
+    updateInfo.value = data
+    if (!data.update_available && !data.error) {
+      notify.addToast('You are running the latest version', 'success')
+    }
+  } catch (e) {
+    notify.addToast('Update check failed: ' + e.message, 'danger')
+  } finally {
+    updateChecking.value = false
+  }
+}
+
+async function applyUpdate() {
+  if (!await modals.confirm(
+    `Update NOBA to v${updateInfo.value.remote_version}? ` +
+    `This will pull ${updateInfo.value.commits_behind} commit(s), rebuild, and restart the service.`
+  )) return
+  updateApplying.value = true
+  updateResult.value = null
+  try {
+    const data = await post('/api/system/update/apply', {})
+    updateResult.value = data
+    notify.addToast('Update applied — restarting...', 'success')
+    // Reload the page after the service restarts
+    setTimeout(() => { window.location.reload() }, 5000)
+  } catch (e) {
+    notify.addToast('Update failed: ' + e.message, 'danger')
+    updateResult.value = { status: 'error', message: e.message }
+  } finally {
+    updateApplying.value = false
+  }
+}
+
 onMounted(async () => {
   if (!settingsStore.loaded) await settingsStore.fetchSettings()
+  if (authStore.isAdmin) checkForUpdates()
 })
 
 async function save() {
@@ -20,10 +68,9 @@ async function save() {
   saveMsg.value = ''
   try {
     await settingsStore.saveSettings()
-    saveMsg.value = 'Saved.'
-    setTimeout(() => { saveMsg.value = '' }, 2500)
-  } catch {
-    saveMsg.value = 'Save failed.'
+    notify.addToast('Settings saved', 'success')
+  } catch (e) {
+    notify.addToast('Save failed: ' + (e.message || 'Unknown error'), 'danger')
   } finally {
     saving.value = false
   }
@@ -41,7 +88,7 @@ async function downloadConfigBackup() {
     a.href = url; a.download = 'config.yaml'; a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    alert('Download failed: ' + e.message)
+    notify.addToast('Download failed: ' + e.message, 'danger')
   }
 }
 
@@ -57,14 +104,14 @@ async function uploadConfigRestore(evt) {
       body: formData,
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    alert('Config restored. Reload to apply.')
+    notify.addToast('Config restored — reload to apply', 'success')
   } catch (e) {
-    alert('Restore failed: ' + e.message)
+    notify.addToast('Restore failed: ' + e.message, 'danger')
   }
 }
 
 async function resetLayout() {
-  if (!confirm('Reset your dashboard layout to the factory defaults?')) return
+  if (!await modals.confirm('Reset your dashboard layout to the factory defaults?')) return
   try {
     const res = await fetch('/api/user/preferences', {
       method: 'DELETE',
@@ -81,6 +128,59 @@ async function resetLayout() {
 
 <template>
   <div>
+    <!-- System Update (admin only) -->
+    <div v-if="authStore.isAdmin" class="s-section">
+      <span class="s-label">System Update</span>
+      <div style="display:flex;flex-direction:column;gap:.6rem">
+        <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+          <span style="font-size:.85rem">
+            Current: <strong>v{{ updateInfo?.current_version || '...' }}</strong>
+          </span>
+          <span
+            v-if="updateInfo?.update_available"
+            style="font-size:.85rem;color:var(--accent);font-weight:600"
+          >
+            <i class="fas fa-arrow-right" style="font-size:.6rem"></i>
+            v{{ updateInfo.remote_version }} available
+            <span style="opacity:.6;font-weight:400">({{ updateInfo.commits_behind }} commit{{ updateInfo.commits_behind === 1 ? '' : 's' }})</span>
+          </span>
+          <span v-else-if="updateInfo && !updateInfo.error" style="font-size:.8rem;color:var(--success)">
+            <i class="fas fa-check"></i> Up to date
+          </span>
+          <span v-if="updateInfo?.error" style="font-size:.8rem;color:var(--danger)">
+            <i class="fas fa-exclamation-triangle"></i> {{ updateInfo.error }}
+          </span>
+        </div>
+
+        <!-- Changelog -->
+        <div v-if="updateInfo?.changelog?.length" style="font-size:.75rem;max-height:120px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.5rem .75rem;font-family:var(--font-data)">
+          <div v-for="(line, i) in updateInfo.changelog" :key="i" style="padding:1px 0;opacity:.8">{{ line }}</div>
+        </div>
+
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn" @click="checkForUpdates" :disabled="updateChecking">
+            <i class="fas" :class="updateChecking ? 'fa-spinner fa-spin' : 'fa-sync-alt'"></i>
+            {{ updateChecking ? 'Checking...' : 'Check for Updates' }}
+          </button>
+          <button
+            v-if="updateInfo?.update_available"
+            class="btn btn-primary"
+            @click="applyUpdate"
+            :disabled="updateApplying"
+          >
+            <i class="fas" :class="updateApplying ? 'fa-spinner fa-spin' : 'fa-download'"></i>
+            {{ updateApplying ? 'Updating...' : 'Update Now' }}
+          </button>
+        </div>
+
+        <!-- Update result -->
+        <div v-if="updateApplying" style="font-size:.8rem;color:var(--text-muted)">
+          <i class="fas fa-spinner fa-spin"></i>
+          Pulling, rebuilding, and restarting — page will reload automatically...
+        </div>
+      </div>
+    </div>
+
     <!-- Data Sources -->
     <div class="s-section">
       <span class="s-label">Data Sources</span>

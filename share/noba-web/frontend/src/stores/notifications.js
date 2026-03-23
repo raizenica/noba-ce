@@ -6,8 +6,14 @@ let _nextId = 0
 export const useNotificationsStore = defineStore('notifications', () => {
   const toasts = ref([])
 
-  function addToast(message, type = 'info', duration = 4000) {
+  function addToast(message, type = 'info', duration) {
     const id = ++_nextId
+    // Errors/warnings stay longer so users can read them
+    if (duration === undefined) {
+      duration = (type === 'danger' || type === 'error') ? 8000
+               : type === 'warning' ? 6000
+               : 4000
+    }
     toasts.value.push({ id, message, type })
     if (duration > 0) {
       setTimeout(() => removeToast(id), duration)

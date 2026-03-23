@@ -540,7 +540,7 @@ def _run_endpoint_check(monitor: dict) -> dict:
 
 def _dispatch_agent_endpoint_check(monitor: dict) -> dict:
     """Send endpoint_check command to an agent and process the result."""
-    from .agent_store import _agent_cmd_lock, _agent_cmd_results, _agent_commands
+    from .agent_store import _agent_cmd_lock, _agent_cmd_ready, _agent_cmd_results, _agent_commands
 
     import uuid
     cmd_id = str(uuid.uuid4())
@@ -559,11 +559,11 @@ def _dispatch_agent_endpoint_check(monitor: dict) -> dict:
 
     db.record_command(cmd_id, hostname, "endpoint_check", cmd["params"], "scheduler")
 
-    # Poll for result (up to timeout + 5s)
+    # Wait for result using condition variable (up to timeout + 5s)
     deadline = time.time() + monitor.get("timeout", 10) + 5
     agent_result = None
-    while time.time() < deadline:
-        with _agent_cmd_lock:
+    with _agent_cmd_ready:
+        while agent_result is None:
             rlist = _agent_cmd_results.get(hostname, [])
             for i, r in enumerate(rlist):
                 if isinstance(r, dict) and r.get("id") == cmd_id:
@@ -571,7 +571,10 @@ def _dispatch_agent_endpoint_check(monitor: dict) -> dict:
                     break
             if agent_result is not None:
                 break
-        time.sleep(0.5)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            _agent_cmd_ready.wait(timeout=remaining)
 
     if agent_result is None:
         # Timed out waiting for agent
@@ -796,22 +799,27 @@ class DriftChecker:
                     cmd_queue.setdefault(hostname, []).append(cmd)
             cmd_ids[hostname] = cmd_id
 
-        # Poll for results (up to 20s total)
+        # Wait for results using condition variable (up to 20s total)
+        from .agent_store import _agent_cmd_ready
         deadline = time.time() + 20
         pending = dict(cmd_ids)  # hostname -> cmd_id
         results: dict[str, dict] = {}  # hostname -> result dict
-        while pending and time.time() < deadline:
-            for hostname in list(pending):
-                cid = pending[hostname]
-                with cmd_lock:
+        with _agent_cmd_ready:
+            while pending:
+                for hostname in list(pending):
+                    cid = pending[hostname]
                     rlist = cmd_results.get(hostname, [])
                     for i, r in enumerate(rlist):
                         if isinstance(r, dict) and r.get("id") == cid:
                             results[hostname] = rlist.pop(i)
                             del pending[hostname]
                             break
-            if pending:
-                time.sleep(1)
+                if not pending:
+                    break
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                _agent_cmd_ready.wait(timeout=remaining)
 
         # Record results
         expected = baseline["expected_hash"]

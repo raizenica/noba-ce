@@ -239,7 +239,7 @@ onUnmounted(() => {
           <div v-if="store.loading && effectivenessEntries.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
             <i class="fas fa-spinner fa-spin"></i> Loading...
           </div>
-          <p v-else-if="effectivenessEntries.length === 0" class="empty-msg">No effectiveness data available yet.</p>
+          <p v-else-if="effectivenessEntries.length === 0" class="empty-msg">No effectiveness data yet — metrics appear once healing actions have run.</p>
           <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
@@ -433,7 +433,11 @@ onUnmounted(() => {
         <i class="fas fa-spinner fa-spin"></i> Loading...
       </div>
 
-      <p v-else-if="store.trust.length === 0" class="empty-msg">No trust states found.</p>
+      <div v-else-if="store.trust.length === 0" class="empty-msg" style="padding:2rem;text-align:center">
+        <i class="fas fa-shield-alt" style="font-size:2rem;opacity:.3;display:block;margin-bottom:.5rem"></i>
+        No trust states yet.
+        <br><small style="opacity:.6">Trust levels are created automatically when healing rules first execute.</small>
+      </div>
 
       <div v-else style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
         <div v-for="state in store.trust" :key="state.rule_id" class="card">

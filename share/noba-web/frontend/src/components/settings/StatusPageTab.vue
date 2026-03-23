@@ -2,9 +2,11 @@
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
+import { useModalsStore } from '../../stores/modals'
 
 const authStore = useAuthStore()
 const { get, post, put } = useApi()
+const modals = useModalsStore()
 
 const spComponents = ref([])
 const spIncidents = ref([])
@@ -45,7 +47,7 @@ async function createStatusComponent() {
 }
 
 async function deleteStatusComponent(id) {
-  if (!confirm('Delete this component?')) return
+  if (!await modals.confirm('Delete this component?')) return
   try {
     await fetch(`/api/status/components/${id}`, {
       method: 'DELETE',
@@ -78,7 +80,7 @@ async function addStatusUpdate(incId) {
 }
 
 async function resolveStatusIncident(incId) {
-  if (!confirm('Mark this incident as resolved?')) return
+  if (!await modals.confirm('Mark this incident as resolved?')) return
   try {
     await put(`/api/status/incidents/${incId}`, { status: 'resolved', resolved: true })
     await fetchIncidents()

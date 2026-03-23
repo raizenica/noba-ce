@@ -269,7 +269,7 @@ class TestConditionalBranching:
             "false_node": false_node,
         }
 
-        def fake_execute(auto_id, _nodes, _edges, node_id, tby):
+        def fake_execute(auto_id, _nodes, _edges, node_id, tby, **_kw):
             visited.append(node_id)
 
         mock_collector = MagicMock()
@@ -389,7 +389,7 @@ class TestApprovalGate:
 
         original_execute_delay = None
 
-        def fake_delay(auto_id, nodes, edges, node, triggered_by):
+        def fake_delay(auto_id, nodes, edges, node, triggered_by, **_kw):
             executed.append(node["id"])
 
         with patch("server.workflow_engine.db", self.db), \
@@ -424,7 +424,7 @@ class TestApprovalGate:
         next_node_id = ctx["approved_next"]
         nodes_map = {n["id"]: n for n in ctx["nodes"]}
 
-        def fake_delay(auto_id, n, e, node, tby):
+        def fake_delay(auto_id, n, e, node, tby, **_kw):
             executed.append(node["id"])
 
         with patch("server.workflow_engine._execute_delay_node", side_effect=fake_delay):
@@ -452,7 +452,7 @@ class TestApprovalGate:
         ctx = self.db.get_workflow_context(approval_id)
         nodes_map = {n["id"]: n for n in ctx["nodes"]}
 
-        def fake_delay(auto_id, n, e, node, tby):
+        def fake_delay(auto_id, n, e, node, tby, **_kw):
             executed.append(node["id"])
 
         with patch("server.workflow_engine._execute_delay_node", side_effect=fake_delay):
@@ -494,7 +494,7 @@ class TestDelayNode:
 
         visited: list[str] = []
 
-        def fake_execute(auto_id, _nodes, _edges, node_id, tby):
+        def fake_execute(auto_id, _nodes, _edges, node_id, tby, **_kw):
             visited.append(node_id)
 
         with patch("server.workflow_engine._execute_node", side_effect=fake_execute), \
@@ -558,7 +558,7 @@ class TestNotificationNode:
 
         visited: list[str] = []
 
-        def fake_execute(auto_id, _nodes, _edges, node_id, tby):
+        def fake_execute(auto_id, _nodes, _edges, node_id, tby, **_kw):
             visited.append(node_id)
 
         with patch("server.workflow_engine.read_yaml_settings", return_value={}), \
@@ -595,7 +595,7 @@ class TestParallelNode:
 
         executed: list[str] = []
 
-        def fake_execute(auto_id, _nodes, _edges, node_id, tby):
+        def fake_execute(auto_id, _nodes, _edges, node_id, tby, **_kw):
             executed.append(node_id)
 
         with patch("server.workflow_engine._execute_node", side_effect=fake_execute):
@@ -615,7 +615,7 @@ class TestParallelNode:
 
         executed: list[str] = []
 
-        def fake_execute(auto_id, _nodes, _edges, node_id, tby):
+        def fake_execute(auto_id, _nodes, _edges, node_id, tby, **_kw):
             executed.append(node_id)
 
         with patch("server.workflow_engine._execute_node", side_effect=fake_execute):

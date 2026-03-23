@@ -217,7 +217,11 @@ class Database:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
     def _get_conn(self) -> sqlite3.Connection:
-        """Return persistent connection, creating if needed."""
+        """Return persistent connection, creating if needed.
+
+        WARNING: Callers MUST hold self._lock for writes, or use
+        execute_write()/transaction() which handle locking automatically.
+        """
         if self._conn is None:
             self._conn = sqlite3.connect(self._path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -242,6 +246,22 @@ class Database:
             result = fn(conn)
             conn.commit()
             return result
+
+    def transaction(self, fn):
+        """Execute multiple operations in a single atomic transaction.
+
+        Usage: db.transaction(lambda conn: (conn.execute(...), conn.execute(...)))
+        Rolls back on error. Use for multi-step writes that must succeed or fail together.
+        """
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                result = fn(conn)
+                conn.commit()
+                return result
+            except Exception:
+                conn.rollback()
+                raise
 
     def _init_schema(self) -> None:
         import os
@@ -268,6 +288,11 @@ class Database:
                     details   TEXT,
                     ip        TEXT
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_audit_ts
+                    ON audit(timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_user_action
+                    ON audit(username, action);
 
                 CREATE TABLE IF NOT EXISTS automations (
                     id         TEXT PRIMARY KEY,
@@ -316,6 +341,9 @@ class Database:
                     expires_at INTEGER,
                     last_used  INTEGER
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_api_keys_hash
+                    ON api_keys(key_hash);
 
                 CREATE TABLE IF NOT EXISTS notifications (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,

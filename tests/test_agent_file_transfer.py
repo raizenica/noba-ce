@@ -46,13 +46,11 @@ def admin_auth_header():
 @pytest.fixture(autouse=True)
 def _clean_transfers():
     """Clean transfer state before and after each test."""
-    from server.agent_store import _transfer_lock, _transfers, _TRANSFER_DIR
-    with _transfer_lock:
-        _transfers.clear()
+    from server.agent_store import _transfers, _TRANSFER_DIR
+    # Tests run single-threaded; no async event loop contention
+    _transfers.clear()
     yield
-    # Clean up any transfer files
-    with _transfer_lock:
-        _transfers.clear()
+    _transfers.clear()
     if os.path.isdir(_TRANSFER_DIR):
         for f in os.listdir(_TRANSFER_DIR):
             if f.startswith("test-"):
@@ -172,16 +170,15 @@ class TestFileTransferDownload:
 
     def test_download_upload_transfer_rejected(self, client, agent_key_header):
         """Download of an upload-direction transfer returns 400."""
-        from server.agent_store import _transfer_lock, _transfers
+        from server.agent_store import _transfers
 
-        with _transfer_lock:
-            _transfers["test-upload-only"] = {
-                "hostname": "test",
-                "filename": "test.txt",
-                "checksum": "sha256:abc",
-                "direction": "upload",
-                "created_at": int(time.time()),
-            }
+        _transfers["test-upload-only"] = {
+            "hostname": "test",
+            "filename": "test.txt",
+            "checksum": "sha256:abc",
+            "direction": "upload",
+            "created_at": int(time.time()),
+        }
 
         resp = client.get("/api/agent/file-download/test-upload-only",
                           headers=agent_key_header)
@@ -189,7 +186,7 @@ class TestFileTransferDownload:
 
     def test_download_existing_transfer(self, client, agent_key_header):
         """Download of a valid download-direction transfer succeeds."""
-        from server.agent_store import _transfer_lock, _transfers, _TRANSFER_DIR
+        from server.agent_store import _transfers, _TRANSFER_DIR
 
         content = b"download test data"
         checksum = f"sha256:{hashlib.sha256(content).hexdigest()}"
@@ -197,16 +194,15 @@ class TestFileTransferDownload:
         with open(file_path, "wb") as f:
             f.write(content)
 
-        with _transfer_lock:
-            _transfers["test-dl-001"] = {
-                "hostname": "test",
-                "filename": "test.bin",
-                "checksum": checksum,
-                "final_path": file_path,
-                "direction": "download",
-                "created_at": int(time.time()),
-                "complete": True,
-            }
+        _transfers["test-dl-001"] = {
+            "hostname": "test",
+            "filename": "test.bin",
+            "checksum": checksum,
+            "final_path": file_path,
+            "direction": "download",
+            "created_at": int(time.time()),
+            "complete": True,
+        }
 
         resp = client.get("/api/agent/file-download/test-dl-001",
                           headers=agent_key_header)
@@ -282,10 +278,10 @@ class TestAgentStore:
         assert _TRANSFER_MAX_AGE == 3600
 
     def test_transfer_lock_exists(self):
-        """Transfer lock is a threading.Lock."""
-        import threading
+        """Transfer lock is an asyncio.Lock (non-blocking for event loop)."""
+        import asyncio
         from server.agent_store import _transfer_lock
-        assert isinstance(_transfer_lock, type(threading.Lock()))
+        assert isinstance(_transfer_lock, asyncio.Lock)
 
     def test_transfers_dict_is_empty_initially(self):
         """Transfer dict starts empty."""

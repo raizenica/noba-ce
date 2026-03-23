@@ -4,11 +4,13 @@ import { useDashboardStore } from '../../stores/dashboard'
 import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
 import { useNotificationsStore } from '../../stores/notifications'
+import { useModalsStore } from '../../stores/modals'
 
 const dashboardStore = useDashboardStore()
 const authStore      = useAuthStore()
 const { post }       = useApi()
 const notif          = useNotificationsStore()
+const modals         = useModalsStore()
 
 const services = computed(() => dashboardStore.live.services || [])
 
@@ -28,7 +30,7 @@ async function svcAction(svc, action) {
     }
   }
   if (action === 'start') return run()
-  if (!confirm(`${action} service "${label}"?`)) return
+  if (!await modals.confirm(`${action} service "${label}"?`)) return
   run()
 }
 

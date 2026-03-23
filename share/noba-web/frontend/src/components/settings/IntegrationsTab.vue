@@ -3,11 +3,13 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { useApi } from '../../composables/useApi'
 import { useNotificationsStore } from '../../stores/notifications'
+import { useModalsStore } from '../../stores/modals'
 import IntegrationSetup from './IntegrationSetup.vue'
 
 const settingsStore = useSettingsStore()
 const { get, del: apiDel } = useApi()
 const notifications = useNotificationsStore()
+const modals = useModalsStore()
 
 const intCat = ref('infra')
 const saving = ref(false)
@@ -58,7 +60,7 @@ async function fetchInstances() {
 }
 
 async function deleteInstance(id) {
-  if (!confirm(`Delete integration "${id}"?`)) return
+  if (!await modals.confirm(`Delete integration "${id}"?`)) return
   try {
     await apiDel('/api/integrations/instances/' + id)
     notifications.addToast('Integration deleted', 'success')

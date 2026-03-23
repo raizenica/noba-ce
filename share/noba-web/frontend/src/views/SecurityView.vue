@@ -127,7 +127,7 @@ async function fetchSecurityData() {
       securityAgentCount.value = scoreData.agent_count || 0
       securityAgents.value     = scoreData.agents || []
     }
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load security scores: ' + e.message, 'danger') }
 
   try {
     const params = new URLSearchParams()
@@ -135,12 +135,12 @@ async function fetchSecurityData() {
     if (securityFilterHost.value)     params.set('hostname', securityFilterHost.value)
     const findings = await get(`/api/security/findings?${params}`)
     securityFindings.value = Array.isArray(findings) ? findings : []
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load findings: ' + e.message, 'danger') }
 
   try {
     const hist = await get('/api/security/history?limit=50')
     securityHistory.value = Array.isArray(hist) ? hist : []
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load scan history: ' + e.message, 'danger') }
 }
 
 async function securityScanAll() {

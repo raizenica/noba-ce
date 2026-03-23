@@ -18,6 +18,7 @@ from ..agent_store import (
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
     _agent_websockets, _agent_ws_lock,
 )
+
 from ..config import VERSION
 from ..deps import (
     _client_ip, _get_auth, _int_param, _read_body,
@@ -473,3 +474,183 @@ async def api_backup_321_update(request: Request, auth=Depends(_require_operator
         raise HTTPException(500, "Failed to update 3-2-1 status")
     db.audit_log("backup_321_update", username, f"name={backup_name}")
     return {"status": "ok", "id": row_id}
+
+
+# ── Self-update ──────────────────────────────────────────────────────────────
+
+def _find_repo_dir() -> str | None:
+    """Locate the noba git repo. Checks NOBA_REPO_DIR env, then common locations."""
+    from pathlib import Path
+    explicit = os.environ.get("NOBA_REPO_DIR")
+    if explicit and os.path.isdir(os.path.join(explicit, ".git")):
+        return explicit
+    for candidate in [
+        Path.home() / "noba",
+        Path.home() / "projects" / "noba",
+        Path(__file__).resolve().parents[4],  # share/noba-web/server/routers -> repo root
+    ]:
+        if (candidate / ".git").is_dir():
+            return str(candidate)
+    return None
+
+
+def _git(repo_dir: str, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run a git command in the repo directory."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_dir, capture_output=True, text=True, timeout=timeout,
+    )
+
+
+@router.get("/api/system/update/check")
+async def api_update_check(auth=Depends(_get_auth)):
+    """Check if a newer version is available on the remote."""
+    repo_dir = _find_repo_dir()
+    if not repo_dir:
+        return {
+            "update_available": False,
+            "current_version": VERSION,
+            "error": "Git repository not found. Set NOBA_REPO_DIR environment variable.",
+        }
+
+    try:
+        # Fetch latest from remote without modifying working tree
+        fetch = _git(repo_dir, "fetch", "--quiet", "origin", timeout=15)
+        if fetch.returncode != 0:
+            return {
+                "update_available": False,
+                "current_version": VERSION,
+                "error": f"git fetch failed: {fetch.stderr.strip()}",
+            }
+
+        # Get current branch
+        branch_result = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = branch_result.stdout.strip() or "main"
+
+        # Count commits behind
+        behind = _git(repo_dir, "rev-list", "--count", f"HEAD..origin/{branch}")
+        commits_behind = int(behind.stdout.strip()) if behind.returncode == 0 else 0
+
+        # Get remote version from config.py
+        remote_version = VERSION
+        if commits_behind > 0:
+            ver_result = _git(
+                repo_dir, "show", f"origin/{branch}:share/noba-web/server/config.py",
+            )
+            if ver_result.returncode == 0:
+                import re as _re
+                m = _re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', ver_result.stdout)
+                if m:
+                    remote_version = m.group(1)
+
+            # Get recent commit summaries for changelog
+            log_result = _git(
+                repo_dir, "log", "--oneline", f"HEAD..origin/{branch}", "--max-count=20",
+            )
+            changelog = log_result.stdout.strip().splitlines() if log_result.returncode == 0 else []
+        else:
+            changelog = []
+
+        return {
+            "update_available": commits_behind > 0,
+            "current_version": VERSION,
+            "remote_version": remote_version,
+            "commits_behind": commits_behind,
+            "branch": branch,
+            "changelog": changelog,
+            "repo_dir": repo_dir,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "update_available": False,
+            "current_version": VERSION,
+            "error": "Update check timed out",
+        }
+    except Exception as exc:
+        logger.error("Update check failed: %s", exc)
+        return {
+            "update_available": False,
+            "current_version": VERSION,
+            "error": str(exc),
+        }
+
+
+@router.post("/api/system/update/apply")
+async def api_update_apply(request: Request, auth=Depends(_require_admin)):
+    """Pull latest code, re-install, and schedule a service restart."""
+    username, _ = auth
+    ip = _client_ip(request)
+    repo_dir = _find_repo_dir()
+    if not repo_dir:
+        raise HTTPException(400, "Git repository not found. Set NOBA_REPO_DIR.")
+
+    steps: list[dict] = []
+
+    try:
+        # Step 1: git pull
+        pull = _git(repo_dir, "pull", "--ff-only", "origin", timeout=60)
+        steps.append({
+            "step": "git pull",
+            "success": pull.returncode == 0,
+            "output": (pull.stdout + pull.stderr).strip()[:500],
+        })
+        if pull.returncode != 0:
+            raise HTTPException(500, f"git pull failed: {pull.stderr.strip()}")
+
+        # Step 2: rebuild frontend (if npm is available)
+        build_script = os.path.join(repo_dir, "scripts", "build-frontend.sh")
+        if os.path.isfile(build_script):
+            build = subprocess.run(
+                ["bash", build_script],
+                cwd=repo_dir, capture_output=True, text=True, timeout=120,
+            )
+            steps.append({
+                "step": "build frontend",
+                "success": build.returncode == 0,
+                "output": (build.stdout + build.stderr).strip()[-500:],
+            })
+
+        # Step 3: re-install
+        install_script = os.path.join(repo_dir, "install.sh")
+        if os.path.isfile(install_script):
+            install = subprocess.run(
+                ["bash", install_script, "--auto-approve"],
+                cwd=repo_dir, capture_output=True, text=True, timeout=120,
+            )
+            steps.append({
+                "step": "install",
+                "success": install.returncode == 0,
+                "output": (install.stdout + install.stderr).strip()[-500:],
+            })
+            if install.returncode != 0:
+                raise HTTPException(500, f"install.sh failed: {install.stderr.strip()[:300]}")
+
+        db.audit_log("system_update", username, f"Updated from repo {repo_dir}", ip=ip)
+
+        # Step 4: schedule restart (give time for response to reach client)
+        import threading
+        def _restart():
+            time.sleep(2)
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", "restart", "noba-web.service"],
+                    timeout=10,
+                )
+            except Exception as exc:
+                logger.error("Service restart failed: %s", exc)
+
+        threading.Thread(target=_restart, daemon=True, name="update-restart").start()
+
+        return {
+            "status": "ok",
+            "message": "Update applied. Service restarting in 2 seconds...",
+            "steps": steps,
+        }
+
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Update step timed out")
+    except Exception as exc:
+        logger.exception("Update apply failed: %s", exc)
+        raise HTTPException(500, f"Update failed: {exc}")

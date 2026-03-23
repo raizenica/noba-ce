@@ -417,6 +417,9 @@ def _get_next_node(node: dict, edges: list[dict]) -> str | None:
     return None
 
 
+_MAX_GRAPH_DEPTH = 200  # safety limit for graph workflow traversal
+
+
 def _run_graph_workflow(auto_id: str, config: dict, triggered_by: str) -> None:
     """Execute a graph-based workflow with conditional branching and approval gates."""
     nodes = {n["id"]: n for n in config.get("nodes", [])}
@@ -427,13 +430,24 @@ def _run_graph_workflow(auto_id: str, config: dict, triggered_by: str) -> None:
         logger.error("Workflow %s: no valid entry node", auto_id)
         return
 
-    _execute_node(auto_id, nodes, edges, entry, triggered_by)
+    _execute_node(auto_id, nodes, edges, entry, triggered_by, _visited=set())
 
 
 def _execute_node(
     auto_id: str, nodes: dict, edges: list[dict], node_id: str, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
     """Execute a single node and determine next node(s)."""
+    if _visited is None:
+        _visited = set()
+    if node_id in _visited:
+        logger.error("Workflow %s: cycle detected at node %s — stopping", auto_id, node_id)
+        return
+    if len(_visited) >= _MAX_GRAPH_DEPTH:
+        logger.error("Workflow %s: depth limit (%d) reached — stopping", auto_id, _MAX_GRAPH_DEPTH)
+        return
+    _visited.add(node_id)
+
     node = nodes.get(node_id)
     if not node:
         logger.error("Workflow %s: node %s not found", auto_id, node_id)
@@ -442,23 +456,24 @@ def _execute_node(
     node_type = node.get("type", "")
 
     if node_type == "action":
-        _execute_action_node(auto_id, nodes, edges, node, triggered_by)
+        _execute_action_node(auto_id, nodes, edges, node, triggered_by, _visited=_visited)
     elif node_type == "condition":
-        _execute_condition_node(auto_id, nodes, edges, node, triggered_by)
+        _execute_condition_node(auto_id, nodes, edges, node, triggered_by, _visited=_visited)
     elif node_type == "approval_gate":
         _execute_approval_gate(auto_id, nodes, edges, node, triggered_by)
     elif node_type == "parallel":
-        _execute_parallel_node(auto_id, nodes, edges, node, triggered_by)
+        _execute_parallel_node(auto_id, nodes, edges, node, triggered_by, _visited=_visited)
     elif node_type == "delay":
-        _execute_delay_node(auto_id, nodes, edges, node, triggered_by)
+        _execute_delay_node(auto_id, nodes, edges, node, triggered_by, _visited=_visited)
     elif node_type == "notification":
-        _execute_notification_node(auto_id, nodes, edges, node, triggered_by)
+        _execute_notification_node(auto_id, nodes, edges, node, triggered_by, _visited=_visited)
     else:
         logger.warning("Workflow %s: unknown node type %s", auto_id, node_type)
 
 
 def _execute_action_node(
     auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
     """Run an action node: build + submit via _AUTO_BUILDERS, then follow next node."""
     node_config = node.get("config", {})
@@ -478,7 +493,8 @@ def _execute_action_node(
 
     def on_complete(_run_id: int, status: str) -> None:
         if status == "done" and next_id:
-            _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+            _execute_node(auto_id, nodes, edges, next_id, triggered_by,
+                          _visited=_visited)
         elif status != "done":
             logger.info("Workflow %s: action node '%s' %s — stopping", auto_id, node["id"], status)
 
@@ -496,6 +512,7 @@ def _execute_action_node(
 
 def _execute_condition_node(
     auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
     """Evaluate an expression and branch to true_next or false_next."""
     from .collector import bg_collector
@@ -514,7 +531,8 @@ def _execute_condition_node(
 
     next_id = node.get("true_next") if result else node.get("false_next")
     if next_id and next_id in nodes:
-        _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+        _execute_node(auto_id, nodes, edges, next_id, triggered_by,
+                      _visited=_visited)
     else:
         logger.info("Workflow %s: condition node '%s' — no branch to follow (result=%s)",
                     auto_id, node["id"], result)
@@ -564,35 +582,47 @@ def _execute_approval_gate(
 
 def _execute_parallel_node(
     auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
     """Fan out to all branches sequentially (v1 simplification), then follow join node."""
     branches = node.get("branches", [])
     for branch_id in branches:
         if branch_id in nodes:
-            _execute_node(auto_id, nodes, edges, branch_id, triggered_by)
+            # Each branch gets its own visited copy so branches don't block each other
+            _execute_node(auto_id, nodes, edges, branch_id, triggered_by,
+                          _visited=set(_visited or ()))
         else:
             logger.warning("Workflow %s: parallel node '%s' branch '%s' not found",
                            auto_id, node["id"], branch_id)
 
     join_id = node.get("join")
     if join_id and join_id in nodes:
-        _execute_node(auto_id, nodes, edges, join_id, triggered_by)
+        _execute_node(auto_id, nodes, edges, join_id, triggered_by,
+                      _visited=_visited)
 
 
 def _execute_delay_node(
     auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
-    """Sleep for the configured duration, then follow the next node."""
+    """Sleep for the configured duration in a background thread, then follow the next node."""
     seconds = node.get("seconds", 0)
     logger.info("Workflow %s: delay node '%s' sleeping %s seconds", auto_id, node["id"], seconds)
-    time.sleep(seconds)
     next_id = _get_next_node(node, edges)
-    if next_id:
-        _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+
+    def _resume() -> None:
+        time.sleep(seconds)
+        if next_id:
+            _execute_node(auto_id, nodes, edges, next_id, triggered_by,
+                          _visited=_visited)
+
+    threading.Thread(target=_resume, daemon=True,
+                     name=f"wf-delay-{auto_id}-{node['id']}").start()
 
 
 def _execute_notification_node(
     auto_id: str, nodes: dict, edges: list[dict], node: dict, triggered_by: str,
+    *, _visited: set[str] | None = None,
 ) -> None:
     """Dispatch a notification and follow the next node."""
     msg = node.get("message", "Workflow notification")
@@ -614,4 +644,5 @@ def _execute_notification_node(
 
     next_id = _get_next_node(node, edges)
     if next_id:
-        _execute_node(auto_id, nodes, edges, next_id, triggered_by)
+        _execute_node(auto_id, nodes, edges, next_id, triggered_by,
+                      _visited=_visited)

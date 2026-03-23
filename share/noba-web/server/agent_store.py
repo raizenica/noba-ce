@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import tempfile
+import asyncio  # noqa: F401 – used at runtime for _transfer_lock
 import threading
 import time
 
@@ -18,6 +19,8 @@ _AGENT_MAX_AGE = 120  # Consider agent offline after 2 minutes
 _agent_commands: dict[str, list] = {}  # hostname -> pending commands
 _agent_cmd_results: dict[str, list] = {}  # hostname -> recent results
 _agent_cmd_lock = threading.Lock()
+# Condition for result notification — consumers wait(), producers notify_all()
+_agent_cmd_ready = threading.Condition(_agent_cmd_lock)
 
 # WebSocket connection registry (Phase 1b)
 _agent_websockets: dict[str, WebSocket] = {}  # hostname -> active WebSocket
@@ -60,7 +63,7 @@ _TRANSFER_MAX_AGE = 3600  # 1 hour cleanup
 # Active transfers: transfer_id -> {hostname, filename, checksum, total_chunks,
 #                                    received_chunks: set, created_at, direction}
 _transfers: dict[str, dict] = {}
-_transfer_lock = threading.Lock()
+_transfer_lock = asyncio.Lock()  # must be asyncio – used only in async contexts
 
 os.makedirs(_TRANSFER_DIR, exist_ok=True)
 
@@ -94,18 +97,18 @@ def queue_agent_command(hostname: str, cmd_type: str, params: dict,
 
 
 def _poll_result(hostname: str, cmd_id: str, timeout: float) -> dict | None:
-    """Poll _agent_cmd_results until a result with matching cmd_id appears."""
+    """Wait for a result with matching cmd_id using condition variable signaling."""
     deadline = time.monotonic() + timeout
-    interval = 0.25
-    while time.monotonic() < deadline:
-        with _agent_cmd_lock:
+    with _agent_cmd_ready:
+        while True:
             results = _agent_cmd_results.get(hostname, [])
             for r in results:
                 if r.get("id") == cmd_id:
                     return r
-        time.sleep(min(interval, max(0, deadline - time.monotonic())))
-        interval = min(interval * 1.5, 2.0)  # back off gently
-    return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            _agent_cmd_ready.wait(timeout=remaining)
 
 
 def queue_agent_command_and_wait(

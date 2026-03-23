@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
+import { useModalsStore } from '../../stores/modals'
 import { useDashboardStore } from '../../stores/dashboard'
 import AppModal from '../ui/AppModal.vue'
 
@@ -10,6 +11,7 @@ const { get, post, put, del } = useApi()
 const authStore      = useAuthStore()
 const notif          = useNotificationsStore()
 const dashboardStore = useDashboardStore()
+const modals         = useModalsStore()
 
 const endpoints     = ref([])
 const loading       = ref(false)
@@ -81,7 +83,7 @@ async function saveEndpoint() {
 }
 
 async function deleteEndpoint(id, name) {
-  if (!confirm(`Delete monitor "${name}"?`)) return
+  if (!await modals.confirm(`Delete monitor "${name}"?`)) return
   try {
     await del(`/api/endpoints/${id}`)
     notif.addToast('Deleted', 'success')

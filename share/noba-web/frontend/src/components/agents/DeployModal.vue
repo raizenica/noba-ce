@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import AppModal from '../ui/AppModal.vue'
 import { useApi } from '../../composables/useApi'
+import { useModalsStore } from '../../stores/modals'
 
 const props = defineProps({
   show: Boolean,
@@ -9,6 +10,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'deployed'])
 
 const { post, get } = useApi()
+const modals = useModalsStore()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const deployTab   = ref('remote')
@@ -37,7 +39,7 @@ const resultIsError = computed(() =>
 // ── SSH deploy ────────────────────────────────────────────────────────────────
 async function deploy() {
   if (!canDeploy.value) return
-  if (!confirm(`Deploy agent to ${deployUser.value}@${deployHost.value}?`)) return
+  if (!await modals.confirm(`Deploy agent to ${deployUser.value}@${deployHost.value}?`)) return
   deploying.value    = true
   deployResult.value = ''
   try {

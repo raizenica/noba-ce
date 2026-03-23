@@ -33,7 +33,7 @@ function downloadSnapshot(name) {
 }
 
 async function restoreSnapshot(name) {
-  if (!confirm(`Restore snapshot "${name}"? This will overwrite current data.`)) return
+  if (!await modals.confirm(`Restore snapshot "${name}"? This will overwrite current data.`)) return
   restoring.value = true
   try {
     const d = await post('/api/backup/restore', { snapshot: name })

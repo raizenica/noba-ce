@@ -47,18 +47,18 @@ class JobRunner:
         ``on_complete``, if given, is called with ``(run_id, status)``
         after the job finishes (regardless of outcome).
         """
+        # Capacity check + registration must be atomic to prevent
+        # concurrent submits from exceeding max_concurrent.
         with self._lock:
             if len(self._active) >= self._max:
                 raise RuntimeError(
                     f"Max concurrent jobs ({self._max}) reached"
                 )
-
-        run_id = db.insert_job_run(automation_id, trigger, triggered_by)
-        if run_id is None:
-            raise RuntimeError("Failed to create job_run record")
-
-        entry: dict = {"thread": None, "process": None, "cancelled": False}
-        with self._lock:
+            # Reserve a slot before releasing the lock
+            run_id = db.insert_job_run(automation_id, trigger, triggered_by)
+            if run_id is None:
+                raise RuntimeError("Failed to create job_run record")
+            entry: dict = {"thread": None, "process": None, "cancelled": False}
             self._active[run_id] = entry
 
         t = threading.Thread(

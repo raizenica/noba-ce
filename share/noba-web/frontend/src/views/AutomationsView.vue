@@ -579,8 +579,19 @@ onMounted(async () => {
     <div v-if="autoListLoading" class="empty-msg">Loading...</div>
 
     <!-- Empty state -->
-    <div v-else-if="filteredAutoList.length === 0" class="empty-msg">
-      {{ autoSearch || autoFilter !== 'all' ? 'No automations match the filter.' : 'No automations defined yet.' }}
+    <div v-else-if="filteredAutoList.length === 0" class="empty-msg" style="padding:2rem;text-align:center">
+      <template v-if="autoSearch || autoFilter !== 'all'">
+        <i class="fas fa-filter" style="font-size:1.5rem;opacity:.3;display:block;margin-bottom:.5rem"></i>
+        No automations match the current filter.
+      </template>
+      <template v-else>
+        <i class="fas fa-robot" style="font-size:2rem;opacity:.3;display:block;margin-bottom:.5rem"></i>
+        No automations defined yet.
+        <br><small style="opacity:.6">Create scripts, webhooks, or workflows to automate your infrastructure.</small>
+        <br><button v-if="authStore.isOperator" class="btn btn-primary" style="margin-top:.75rem" @click="openForm()">
+          <i class="fas fa-plus"></i> Create Automation
+        </button>
+      </template>
     </div>
 
     <!-- Automation grid -->

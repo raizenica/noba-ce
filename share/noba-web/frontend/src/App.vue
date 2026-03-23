@@ -18,6 +18,7 @@ import SystemInfoModal from './components/modals/SystemInfoModal.vue'
 import NetworkModal from './components/modals/NetworkModal.vue'
 import ProcessModal from './components/modals/ProcessModal.vue'
 import BackupExplorerModal from './components/modals/BackupExplorerModal.vue'
+import AppModal from './components/ui/AppModal.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -118,5 +119,14 @@ watch(() => router.currentRoute.value.path, () => {
     </template>
     <router-view v-else />
     <ToastContainer />
+
+    <!-- Global confirm dialog — any component can call modals.confirm('...') -->
+    <AppModal :show="modals.confirmDialog.show" title="Confirm" @close="modals.confirmNo()">
+      <p style="padding:1rem">{{ modals.confirmDialog.message }}</p>
+      <template #footer>
+        <button class="btn" @click="modals.confirmNo()">Cancel</button>
+        <button class="btn btn-danger" @click="modals.confirmYes()">Confirm</button>
+      </template>
+    </AppModal>
   </div>
 </template>

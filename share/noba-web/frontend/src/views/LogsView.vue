@@ -3,10 +3,12 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { useApi }       from '../composables/useApi'
 import { useAuthStore } from '../stores/auth'
 import { useDashboardStore } from '../stores/dashboard'
+import { useNotificationsStore } from '../stores/notifications'
 
 const { get, post } = useApi()
 const authStore      = useAuthStore()
 const dashStore      = useDashboardStore()
+const notif          = useNotificationsStore()
 
 const agents = computed(() => dashStore.live.agents || [])
 
@@ -62,7 +64,7 @@ async function fetchCommandHistory() {
   try {
     const data = await get('/api/agents/command-history?limit=50')
     cmdHistory.value = Array.isArray(data) ? data : []
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load command history: ' + e.message, 'danger') }
   finally { cmdHistoryLoading.value = false }
 }
 
@@ -117,7 +119,7 @@ async function fetchAuditLog(page) {
         ? (auditPage.value - 1) * auditPageSize.value + data.length
         : auditTotal.value || data.length
     }
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load audit log: ' + e.message, 'danger') }
   finally { auditLoading.value = false }
 }
 
@@ -163,7 +165,7 @@ async function fetchJournalUnits() {
   try {
     const data = await get('/api/journal/units')
     journalUnits.value = Array.isArray(data) ? data : []
-  } catch { /* silent */ }
+  } catch (e) { notif.addToast('Failed to load journal units: ' + e.message, 'danger') }
 }
 
 async function fetchJournal() {
@@ -277,7 +279,12 @@ async function _pollStreamLines() {
       streamActive.value = false
       _stopStreamPoll()
     }
-  } catch { /* silent */ }
+  } catch {
+    // Stop polling on persistent errors to avoid spamming
+    _stopStreamPoll()
+    streamActive.value = false
+    notif.addToast('Log stream disconnected', 'warning')
+  }
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────

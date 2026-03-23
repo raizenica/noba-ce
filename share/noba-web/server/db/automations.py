@@ -409,11 +409,12 @@ def get_api_key(
 ) -> dict | None:
     """Look up an API key by its hash and update last_used timestamp."""
     try:
+        now = int(time.time())
         with lock:
             r = conn.execute(
                 "SELECT id, name, key_hash, role, created_at, expires_at, last_used "
-                "FROM api_keys WHERE key_hash = ?",
-                (key_hash,),
+                "FROM api_keys WHERE key_hash = ? AND (expires_at IS NULL OR expires_at > ?)",
+                (key_hash, now),
             ).fetchone()
             if not r:
                 return None
@@ -596,20 +597,27 @@ def save_user_dashboard(
     card_vis: dict | None = None,
     card_theme: dict | None = None,
 ) -> None:
-    """Save or update a user's dashboard layout preferences."""
+    """Save or update a user's dashboard layout preferences.
+
+    Only overwrites columns where a non-None value is provided;
+    existing values are preserved for any column left as None.
+    """
+    now = int(time.time())
+    order_json = json.dumps(card_order) if card_order is not None else None
+    vis_json = json.dumps(card_vis) if card_vis is not None else None
+    theme_json = json.dumps(card_theme) if card_theme is not None else None
     try:
         with lock:
             conn.execute(
-                "INSERT OR REPLACE INTO user_dashboards "
+                "INSERT INTO user_dashboards "
                 "(username, card_order, card_vis, card_theme, updated_at) "
-                "VALUES (?,?,?,?,?)",
-                (
-                    username,
-                    json.dumps(card_order) if card_order is not None else None,
-                    json.dumps(card_vis) if card_vis is not None else None,
-                    json.dumps(card_theme) if card_theme is not None else None,
-                    int(time.time()),
-                ),
+                "VALUES (?,?,?,?,?) "
+                "ON CONFLICT(username) DO UPDATE SET "
+                "card_order = COALESCE(excluded.card_order, card_order), "
+                "card_vis   = COALESCE(excluded.card_vis,   card_vis), "
+                "card_theme = COALESCE(excluded.card_theme, card_theme), "
+                "updated_at = excluded.updated_at",
+                (username, order_json, vis_json, theme_json, now),
             )
             conn.commit()
     except Exception as e:

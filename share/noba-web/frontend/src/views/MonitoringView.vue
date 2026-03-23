@@ -3,6 +3,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { useApi } from '../composables/useApi'
 import { useSettingsStore } from '../stores/settings'
 import { useNotificationsStore } from '../stores/notifications'
+import { useModalsStore } from '../stores/modals'
 import { Chart, registerables } from 'chart.js'
 
 import SlaTable     from '../components/monitoring/SlaTable.vue'
@@ -15,6 +16,7 @@ Chart.register(...registerables)
 const { get, post, del } = useApi()
 const settingsStore = useSettingsStore()
 const notif         = useNotificationsStore()
+const modals        = useModalsStore()
 
 // ── Active tab ────────────────────────────────────────────────────────────────
 const activeTab = ref('sla')
@@ -332,7 +334,7 @@ async function saveDashboard() {
 }
 
 async function deleteDashboard(id, name) {
-  if (!confirm(`Delete dashboard "${name}"?`)) return
+  if (!await modals.confirm(`Delete dashboard "${name}"?`)) return
   try {
     await del(`/api/dashboards/${id}`)
     notif.addToast('Dashboard deleted', 'success')

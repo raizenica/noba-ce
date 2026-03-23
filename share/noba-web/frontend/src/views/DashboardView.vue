@@ -4,6 +4,7 @@ import Sortable from 'sortablejs'
 import { useDashboardStore } from '../stores/dashboard'
 import { useSettingsStore } from '../stores/settings'
 import { useApi } from '../composables/useApi'
+import { useModalsStore } from '../stores/modals'
 
 // ── Card imports ──────────────────────────────────────────────────────────────
 import CoreSystemCard     from '../components/cards/CoreSystemCard.vue'
@@ -54,6 +55,7 @@ import { getTemplate } from '../data/cardTemplates'
 const dashboardStore = useDashboardStore()
 const settingsStore  = useSettingsStore()
 const { get, post, del } = useApi()
+const modals             = useModalsStore()
 
 // ── Managed integration instances ────────────────────────────────────────────
 const managedInstances = ref([])
@@ -205,7 +207,7 @@ async function loadDashboard(dashboard) {
 }
 
 async function deleteDashboard(id) {
-  if (!confirm('Delete this saved dashboard?')) return
+  if (!await modals.confirm('Delete this saved dashboard?')) return
   try {
     await del('/api/dashboards/' + id)
     await fetchDashboards()

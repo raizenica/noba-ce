@@ -4,11 +4,13 @@ import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
 import { useDashboardStore } from '../../stores/dashboard'
+import { useModalsStore } from '../../stores/modals'
 
 const { get, post, del } = useApi()
 const authStore      = useAuthStore()
 const notif          = useNotificationsStore()
 const dashboardStore = useDashboardStore()
+const modals         = useModalsStore()
 
 const agents  = computed(() => dashboardStore.live.agents || [])
 
@@ -40,7 +42,7 @@ async function triggerDiscover() {
 }
 
 async function deleteDevice(id) {
-  if (!confirm('Remove this device from the map?')) return
+  if (!await modals.confirm('Remove this device from the map?')) return
   try {
     await del(`/api/network/devices/${id}`)
     notif.addToast('Device removed', 'success')

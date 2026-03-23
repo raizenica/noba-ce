@@ -33,8 +33,23 @@ async function fetchActiveMaintenanceWindows() {
 const maintenanceTooltip = () =>
   activeMaintenanceWindows.value.map(w => w.name).join(', ')
 
+// ── Update check ────────────────────────────────────────────────────────────
+const updateInfo = ref(null)
+
+async function checkForUpdates() {
+  try {
+    const data = await get('/api/system/update/check')
+    if (data && data.update_available) {
+      updateInfo.value = data
+    } else {
+      updateInfo.value = null
+    }
+  } catch { /* silent — update check is non-critical */ }
+}
+
 let _approvalPollInterval   = null
 let _maintenancePollInterval = null
+let _updateCheckInterval     = null
 
 onMounted(() => {
   approvalsStore.fetchCount()
@@ -42,11 +57,18 @@ onMounted(() => {
 
   fetchActiveMaintenanceWindows()
   _maintenancePollInterval = setInterval(fetchActiveMaintenanceWindows, 60_000)
+
+  // Check for updates on load and every 6 hours
+  if (auth.isAdmin) {
+    checkForUpdates()
+    _updateCheckInterval = setInterval(checkForUpdates, 6 * 60 * 60 * 1000)
+  }
 })
 
 onUnmounted(() => {
   clearInterval(_approvalPollInterval)
   clearInterval(_maintenancePollInterval)
+  clearInterval(_updateCheckInterval)
 })
 
 const themes = [
@@ -152,6 +174,17 @@ function openProfile() {
       <i class="fas fa-wrench" style="font-size:.6rem"></i>
       Maintenance
     </span>
+
+    <!-- Update available indicator -->
+    <button
+      v-if="updateInfo"
+      class="live-pill update-pill"
+      :title="`Update available: v${updateInfo.remote_version} (${updateInfo.commits_behind} commit${updateInfo.commits_behind === 1 ? '' : 's'} behind)`"
+      @click="router.push('/settings')"
+    >
+      <i class="fas fa-arrow-circle-up" style="font-size:.65rem"></i>
+      v{{ updateInfo.remote_version }}
+    </button>
 
     <span class="live-pill" :class="`conn-${dashboardStore.connStatus}`">
       <span class="live-dot" :class="dashboardStore.connStatus"></span>

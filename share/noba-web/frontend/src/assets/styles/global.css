@@ -409,6 +409,18 @@
     }
     .live-pill.conn-polling { border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
     .live-pill.conn-offline { border-color: color-mix(in srgb, var(--danger)  35%, transparent); }
+    .live-pill.update-pill {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        border-color: var(--accent);
+        color: var(--accent);
+        cursor: pointer;
+        animation: update-glow 3s ease-in-out infinite;
+    }
+    .live-pill.update-pill:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+    @keyframes update-glow {
+        0%, 100% { box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent); }
+        50%      { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+    }
 
     .live-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
     .live-dot.sse          { background: var(--success); animation: blink 2.5s infinite; }

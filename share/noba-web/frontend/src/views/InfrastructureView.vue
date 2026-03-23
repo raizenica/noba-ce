@@ -4,6 +4,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import { useAuthStore }      from '../stores/auth'
 import { useApi }            from '../composables/useApi'
 import { useNotificationsStore } from '../stores/notifications'
+import { useModalsStore } from '../stores/modals'
 
 import ServiceList    from '../components/infrastructure/ServiceList.vue'
 import K8sBrowser     from '../components/infrastructure/K8sBrowser.vue'
@@ -15,6 +16,7 @@ import ChartWrapper   from '../components/ui/ChartWrapper.vue'
 const dashboardStore = useDashboardStore()
 const authStore      = useAuthStore()
 const notif          = useNotificationsStore()
+const modals         = useModalsStore()
 const { get, post, del } = useApi()
 
 // ── Active tab ─────────────────────────────────────────────────────────────────
@@ -105,7 +107,7 @@ async function addDependency() {
 }
 
 async function deleteDependency(id) {
-  if (!confirm('Delete this dependency?')) return
+  if (!await modals.confirm('Delete this dependency?')) return
   try {
     await del(`/api/topology/dependencies/${id}`)
     notif.addToast('Dependency deleted', 'success')

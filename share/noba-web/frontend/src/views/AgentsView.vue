@@ -4,6 +4,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import { useAuthStore }      from '../stores/auth'
 import { useApi }            from '../composables/useApi'
 import { useNotificationsStore } from '../stores/notifications'
+import { useModalsStore } from '../stores/modals'
 
 import AgentDetailModal from '../components/agents/AgentDetailModal.vue'
 import CommandPalette   from '../components/agents/CommandPalette.vue'
@@ -14,6 +15,7 @@ const dashboardStore = useDashboardStore()
 const authStore      = useAuthStore()
 const { get, del }   = useApi()
 const notify         = useNotificationsStore()
+const modals         = useModalsStore()
 
 // ── Agent list from SSE store ──────────────────────────────────────────────────
 const agents = computed(() => dashboardStore.live.agents || [])
@@ -27,7 +29,7 @@ async function fetchCommandHistory() {
   try {
     const data = await get('/api/agents/command-history?limit=50')
     cmdHistory.value = Array.isArray(data) ? data : []
-  } catch { /* silent */ }
+  } catch (e) { notify.addToast('Failed to load command history: ' + e.message, 'danger') }
   finally { cmdHistoryLoading.value = false }
 }
 
@@ -52,7 +54,7 @@ function openLogStream(hostname) {
 }
 
 async function deleteAgent(hostname) {
-  if (!confirm(`Remove agent "${hostname}" from the dashboard? This only removes the record — the agent service on the remote host is not affected.`)) return
+  if (!await modals.confirm(`Remove agent "${hostname}" from the dashboard? This only removes the record — the agent service on the remote host is not affected.`)) return
   try {
     await del(`/api/agents/${hostname}`)
     notify.addToast(`Agent "${hostname}" removed`, 'success')
@@ -205,8 +207,14 @@ onMounted(() => {
     </div>
 
     <!-- Empty state -->
-    <div v-if="agents.length === 0" class="empty-msg" style="margin-bottom:1rem">
-      No agents reporting. Deploy an agent to get started.
+    <div v-if="agents.length === 0" class="empty-msg" style="margin-bottom:1rem;padding:2rem;text-align:center">
+      <i class="fas fa-satellite-dish" style="font-size:2rem;opacity:.3;display:block;margin-bottom:.5rem"></i>
+      No agents reporting yet.
+      <br><small style="opacity:.6">Deploy an agent to a remote host to start monitoring it.</small>
+      <br v-if="authStore.isAdmin">
+      <button v-if="authStore.isAdmin" class="btn btn-primary" style="margin-top:.75rem" @click="showDeploy = true">
+        <i class="fas fa-paper-plane"></i> Deploy Agent
+      </button>
     </div>
 
     <!-- Command Palette (operator+) -->

@@ -38,6 +38,7 @@ def _query_agent(hostname: str, target: str) -> dict | None:
 
         from ..agent_store import (
             _agent_cmd_lock,
+            _agent_cmd_ready,
             _agent_cmd_results,
             _agent_commands,
             _agent_data,
@@ -60,10 +61,10 @@ def _query_agent(hostname: str, target: str) -> dict | None:
                 _agent_commands[hostname] = []
             _agent_commands[hostname].append(cmd)
 
-        # Wait for result (max 10 seconds)
+        # Wait for result (max 10 seconds) using condition variable
         deadline = time.time() + 10
-        while time.time() < deadline:
-            with _agent_cmd_lock:
+        with _agent_cmd_ready:
+            while True:
                 results = _agent_cmd_results.get(hostname, [])
                 for r in results:
                     if r.get("id") == cmd_id:
@@ -75,7 +76,10 @@ def _query_agent(hostname: str, target: str) -> dict | None:
                             return {"status": "down", "detail": str(output)[:200]}
                         else:
                             return {"status": "unknown", "detail": str(output)[:200]}
-            time.sleep(0.5)
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                _agent_cmd_ready.wait(timeout=remaining)
 
         return None  # timeout
     except Exception as exc:

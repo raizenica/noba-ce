@@ -13,6 +13,27 @@ export const useModalsStore = defineStore('modals', () => {
   const processModal = ref(false)
   const backupExplorerModal = ref(false)
 
+  // ── Global confirm dialog ────────────────────────────────────────────────
+  const confirmDialog = ref({ show: false, message: '', resolve: null })
+
+  function confirm(message) {
+    return new Promise((resolve) => {
+      confirmDialog.value = { show: true, message, resolve }
+    })
+  }
+
+  function confirmYes() {
+    const r = confirmDialog.value.resolve
+    confirmDialog.value = { show: false, message: '', resolve: null }
+    if (r) r(true)
+  }
+
+  function confirmNo() {
+    const r = confirmDialog.value.resolve
+    confirmDialog.value = { show: false, message: '', resolve: null }
+    if (r) r(false)
+  }
+
   function showHistory(metric, range = 24) {
     historyModal.value = { show: true, metric, range }
   }
@@ -32,6 +53,10 @@ export const useModalsStore = defineStore('modals', () => {
     networkModal,
     processModal,
     backupExplorerModal,
+    confirmDialog,
+    confirm,
+    confirmYes,
+    confirmNo,
     showHistory,
     closeHistory,
   }
