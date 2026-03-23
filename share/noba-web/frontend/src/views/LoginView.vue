@@ -30,12 +30,19 @@
       <!-- Password -->
       <div style="margin-bottom:1rem">
         <label class="field-label">Password</label>
-        <input
-          v-model="password"
-          class="field-input"
-          type="password"
-          autocomplete="current-password"
-        >
+        <div style="position:relative">
+          <input
+            v-model="password"
+            class="field-input"
+            :type="showPassword ? 'text' : 'password'"
+            autocomplete="current-password"
+            style="padding-right:2.5rem"
+          >
+          <button type="button" class="pw-toggle" @click="showPassword = !showPassword"
+            :title="showPassword ? 'Hide password' : 'Show password'">
+            <i class="fas" :class="showPassword ? 'fa-eye-slash' : 'fa-eye'"></i>
+          </button>
+        </div>
       </div>
 
       <!-- Error -->
@@ -92,6 +99,7 @@ const username = ref('')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const showPassword = ref(false)
 const providers = ref([])
 
 onMounted(async () => {
@@ -150,4 +158,17 @@ async function handleLogin() {
   cursor: not-allowed;
   pointer-events: none;
 }
+.pw-toggle {
+  position: absolute;
+  right: .5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: .25rem;
+  font-size: .85rem;
+}
+.pw-toggle:hover { color: var(--accent); }
 </style>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { useApi } from '../../composables/useApi'
 import { useNotificationsStore } from '../../stores/notifications'
@@ -12,6 +12,40 @@ const notifications = useNotificationsStore()
 const intCat = ref('infra')
 const saving = ref(false)
 const saveMsg = ref('')
+
+// Social provider state
+const expandedProvider = ref('')
+const socialProviders = reactive({
+  google: { clientId: '', clientSecret: '' },
+  facebook: { clientId: '', clientSecret: '' },
+  github: { clientId: '', clientSecret: '' },
+  microsoft: { clientId: '', clientSecret: '' },
+})
+
+// Sync social providers with settings store
+watch(() => settingsStore.data.socialProviders, (sp) => {
+  if (sp) {
+    for (const key of ['google', 'facebook', 'github', 'microsoft']) {
+      if (sp[key]) {
+        socialProviders[key].clientId = sp[key].clientId || ''
+        socialProviders[key].clientSecret = sp[key].clientSecret || ''
+      }
+    }
+  }
+}, { immediate: true })
+
+// Write back to settings store on change
+watch(socialProviders, (val) => {
+  if (!settingsStore.data.socialProviders) settingsStore.data.socialProviders = {}
+  for (const key of ['google', 'facebook', 'github', 'microsoft']) {
+    settingsStore.data.socialProviders[key] = { ...val[key] }
+  }
+}, { deep: true })
+
+function callbackUrl(provider) {
+  const base = window.location.origin
+  return `${base}/api/auth/social/${provider}/callback`
+}
 
 // Managed integrations
 const instances = ref([])
@@ -1012,8 +1046,196 @@ const cats = [
         </div>
       </div>
 
+      <!-- Social Login Providers -->
       <div class="s-section">
-        <span class="s-label">SSO / OIDC</span>
+        <span class="s-label">Social Login</span>
+        <p style="color:var(--text-muted);font-size:.8rem;margin:0 0 1rem">
+          Let users sign in with their existing accounts. Each provider requires a free app registration — click the setup guide for step-by-step instructions.
+        </p>
+
+        <!-- Google -->
+        <div class="social-provider-card">
+          <div class="sp-header" @click="expandedProvider = expandedProvider === 'google' ? '' : 'google'">
+            <i class="fab fa-google" style="color:#4285f4;font-size:1.2rem"></i>
+            <span class="sp-name">Google</span>
+            <span v-if="settingsStore.data.socialProviders?.google?.clientId" class="badge bs">Configured</span>
+            <span v-else class="badge bw">Not configured</span>
+            <i class="fas fa-chevron-down sp-chevron" :class="{rotated: expandedProvider === 'google'}"></i>
+          </div>
+          <div v-if="expandedProvider === 'google'" class="sp-body">
+            <details class="setup-guide">
+              <summary>Setup Guide (2 minutes)</summary>
+              <ol>
+                <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → Credentials</a></li>
+                <li>Click <strong>"Create Credentials"</strong> → <strong>"OAuth client ID"</strong></li>
+                <li>If prompted, configure the OAuth consent screen first (External, add your email)</li>
+                <li>Application type: <strong>Web application</strong></li>
+                <li>Name: <code>NOBA</code></li>
+                <li>Authorized redirect URI: <code>{{ callbackUrl('google') }}</code></li>
+                <li>Click <strong>Create</strong> → copy the Client ID and Client Secret below</li>
+              </ol>
+            </details>
+            <div class="field-2" style="margin-top:.75rem">
+              <div>
+                <label class="field-label">Client ID</label>
+                <input class="field-input" type="text" v-model="socialProviders.google.clientId"
+                  placeholder="xxx.apps.googleusercontent.com">
+              </div>
+              <div>
+                <label class="field-label">Client Secret</label>
+                <div class="reveal-wrap">
+                  <input class="field-input" type="password" v-model="socialProviders.google.clientSecret" autocomplete="off">
+                  <button type="button" class="reveal-btn" @click="toggleReveal"><i class="fas fa-eye"></i></button>
+                </div>
+              </div>
+            </div>
+            <div class="sp-callback">
+              <label class="field-label">Callback URL (copy this into Google Console)</label>
+              <code class="callback-url">{{ callbackUrl('google') }}</code>
+            </div>
+          </div>
+        </div>
+
+        <!-- Facebook -->
+        <div class="social-provider-card">
+          <div class="sp-header" @click="expandedProvider = expandedProvider === 'facebook' ? '' : 'facebook'">
+            <i class="fab fa-facebook" style="color:#1877f2;font-size:1.2rem"></i>
+            <span class="sp-name">Facebook</span>
+            <span v-if="settingsStore.data.socialProviders?.facebook?.clientId" class="badge bs">Configured</span>
+            <span v-else class="badge bw">Not configured</span>
+            <i class="fas fa-chevron-down sp-chevron" :class="{rotated: expandedProvider === 'facebook'}"></i>
+          </div>
+          <div v-if="expandedProvider === 'facebook'" class="sp-body">
+            <details class="setup-guide">
+              <summary>Setup Guide (5 minutes)</summary>
+              <ol>
+                <li>Go to <a href="https://developers.facebook.com/apps/" target="_blank">Facebook Developers</a> and click <strong>"Create App"</strong></li>
+                <li>Choose <strong>"Consumer"</strong> or <strong>"None"</strong> as the app type</li>
+                <li>Add the <strong>"Facebook Login"</strong> product</li>
+                <li>Under Facebook Login → Settings, add Valid OAuth Redirect URI: <code>{{ callbackUrl('facebook') }}</code></li>
+                <li>Go to Settings → Basic to find your <strong>App ID</strong> and <strong>App Secret</strong></li>
+                <li>Copy them below</li>
+              </ol>
+              <p style="color:var(--warning);font-size:.75rem;margin-top:.5rem">
+                <i class="fas fa-info-circle"></i> Facebook requires HTTPS for production. For homelab use, keep the app in "Development" mode and add yourself as a test user under Roles → Test Users.
+              </p>
+            </details>
+            <div class="field-2" style="margin-top:.75rem">
+              <div>
+                <label class="field-label">App ID</label>
+                <input class="field-input" type="text" v-model="socialProviders.facebook.clientId" placeholder="123456789012345">
+              </div>
+              <div>
+                <label class="field-label">App Secret</label>
+                <div class="reveal-wrap">
+                  <input class="field-input" type="password" v-model="socialProviders.facebook.clientSecret" autocomplete="off">
+                  <button type="button" class="reveal-btn" @click="toggleReveal"><i class="fas fa-eye"></i></button>
+                </div>
+              </div>
+            </div>
+            <div class="sp-callback">
+              <label class="field-label">Callback URL</label>
+              <code class="callback-url">{{ callbackUrl('facebook') }}</code>
+            </div>
+          </div>
+        </div>
+
+        <!-- GitHub -->
+        <div class="social-provider-card">
+          <div class="sp-header" @click="expandedProvider = expandedProvider === 'github' ? '' : 'github'">
+            <i class="fab fa-github" style="color:#f0f6fc;font-size:1.2rem"></i>
+            <span class="sp-name">GitHub</span>
+            <span v-if="settingsStore.data.socialProviders?.github?.clientId" class="badge bs">Configured</span>
+            <span v-else class="badge bw">Not configured</span>
+            <i class="fas fa-chevron-down sp-chevron" :class="{rotated: expandedProvider === 'github'}"></i>
+          </div>
+          <div v-if="expandedProvider === 'github'" class="sp-body">
+            <details class="setup-guide">
+              <summary>Setup Guide (1 minute — easiest option)</summary>
+              <ol>
+                <li>Go to <a href="https://github.com/settings/developers" target="_blank">GitHub → Settings → Developer Settings → OAuth Apps</a></li>
+                <li>Click <strong>"New OAuth App"</strong></li>
+                <li>Application name: <code>NOBA</code></li>
+                <li>Homepage URL: your NOBA URL (e.g., <code>http://noba.local:8080</code>)</li>
+                <li>Authorization callback URL: <code>{{ callbackUrl('github') }}</code></li>
+                <li>Click <strong>Register</strong>, then <strong>"Generate a new client secret"</strong></li>
+                <li>Copy Client ID and Client Secret below</li>
+              </ol>
+              <p style="color:var(--success);font-size:.75rem;margin-top:.5rem">
+                <i class="fas fa-check-circle"></i> GitHub works with HTTP and localhost — no review needed. Best option for quick setup.
+              </p>
+            </details>
+            <div class="field-2" style="margin-top:.75rem">
+              <div>
+                <label class="field-label">Client ID</label>
+                <input class="field-input" type="text" v-model="socialProviders.github.clientId" placeholder="Iv1.abc123def456">
+              </div>
+              <div>
+                <label class="field-label">Client Secret</label>
+                <div class="reveal-wrap">
+                  <input class="field-input" type="password" v-model="socialProviders.github.clientSecret" autocomplete="off">
+                  <button type="button" class="reveal-btn" @click="toggleReveal"><i class="fas fa-eye"></i></button>
+                </div>
+              </div>
+            </div>
+            <div class="sp-callback">
+              <label class="field-label">Callback URL</label>
+              <code class="callback-url">{{ callbackUrl('github') }}</code>
+            </div>
+          </div>
+        </div>
+
+        <!-- Microsoft -->
+        <div class="social-provider-card">
+          <div class="sp-header" @click="expandedProvider = expandedProvider === 'microsoft' ? '' : 'microsoft'">
+            <i class="fab fa-microsoft" style="color:#00a4ef;font-size:1.2rem"></i>
+            <span class="sp-name">Microsoft</span>
+            <span v-if="settingsStore.data.socialProviders?.microsoft?.clientId" class="badge bs">Configured</span>
+            <span v-else class="badge bw">Not configured</span>
+            <i class="fas fa-chevron-down sp-chevron" :class="{rotated: expandedProvider === 'microsoft'}"></i>
+          </div>
+          <div v-if="expandedProvider === 'microsoft'" class="sp-body">
+            <details class="setup-guide">
+              <summary>Setup Guide (3 minutes)</summary>
+              <ol>
+                <li>Go to <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Azure Portal → App Registrations</a></li>
+                <li>Click <strong>"New registration"</strong></li>
+                <li>Name: <code>NOBA</code></li>
+                <li>Supported account types: <strong>"Accounts in any organizational directory and personal Microsoft accounts"</strong></li>
+                <li>Redirect URI: Web → <code>{{ callbackUrl('microsoft') }}</code></li>
+                <li>Click <strong>Register</strong></li>
+                <li>Copy the <strong>Application (client) ID</strong> from the overview page</li>
+                <li>Go to <strong>Certificates & secrets</strong> → <strong>"New client secret"</strong> → copy the <strong>Value</strong> (not the ID)</li>
+              </ol>
+            </details>
+            <div class="field-2" style="margin-top:.75rem">
+              <div>
+                <label class="field-label">Application (Client) ID</label>
+                <input class="field-input" type="text" v-model="socialProviders.microsoft.clientId"
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+              </div>
+              <div>
+                <label class="field-label">Client Secret Value</label>
+                <div class="reveal-wrap">
+                  <input class="field-input" type="password" v-model="socialProviders.microsoft.clientSecret" autocomplete="off">
+                  <button type="button" class="reveal-btn" @click="toggleReveal"><i class="fas fa-eye"></i></button>
+                </div>
+              </div>
+            </div>
+            <div class="sp-callback">
+              <label class="field-label">Callback URL</label>
+              <code class="callback-url">{{ callbackUrl('microsoft') }}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generic SSO / OIDC (advanced) -->
+      <div class="s-section">
+        <span class="s-label">Custom SSO / OIDC (Advanced)</span>
+        <p style="color:var(--text-muted);font-size:.8rem;margin:0 0 .75rem">
+          For Authentik, Keycloak, Authelia, or any OpenID Connect provider not listed above.
+        </p>
         <div class="field-2">
           <div>
             <label class="field-label">Provider URL</label>
@@ -1157,4 +1379,79 @@ const cats = [
 .instance-row { display: flex; align-items: center; gap: .75rem; padding: .5rem .75rem; background: var(--surface-2); border-radius: 6px; flex-wrap: wrap; }
 .instance-id { font-weight: 600; }
 .text-muted { color: var(--text-muted); font-size: .85rem; }
+
+/* Social provider cards */
+.social-provider-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: .5rem;
+  overflow: hidden;
+}
+.sp-header {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  cursor: pointer;
+  transition: background .15s;
+}
+.sp-header:hover { background: var(--surface-2); }
+.sp-name { font-weight: 600; flex: 1; }
+.sp-chevron {
+  font-size: .7rem;
+  color: var(--text-muted);
+  transition: transform .2s;
+}
+.sp-chevron.rotated { transform: rotate(180deg); }
+.sp-body {
+  padding: .75rem 1rem 1rem;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+.setup-guide {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .5rem .75rem;
+}
+.setup-guide summary {
+  cursor: pointer;
+  font-size: .85rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+.setup-guide ol {
+  margin: .5rem 0 0;
+  padding-left: 1.2rem;
+  font-size: .8rem;
+  line-height: 1.7;
+  color: var(--text);
+}
+.setup-guide ol code {
+  background: var(--surface-2);
+  padding: .1rem .3rem;
+  border-radius: 3px;
+  font-family: var(--font-data);
+  font-size: .75rem;
+  user-select: all;
+}
+.setup-guide a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.sp-callback {
+  margin-top: .75rem;
+}
+.callback-url {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .4rem .6rem;
+  font-family: var(--font-data);
+  font-size: .75rem;
+  color: var(--accent);
+  user-select: all;
+  word-break: break-all;
+}
 </style>
