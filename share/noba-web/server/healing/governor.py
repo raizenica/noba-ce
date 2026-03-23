@@ -22,7 +22,7 @@ def effective_trust(rule_id: str, source: str, db) -> str:
     if not state:
         return "notify"
     level = state["current_level"]
-    if source == "prediction":
+    if source in ("prediction", "anomaly", "health_score"):
         level = _LEVEL_BELOW.get(level, "notify")
     return level
 

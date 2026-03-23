@@ -196,6 +196,21 @@ class Scheduler:
         # Every tick (60s), auto-approve expired pending approvals and execute them
         self._process_auto_approvals()
 
+        # Every 15 minutes: run predictive healing evaluation
+        if now.minute % 15 == 0:
+            try:
+                from .healing.predictive import run_predictive_cycle
+                from .healing import get_pipeline
+
+                events = run_predictive_cycle()
+                if events:
+                    pipeline = get_pipeline()
+                    for event in events:
+                        pipeline.handle_heal_event(event)
+                    logger.info("Predictive: fed %d event(s) into pipeline", len(events))
+            except Exception as exc:
+                logger.error("Predictive cycle failed: %s", exc)
+
         # Hourly: generate heal suggestions and evaluate trust promotions
         if now.minute == 0:  # once per hour
             try:
@@ -212,6 +227,23 @@ class Scheduler:
                 run_auto_discovery(db)
             except Exception as exc:
                 logger.error("Heal suggestion generation failed: %s", exc)
+
+            # Hourly: evaluate health score thresholds
+            try:
+                from .healing.health_triggers import evaluate_health_thresholds
+                from .healing import get_pipeline as _get_pipeline
+                suggestions, events = evaluate_health_thresholds(db)
+                if suggestions:
+                    for s in suggestions:
+                        db.insert_heal_suggestion(**s)
+                    logger.info("Health triggers: %d suggestion(s)", len(suggestions))
+                if events:
+                    _pipeline = _get_pipeline()
+                    for event in events:
+                        _pipeline.handle_heal_event(event)
+                    logger.info("Health triggers: fed %d event(s) into pipeline", len(events))
+            except Exception as exc:
+                logger.error("Health score trigger evaluation failed: %s", exc)
 
     def _process_auto_approvals(self) -> None:
         """Auto-approve any pending approvals past their auto_approve_at time,
