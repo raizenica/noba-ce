@@ -531,6 +531,10 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
                 )
                 # Build rules config from alert rule
                 chain = rule.get("escalation_chain", [])
+                if not chain:
+                    # Try default chain based on rule_id pattern
+                    from .healing.default_rules import get_chain_for_rule_id
+                    chain = get_chain_for_rule_id(rule_id) or []
                 if not chain and action_cfg:
                     # Legacy: single action, wrap as chain
                     chain = [{"action": action_cfg.get("type", ""), "params": {k: v for k, v in action_cfg.items() if k != "type"}}]
@@ -579,6 +583,9 @@ def build_threshold_alerts(stats: dict, read_settings_fn) -> list:
         if p >= 90:
             alerts.append({"level": "danger",  "msg": f"Disk {mount} at {p}%"})
             send_notification("danger",  f"Disk {mount} at {p}%", f"disk_crit_{mount}", read_settings_fn)
+            _emit_threshold_heal_event(
+                f"disk_crit_{mount}", "disk_percent >= 90", mount, "danger", stats,
+            )
         elif p >= 80:
             alerts.append({"level": "warning", "msg": f"Disk {mount} at {p}%"})
             send_notification("warning", f"Disk {mount} at {p}%", f"disk_high_{mount}", read_settings_fn)
@@ -587,6 +594,10 @@ def build_threshold_alerts(stats: dict, read_settings_fn) -> list:
         if svc.get("status") == "failed":
             alerts.append({"level": "danger", "msg": f"Service failed: {svc['name']}"})
             send_notification("danger", f"Service failed: {svc['name']}", f"svc_{svc['name']}", read_settings_fn)
+            _emit_threshold_heal_event(
+                f"svc_{svc['name']}", "service_status == failed",
+                svc["name"], "danger", stats,
+            )
 
     tn = stats.get("truenas")
     if tn and tn.get("status") == "online":
@@ -597,7 +608,50 @@ def build_threshold_alerts(stats: dict, read_settings_fn) -> list:
                 alerts.append({"level": lvl, "msg": f"TrueNAS: {txt}"})
                 send_notification(lvl, f"TrueNAS: {txt}", f"tn_{txt[:20]}", read_settings_fn)
 
+    # Emit heal events for CPU/disk threshold breaches
+    if cpu > 90:
+        _emit_threshold_heal_event("cpu_crit", "cpuPercent > 90", "system", "danger", stats)
+    if stats.get("memPercent", 0) > 90:
+        _emit_threshold_heal_event(
+            "mem_crit", "memPercent > 90", "system", "danger", stats,
+        )
+
     return alerts
+
+
+def _emit_threshold_heal_event(
+    rule_id: str, condition: str, target: str, severity: str, stats: dict,
+) -> None:
+    """Feed a built-in threshold alert into the healing pipeline.
+
+    Uses default escalation chains from healing.default_rules.
+    Events go through the full pipeline: correlation, dependency check,
+    trust governor, pre-flight, execution, verification.
+    """
+    try:
+        from .healing import get_pipeline
+        from .healing.models import HealEvent
+        from .healing.default_rules import get_chain_for_rule_id
+
+        chain = get_chain_for_rule_id(rule_id)
+        if not chain:
+            return  # no default chain for this scenario
+
+        event = HealEvent(
+            source="threshold",
+            rule_id=rule_id,
+            condition=condition,
+            target=target,
+            severity=severity,
+            timestamp=time.time(),
+            metrics=dict(stats) if isinstance(stats, dict) else {},
+        )
+
+        pipeline = get_pipeline()
+        pipeline.update_rule_config(rule_id, {"escalation_chain": chain})
+        pipeline.handle_heal_event(event)
+    except Exception as exc:
+        logger.debug("Threshold heal event failed for %s: %s", rule_id, exc)
 
 
 # ── Historical anomaly detection ─────────────────────────────────────────────
