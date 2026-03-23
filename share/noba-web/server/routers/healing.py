@@ -82,6 +82,22 @@ async def api_promote_trust(rule_id: str, request: Request, auth=Depends(_requir
     return {"success": True, "rule_id": rule_id, "new_level": target_level}
 
 
+@router.post("/api/healing/trust/{rule_id}/demote")
+async def api_demote_trust(rule_id: str, request: Request, auth=Depends(_require_admin)):
+    from ..deps import _read_body
+    body = await _read_body(request)
+    target_level = body.get("level", "notify")
+    if target_level not in ("notify", "approve"):
+        raise HTTPException(400, "level must be 'notify' or 'approve'")
+    state = db.get_trust_state(rule_id)
+    if not state:
+        raise HTTPException(404, f"No trust state for rule: {rule_id}")
+    db.upsert_trust_state(rule_id, target_level, state["ceiling"])
+    username, _ = auth
+    db.audit_log("trust_demote", username, f"{rule_id}: {state['current_level']} -> {target_level}")
+    return {"success": True, "rule_id": rule_id, "new_level": target_level}
+
+
 @router.get("/api/healing/capabilities/{hostname}")
 def api_get_capabilities(hostname: str, auth=Depends(_get_auth)):
     """Return the capability manifest for a given agent hostname."""
