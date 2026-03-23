@@ -48,14 +48,26 @@
       </button>
 
       <!-- Social / SSO login -->
-      <div v-if="providers.length" style="text-align:center;margin-top:12px">
+      <div style="text-align:center;margin-top:12px">
         <div style="color:var(--text-dim);font-size:.75rem;margin-bottom:8px">— or sign in with —</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">
+          <!-- Configured providers (clickable) -->
           <a v-for="p in providers" :key="p.id" :href="p.url" class="btn btn-sm social-btn">
             <i :class="['fab', providerIcon(p.id)]" v-if="isFab(p.id)"></i>
             <i :class="['fas', providerIcon(p.id)]" v-else></i>
             {{ p.name }}
           </a>
+          <!-- Unconfigured providers (greyed out, show what's possible) -->
+          <template v-if="!providers.length">
+            <span v-for="p in availableProviders" :key="p.id"
+              class="btn btn-sm social-btn social-disabled" :title="`Configure ${p.name} in Settings → Auth`">
+              <i :class="['fab', providerIcon(p.id)]"></i>
+              {{ p.name }}
+            </span>
+          </template>
+        </div>
+        <div v-if="!providers.length" style="color:var(--text-dim);font-size:.65rem;margin-top:6px">
+          Configure in Settings → Auth &amp; Security
         </div>
       </div>
     </form>
@@ -97,6 +109,13 @@ function isFab(id) {
   return ['google', 'facebook', 'github', 'microsoft'].includes(id)
 }
 
+const availableProviders = [
+  { id: 'google', name: 'Google' },
+  { id: 'facebook', name: 'Facebook' },
+  { id: 'github', name: 'GitHub' },
+  { id: 'microsoft', name: 'Microsoft' },
+]
+
 async function handleLogin() {
   if (loading.value) return
   error.value = ''
@@ -117,3 +136,18 @@ async function handleLogin() {
   }
 }
 </script>
+
+<style scoped>
+.social-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 100px;
+  justify-content: center;
+}
+.social-disabled {
+  opacity: .35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+</style>
