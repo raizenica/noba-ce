@@ -99,11 +99,22 @@ AGENT_CAPABILITIES: dict[str, frozenset[str]] = {
 def get_agent_capabilities(version: str) -> frozenset[str]:
     """Return the set of commands supported by *version*.
 
-    Handles both "2.0.0" and "v2.0.0" formats.
-    Falls back to the v1.1.0 baseline for unknown versions so that
-    callers always receive a safe, non-empty capability set.
+    Handles both "2.0.0" and "v2.0.0" formats.  For unknown versions
+    >= 2.0.0 (e.g. a newer agent), assume full v2 capabilities rather
+    than falling back to the restrictive v1.1.0 baseline.
     """
-    return AGENT_CAPABILITIES.get(version, AGENT_CAPABILITIES.get(f"v{version}", _V1_COMMANDS))
+    caps = AGENT_CAPABILITIES.get(version) or AGENT_CAPABILITIES.get(f"v{version}")
+    if caps:
+        return caps
+    # Parse version to decide fallback: >= 2.0.0 gets v2 commands
+    raw = version.lstrip("v")
+    try:
+        major = int(raw.split(".")[0])
+        if major >= 2:
+            return _V2_COMMANDS
+    except (ValueError, IndexError):
+        pass
+    return _V1_COMMANDS
 
 
 # ── Validation helpers ─────────────────────────────────────────────────────────

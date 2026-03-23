@@ -15,6 +15,8 @@
     - [Docker on Proxmox VE](#docker-on-proxmox-ve--containers-fail-to-start-or-crash-immediately)
     - [Self-update shows "Git repository not found"](#self-update-shows-git-repository-not-found)
 11. [Agent commands stuck in "queued"](#11-agent-commands-stuck-in-queued)
+    - [Agent commands rejected with "does not support"](#agent-commands-rejected-with-does-not-support-even-though-agent-is-recent)
+    - [Endpoint monitor times out for local NOBA URL](#11a-endpoint-monitor-shows-down-or-times-out-for-local-noba-url)
 12. [Dashboard layout corruption after navigation](#12-dashboard-layout-corruption-after-navigation)
 13. [Browser shows stale UI after update](#13-browser-shows-stale-ui-after-update)
 14. [Log analysis tips](#14-log-analysis-tips)
@@ -522,6 +524,48 @@ sudo systemctl restart noba-agent
 | All commands stuck | Agent version mismatch with WebSocket result format | Update agent from dashboard or manually |
 | Some commands work (via HTTP) but not WebSocket ones | Server doesn't recognize old-format results | Update both server and agent |
 | "Sending..." button never clears | Frontend JS error (stale cached files) | Hard refresh: Ctrl+Shift+R |
+
+### Agent commands rejected with "does not support" even though agent is recent
+
+**Symptom:** Commands like `system_info`, `disk_usage`, `container_list` are rejected with `Agent v2.x.0 does not support 'system_info'`, even though the agent is running a recent version.
+
+**Cause:** The server's agent capability registry (`agent_config.py`) maps specific version strings to command sets. If the agent reports a version that isn't explicitly listed (e.g. v2.3.0 when the registry only has entries up to v2.1.0), the server falls back to the v1.1.0 command baseline which only includes 9 basic commands.
+
+**Fix:** Update the NOBA server. Recent versions include a smarter fallback that treats any agent >= v2.0.0 as having full v2 capabilities, even for versions not explicitly listed in the registry.
+
+To verify the current capability lookup for your agent version:
+```bash
+python3 -c "
+import sys; sys.path.insert(0, '/path/to/noba/share/noba-web')
+from server.agent_config import get_agent_capabilities
+caps = get_agent_capabilities('YOUR_AGENT_VERSION')
+print(f'{len(caps)} commands available')
+print('system_info' in caps, 'disk_usage' in caps, 'container_list' in caps)
+"
+```
+
+---
+
+## 11a. Endpoint monitor shows "down" or times out for local NOBA URL
+
+### Symptom
+An endpoint monitor targeting NOBA's own health endpoint (e.g. `http://127.0.0.1:8080/api/health`) always shows "down" with a timeout error, even though the endpoint works fine when accessed directly.
+
+### Cause
+This is a self-referential deadlock. The endpoint checker runs inside the same uvicorn process that serves the API. When it makes an HTTP request back to itself, the request blocks waiting for a worker thread, but all workers are occupied — creating a deadlock that runs until the timeout.
+
+### Fix
+Recent versions of NOBA detect self-referential URLs and return a `"skipped"` status with a clear error message instead of deadlocking. The monitor will report:
+
+```
+Self-referential: this monitor targets the same NOBA instance.
+Assign an agent or use an external checker.
+```
+
+To monitor NOBA itself, use one of these approaches:
+- **Assign an agent**: Set the `agent_hostname` field on the monitor so the check is performed by the agent, not the server
+- **External monitoring**: Use a second NOBA instance, Uptime Kuma, or any external tool to check the endpoint
+- **Status page**: Use NOBA's built-in status page components instead, which don't rely on HTTP checks
 
 ---
 

@@ -444,6 +444,38 @@ def _run_endpoint_check(monitor: dict) -> dict:
     if agent_hostname:
         return _dispatch_agent_endpoint_check(monitor)
 
+    # Detect self-referential URLs that would deadlock when called from
+    # within the same uvicorn process (manual check via API).
+    from .config import PORT
+    parsed_check = urllib.parse.urlparse(url)
+    check_host = (parsed_check.hostname or "").lower()
+    check_port = parsed_check.port or (443 if parsed_check.scheme == "https" else 80)
+    _self_hosts = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+    try:
+        import socket as _sock
+        _self_hosts.add(_sock.gethostname().lower())
+        _self_hosts.add(_sock.getfqdn().lower())
+    except Exception:
+        pass
+    if check_host in _self_hosts and check_port == PORT:
+        logger.warning("Endpoint '%s' targets this NOBA instance — "
+                       "skipping to avoid self-referential deadlock", monitor.get("name"))
+        db.record_endpoint_check(
+            monitor["id"], status="skipped", response_ms=0, status_code=0,
+            cert_expiry_days=None,
+            error="Self-referential: monitors targeting this NOBA instance "
+                  "are skipped to prevent deadlocks. Use an external NOBA "
+                  "instance or agent to monitor this server.",
+        )
+        return {
+            "last_status": "skipped",
+            "last_response_ms": 0,
+            "status_code": 0,
+            "cert_expiry_days": None,
+            "error": "Self-referential: this monitor targets the same NOBA "
+                     "instance. Assign an agent or use an external checker.",
+        }
+
     # Run locally on the server
     result: dict = {}
     start = time.time()
