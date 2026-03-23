@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    fastapi 'uvicorn[standard]' psutil pyyaml httpx websocket-client
+    fastapi 'uvicorn[standard]' psutil pyyaml httpx websocket-client cryptography
 
 # Create non-root user
 RUN groupadd -r noba && useradd -r -g noba -d /app -s /bin/bash -m noba

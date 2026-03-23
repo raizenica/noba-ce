@@ -170,6 +170,12 @@ from .status_page import (  # noqa: F401
     update_status_incident as _update_status_incident,
 )
 
+from .linked_providers import (
+    find_user_by_provider as _find_user_by_provider,
+    get_linked_providers as _get_linked_providers,
+    link_provider as _link_provider,
+    unlink_provider as _unlink_provider,
+)
 from .healing import (
     insert_heal_outcome as _insert_heal_outcome,
     get_heal_outcomes as _get_heal_outcomes,
@@ -219,8 +225,10 @@ class Database:
 
     def __init__(self, path: str = HISTORY_DB) -> None:
         self._path = path
-        self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()           # write lock (protects write conn)
+        self._read_lock = threading.Lock()       # read lock (protects read conn)
+        self._conn: sqlite3.Connection | None = None        # write connection
+        self._read_conn: sqlite3.Connection | None = None   # read connection
         self._init_schema()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -242,6 +250,36 @@ class Database:
                 self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL;")
                 self._conn.execute("VACUUM;")  # one-time migration to enable it
         return self._conn
+
+    def _get_read_conn(self) -> sqlite3.Connection:
+        """Return a read-only connection for concurrent reads.
+
+        WAL mode allows multiple readers without blocking writers.
+        This connection should NEVER be used for writes.
+
+        For in-memory databases (:memory:), falls back to the write
+        connection since each :memory: connect() creates a separate DB.
+        """
+        if self._path == ":memory:":
+            return self._get_conn()
+        if self._read_conn is None:
+            self._read_conn = sqlite3.connect(
+                self._path, check_same_thread=False,
+                isolation_level=None,  # autocommit: each SELECT sees latest data
+            )
+            self._read_conn.execute("PRAGMA journal_mode=WAL;")
+            self._read_conn.execute("PRAGMA synchronous=NORMAL;")
+            self._read_conn.execute("PRAGMA busy_timeout=5000;")
+            self._read_conn.execute("PRAGMA query_only=ON;")  # safety: prevent writes
+        return self._read_conn
+
+    def execute_read(self, fn):
+        """Execute a read operation without acquiring the write lock.
+
+        Uses a separate connection that benefits from WAL concurrent reads.
+        """
+        conn = self._get_read_conn()
+        return fn(conn)
 
     def execute_write(self, fn):
         """Execute a write operation with proper lock + connection isolation.
@@ -838,7 +876,7 @@ class Database:
     def get_history(self, metric: str, range_hours: int = 24,
                     resolution: int = 60, anomaly: bool = False,
                     raw: bool = False) -> list[dict]:
-        return _get_history(self._get_conn(), self._lock, metric,
+        return _get_history(self._get_read_conn(), self._read_lock, metric,
                             range_hours=range_hours, resolution=resolution,
                             anomaly=anomaly, raw=raw)
 
@@ -847,7 +885,7 @@ class Database:
 
     def get_trend(self, metric: str, range_hours: int = 168,
                   projection_hours: int = 168) -> dict:
-        return _get_trend(self._get_conn(), self._lock, metric,
+        return _get_trend(self._get_read_conn(), self._read_lock, metric,
                           range_hours=range_hours, projection_hours=projection_hours)
 
     def rollup_to_1m(self) -> None:
@@ -872,12 +910,12 @@ class Database:
 
     def get_audit(self, limit: int = 100, username_filter: str = "",
                   action_filter: str = "", from_ts: int = 0, to_ts: int = 0) -> list[dict]:
-        return _get_audit(self._get_conn(), self._lock, limit=limit,
+        return _get_audit(self._get_read_conn(), self._read_lock, limit=limit,
                           username_filter=username_filter, action_filter=action_filter,
                           from_ts=from_ts, to_ts=to_ts)
 
     def get_login_history(self, username: str, limit: int = 30) -> list[dict]:
-        return _get_login_history(self._get_conn(), self._lock, username, limit=limit)
+        return _get_login_history(self._get_read_conn(), self._read_lock, username, limit=limit)
 
     def prune_audit(self) -> None:
         _prune_audit(self._get_conn(), self._lock)
@@ -896,10 +934,10 @@ class Database:
         return _delete_automation(self._get_conn(), self._lock, auto_id)
 
     def list_automations(self, type_filter: str | None = None) -> list[dict]:
-        return _list_automations(self._get_conn(), self._lock, type_filter=type_filter)
+        return _list_automations(self._get_read_conn(), self._read_lock, type_filter=type_filter)
 
     def get_automation(self, auto_id: str) -> dict | None:
-        return _get_automation(self._get_conn(), self._lock, auto_id)
+        return _get_automation(self._get_read_conn(), self._read_lock, auto_id)
 
     # ── Job Runs ──────────────────────────────────────────────────────────────
     def insert_job_run(self, automation_id: str | None, trigger: str,
@@ -913,17 +951,17 @@ class Database:
 
     def get_job_runs(self, automation_id: str | None = None, limit: int = 50,
                      status: str | None = None, trigger_prefix: str | None = None) -> list[dict]:
-        return _get_job_runs(self._get_conn(), self._lock, automation_id=automation_id,
+        return _get_job_runs(self._get_read_conn(), self._read_lock, automation_id=automation_id,
                              limit=limit, status=status, trigger_prefix=trigger_prefix)
 
     def get_job_run(self, run_id: int) -> dict | None:
-        return _get_job_run(self._get_conn(), self._lock, run_id)
+        return _get_job_run(self._get_read_conn(), self._read_lock, run_id)
 
     def get_automation_stats(self) -> dict:
-        return _get_automation_stats(self._get_conn(), self._lock)
+        return _get_automation_stats(self._get_read_conn(), self._read_lock)
 
     def get_workflow_trace(self, workflow_auto_id: str, limit: int = 20) -> list[dict]:
-        return _get_workflow_trace(self._get_conn(), self._lock, workflow_auto_id, limit=limit)
+        return _get_workflow_trace(self._get_read_conn(), self._read_lock, workflow_auto_id, limit=limit)
 
     def prune_job_runs(self) -> None:
         _prune_job_runs(self._get_conn(), self._lock)
@@ -937,14 +975,14 @@ class Database:
 
     def get_alert_history(self, limit: int = 100, rule_id: str | None = None,
                           from_ts: int = 0, to_ts: int = 0) -> list[dict]:
-        return _get_alert_history(self._get_conn(), self._lock, limit=limit,
+        return _get_alert_history(self._get_read_conn(), self._read_lock, limit=limit,
                                   rule_id=rule_id, from_ts=from_ts, to_ts=to_ts)
 
     def resolve_alert(self, rule_id: str) -> None:
         _resolve_alert(self._get_conn(), self._lock, rule_id)
 
     def get_sla(self, rule_id: str, window_hours: int = 720) -> float:
-        return _get_sla(self._get_conn(), self._lock, rule_id, window_hours=window_hours)
+        return _get_sla(self._get_read_conn(), self._read_lock, rule_id, window_hours=window_hours)
 
     # ── API Keys ──────────────────────────────────────────────────────────────
     def insert_api_key(self, key_id: str, name: str, key_hash: str,
@@ -953,10 +991,11 @@ class Database:
                         role, expires_at=expires_at)
 
     def get_api_key(self, key_hash: str) -> dict | None:
+        # NOTE: get_api_key updates last_used — it's a write operation
         return _get_api_key(self._get_conn(), self._lock, key_hash)
 
     def list_api_keys(self) -> list[dict]:
-        return _list_api_keys(self._get_conn(), self._lock)
+        return _list_api_keys(self._get_read_conn(), self._read_lock)
 
     def delete_api_key(self, key_id: str) -> bool:
         return _delete_api_key(self._get_conn(), self._lock, key_id)
@@ -971,13 +1010,13 @@ class Database:
         _delete_token(self._get_conn(), self._lock, token_hash)
 
     def get_token(self, token_hash: str) -> dict | None:
-        return _get_token(self._get_conn(), self._lock, token_hash)
+        return _get_token(self._get_read_conn(), self._read_lock, token_hash)
 
     def cleanup_tokens(self) -> None:
         _cleanup_tokens(self._get_conn(), self._lock)
 
     def load_tokens(self) -> list[dict]:
-        return _load_tokens(self._get_conn(), self._lock)
+        return _load_tokens(self._get_read_conn(), self._read_lock)
 
     # ── WAL checkpoint ────────────────────────────────────────────────────────
     def wal_checkpoint(self) -> None:
@@ -993,7 +1032,7 @@ class Database:
 
     def get_notifications(self, username: str | None = None,
                           unread_only: bool = False, limit: int = 50) -> list[dict]:
-        return _get_notifications(self._get_conn(), self._lock, username=username,
+        return _get_notifications(self._get_read_conn(), self._read_lock, username=username,
                                   unread_only=unread_only, limit=limit)
 
     def mark_notification_read(self, notif_id: int, username: str) -> None:
@@ -1003,7 +1042,7 @@ class Database:
         _mark_all_notifications_read(self._get_conn(), self._lock, username)
 
     def get_unread_count(self, username: str) -> int:
-        return _get_unread_count(self._get_conn(), self._lock, username)
+        return _get_unread_count(self._get_read_conn(), self._read_lock, username)
 
     # ── User Dashboards ───────────────────────────────────────────────────────
     def save_user_dashboard(self, username: str, card_order: list | None = None,
@@ -1013,11 +1052,11 @@ class Database:
                              card_order=card_order, card_vis=card_vis, card_theme=card_theme)
 
     def get_user_dashboard(self, username: str) -> dict | None:
-        return _get_user_dashboard(self._get_conn(), self._lock, username)
+        return _get_user_dashboard(self._get_read_conn(), self._read_lock, username)
 
     # ── User Preferences (Feature 10: Multi-user Dashboard Views) ────────────
     def get_user_preferences(self, username: str) -> dict | None:
-        return _get_user_preferences(self._get_conn(), self._lock, username)
+        return _get_user_preferences(self._get_read_conn(), self._read_lock, username)
 
     def save_user_preferences(self, username: str, preferences: dict) -> bool:
         return _save_user_preferences(self._get_conn(), self._lock, username, preferences)
@@ -1031,7 +1070,7 @@ class Database:
                                 details=details)
 
     def get_incidents(self, limit: int = 100, hours: int = 24) -> list[dict]:
-        return _get_incidents(self._get_conn(), self._lock, limit=limit, hours=hours)
+        return _get_incidents(self._get_read_conn(), self._read_lock, limit=limit, hours=hours)
 
     def resolve_incident(self, incident_id: int) -> bool:
         return _resolve_incident(self._get_conn(), self._lock, incident_id)
@@ -1042,7 +1081,7 @@ class Database:
         _upsert_agent(self._get_conn(), self._lock, hostname, ip, platform_name, arch, agent_version)
 
     def get_all_agents(self) -> list[dict]:
-        return _get_all_agents(self._get_conn(), self._lock)
+        return _get_all_agents(self._get_read_conn(), self._read_lock)
 
     def delete_agent(self, hostname: str) -> None:
         _delete_agent(self._get_conn(), self._lock, hostname)
@@ -1103,8 +1142,8 @@ class Database:
                 params.append(hostname)
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             params.append(limit)
-            with self._lock:
-                conn = self._get_conn()
+            with self._read_lock:
+                conn = self._get_read_conn()
                 rows = conn.execute(
                     "SELECT id, hostname, cmd_type, params, queued_by, "
                     "queued_at, status, result, finished_at "
@@ -1132,10 +1171,10 @@ class Database:
         return _create_monitor(self._get_conn(), self._lock, name, url, **kwargs)
 
     def get_endpoint_monitors(self, *, enabled_only: bool = False) -> list[dict]:
-        return _get_monitors(self._get_conn(), self._lock, enabled_only=enabled_only)
+        return _get_monitors(self._get_read_conn(), self._read_lock, enabled_only=enabled_only)
 
     def get_endpoint_monitor(self, monitor_id: int) -> dict | None:
-        return _get_monitor(self._get_conn(), self._lock, monitor_id)
+        return _get_monitor(self._get_read_conn(), self._read_lock, monitor_id)
 
     def update_endpoint_monitor(self, monitor_id: int, **kwargs) -> bool:
         return _update_monitor(self._get_conn(), self._lock, monitor_id, **kwargs)
@@ -1147,7 +1186,7 @@ class Database:
         _record_check_result(self._get_conn(), self._lock, monitor_id, **kwargs)
 
     def get_due_endpoint_monitors(self) -> list[dict]:
-        return _get_due_monitors(self._get_conn(), self._lock)
+        return _get_due_monitors(self._get_read_conn(), self._read_lock)
 
     def record_endpoint_check_history(self, monitor_id: int, status: str,
                                        response_ms: int | None = None,
@@ -1158,16 +1197,16 @@ class Database:
 
     def get_endpoint_check_history(self, monitor_id: int,
                                     hours: int = 720) -> list[dict]:
-        return _get_endpoint_check_history(self._get_conn(), self._lock,
+        return _get_endpoint_check_history(self._get_read_conn(), self._read_lock,
                                            monitor_id, hours=hours)
 
     def get_endpoint_uptime(self, monitor_id: int, hours: int = 720) -> float:
-        return _get_endpoint_uptime(self._get_conn(), self._lock,
+        return _get_endpoint_uptime(self._get_read_conn(), self._read_lock,
                                     monitor_id, hours=hours)
 
     def get_endpoint_avg_latency(self, monitor_id: int,
                                   hours: int = 720) -> float | None:
-        return _get_endpoint_avg_latency(self._get_conn(), self._lock,
+        return _get_endpoint_avg_latency(self._get_read_conn(), self._read_lock,
                                          monitor_id, hours=hours)
 
     def prune_endpoint_check_history(self, days: int = 90) -> None:
@@ -1180,10 +1219,10 @@ class Database:
                                  config_json, shared=shared)
 
     def get_dashboards(self, owner: str | None = None) -> list[dict]:
-        return _get_dashboards(self._get_conn(), self._lock, owner=owner)
+        return _get_dashboards(self._get_read_conn(), self._read_lock, owner=owner)
 
     def get_dashboard(self, dashboard_id: int) -> dict | None:
-        return _get_dashboard(self._get_conn(), self._lock, dashboard_id)
+        return _get_dashboard(self._get_read_conn(), self._read_lock, dashboard_id)
 
     def update_dashboard(self, dashboard_id: int, **kwargs) -> bool:
         return _update_dashboard(self._get_conn(), self._lock, dashboard_id, **kwargs)
@@ -1200,7 +1239,7 @@ class Database:
                                         display_order=display_order)
 
     def list_status_components(self) -> list[dict]:
-        return _list_status_components(self._get_conn(), self._lock)
+        return _list_status_components(self._get_read_conn(), self._read_lock)
 
     def update_status_component(self, comp_id: int, **kwargs) -> bool:
         return _update_status_component(self._get_conn(), self._lock, comp_id, **kwargs)
@@ -1216,11 +1255,11 @@ class Database:
 
     def list_status_incidents(self, limit: int = 50,
                               include_resolved: bool = True) -> list[dict]:
-        return _list_status_incidents(self._get_conn(), self._lock, limit=limit,
+        return _list_status_incidents(self._get_read_conn(), self._read_lock, limit=limit,
                                       include_resolved=include_resolved)
 
     def get_status_incident(self, incident_id: int) -> dict | None:
-        return _get_status_incident(self._get_conn(), self._lock, incident_id)
+        return _get_status_incident(self._get_read_conn(), self._read_lock, incident_id)
 
     def update_status_incident(self, incident_id: int, **kwargs) -> bool:
         return _update_status_incident(self._get_conn(), self._lock, incident_id, **kwargs)
@@ -1237,7 +1276,7 @@ class Database:
                                         created_by=created_by)
 
     def get_status_uptime_history(self, days: int = 90) -> list[dict]:
-        return _get_status_uptime_history(self._get_conn(), self._lock, days=days)
+        return _get_status_uptime_history(self._get_read_conn(), self._read_lock, days=days)
 
     # ── Incident War Room ────────────────────────────────────────────────────
     def add_incident_message(self, incident_id: int, author: str,
@@ -1247,7 +1286,7 @@ class Database:
 
     def get_incident_messages(self, incident_id: int,
                               limit: int = 200) -> list[dict]:
-        return _get_incident_messages(self._get_conn(), self._lock, incident_id,
+        return _get_incident_messages(self._get_read_conn(), self._read_lock, incident_id,
                                       limit=limit)
 
     def assign_incident(self, incident_id: int, assigned_to: str) -> bool:
@@ -1260,20 +1299,20 @@ class Database:
         return _record_scan(self._get_conn(), self._lock, hostname, score, findings)
 
     def get_security_scores(self) -> list[dict]:
-        return _get_latest_scores(self._get_conn(), self._lock)
+        return _get_latest_scores(self._get_read_conn(), self._read_lock)
 
     def get_security_findings(self, hostname: str | None = None,
                               severity: str | None = None,
                               limit: int = 200) -> list[dict]:
-        return _get_findings(self._get_conn(), self._lock,
+        return _get_findings(self._get_read_conn(), self._read_lock,
                              hostname=hostname, severity=severity, limit=limit)
 
     def get_aggregate_security_score(self) -> dict:
-        return _get_aggregate_score(self._get_conn(), self._lock)
+        return _get_aggregate_score(self._get_read_conn(), self._read_lock)
 
     def get_security_score_history(self, hostname: str | None = None,
                                    limit: int = 50) -> list[dict]:
-        return _get_score_history(self._get_conn(), self._lock,
+        return _get_score_history(self._get_read_conn(), self._read_lock,
                                   hostname=hostname, limit=limit)
 
     # ── Service Dependencies ─────────────────────────────────────────────────
@@ -1285,13 +1324,13 @@ class Database:
                                   auto_discovered=auto_discovered)
 
     def list_dependencies(self) -> list[dict]:
-        return _list_dependencies(self._get_conn(), self._lock)
+        return _list_dependencies(self._get_read_conn(), self._read_lock)
 
     def delete_dependency(self, dep_id: int) -> bool:
         return _delete_dependency(self._get_conn(), self._lock, dep_id)
 
     def get_impact_analysis(self, service_name: str) -> list[str]:
-        return _get_impact_analysis(self._get_conn(), self._lock, service_name)
+        return _get_impact_analysis(self._get_read_conn(), self._read_lock, service_name)
 
     # ── Config Baselines / Drift Detection ───────────────────────────────────
     def create_baseline(self, path: str, expected_hash: str,
@@ -1300,10 +1339,10 @@ class Database:
                                 agent_group=agent_group)
 
     def list_baselines(self) -> list[dict]:
-        return _list_baselines(self._get_conn(), self._lock)
+        return _list_baselines(self._get_read_conn(), self._read_lock)
 
     def get_baseline(self, baseline_id: int) -> dict | None:
-        return _get_baseline(self._get_conn(), self._lock, baseline_id)
+        return _get_baseline(self._get_read_conn(), self._read_lock, baseline_id)
 
     def delete_baseline(self, baseline_id: int) -> bool:
         return _delete_baseline(self._get_conn(), self._lock, baseline_id)
@@ -1317,7 +1356,7 @@ class Database:
                                    hostname, actual_hash, status=status)
 
     def get_drift_results(self, baseline_id: int | None = None) -> list[dict]:
-        return _get_drift_results(self._get_conn(), self._lock, baseline_id=baseline_id)
+        return _get_drift_results(self._get_read_conn(), self._read_lock, baseline_id=baseline_id)
 
     # ── Network Devices ──────────────────────────────────────────────────
     def upsert_network_device(self, ip: str, mac: str | None = None,
@@ -1332,11 +1371,11 @@ class Database:
 
     def list_network_devices(self) -> list[dict]:
         from .network import list_devices
-        return list_devices(self._get_conn(), self._lock)
+        return list_devices(self._get_read_conn(), self._read_lock)
 
     def get_network_device(self, device_id: int) -> dict | None:
         from .network import get_device
-        return get_device(self._get_conn(), self._lock, device_id)
+        return get_device(self._get_read_conn(), self._read_lock, device_id)
 
     def delete_network_device(self, device_id: int) -> bool:
         from .network import delete_device
@@ -1349,10 +1388,10 @@ class Database:
                                automation_id=automation_id)
 
     def list_webhooks(self) -> list[dict]:
-        return _list_webhooks(self._get_conn(), self._lock)
+        return _list_webhooks(self._get_read_conn(), self._read_lock)
 
     def get_webhook_by_hook_id(self, hook_id: str) -> dict | None:
-        return _get_webhook_by_hook_id(self._get_conn(), self._lock, hook_id)
+        return _get_webhook_by_hook_id(self._get_read_conn(), self._read_lock, hook_id)
 
     def delete_webhook(self, webhook_id: int) -> bool:
         return _delete_webhook(self._get_conn(), self._lock, webhook_id)
@@ -1374,11 +1413,11 @@ class Database:
         self, hostname: str | None = None, limit: int = 100,
     ) -> list[dict]:
         return _list_verifications(
-            self._get_conn(), self._lock, hostname=hostname, limit=limit,
+            self._get_read_conn(), self._read_lock, hostname=hostname, limit=limit,
         )
 
     def get_backup_321_status(self) -> list[dict]:
-        return _get_321_status(self._get_conn(), self._lock)
+        return _get_321_status(self._get_read_conn(), self._read_lock)
 
     def update_backup_321_status(
         self, backup_name: str, *,
@@ -1398,10 +1437,10 @@ class Database:
         return _insert_approval(self._get_conn(), self._lock, **kwargs)
 
     def list_approvals(self, status: str = "pending") -> list[dict]:
-        return _list_approvals(self._get_conn(), self._lock, status)
+        return _list_approvals(self._get_read_conn(), self._read_lock, status)
 
     def get_approval(self, approval_id: int) -> dict | None:
-        return _get_approval(self._get_conn(), self._lock, approval_id)
+        return _get_approval(self._get_read_conn(), self._read_lock, approval_id)
 
     def decide_approval(self, approval_id: int, decision: str,
                         decided_by: str) -> bool:
@@ -1415,20 +1454,20 @@ class Database:
         return _auto_approve_expired(self._get_conn(), self._lock)
 
     def count_pending_approvals(self) -> int:
-        return _count_pending_approvals(self._get_conn(), self._lock)
+        return _count_pending_approvals(self._get_read_conn(), self._read_lock)
 
     def save_workflow_context(self, approval_id: int, context: dict) -> bool:
         return _save_workflow_context(self._get_conn(), self._lock, approval_id, context)
 
     def get_workflow_context(self, approval_id: int) -> dict | None:
-        return _get_workflow_context(self._get_conn(), self._lock, approval_id)
+        return _get_workflow_context(self._get_read_conn(), self._read_lock, approval_id)
 
     # ── Maintenance Windows ───────────────────────────────────────────────────
     def insert_maintenance_window(self, **kwargs) -> int | None:
         return _insert_maintenance_window(self._get_conn(), self._lock, **kwargs)
 
     def list_maintenance_windows(self) -> list[dict]:
-        return _list_maintenance_windows(self._get_conn(), self._lock)
+        return _list_maintenance_windows(self._get_read_conn(), self._read_lock)
 
     def update_maintenance_window(self, window_id: int, **kwargs) -> bool:
         return _update_maintenance_window(self._get_conn(), self._lock,
@@ -1438,7 +1477,7 @@ class Database:
         return _delete_maintenance_window(self._get_conn(), self._lock, window_id)
 
     def get_active_maintenance_windows(self) -> list[dict]:
-        return _get_active_maintenance_windows(self._get_conn(), self._lock)
+        return _get_active_maintenance_windows(self._get_read_conn(), self._read_lock)
 
     # ── Action Audit Trail ────────────────────────────────────────────────────
     def insert_action_audit(
@@ -1470,16 +1509,16 @@ class Database:
         outcome: str | None = None,
     ) -> list[dict]:
         return _get_action_audit(
-            self._get_conn(), self._lock,
+            self._get_read_conn(), self._read_lock,
             limit=limit, trigger_type=trigger_type, outcome=outcome,
         )
 
     # ── Playbook Templates ────────────────────────────────────────────────────
     def list_playbook_templates(self) -> list[dict]:
-        return _list_playbook_templates(self._get_conn(), self._lock)
+        return _list_playbook_templates(self._get_read_conn(), self._read_lock)
 
     def get_playbook_template(self, template_id: str) -> dict | None:
-        return _get_playbook_template(self._get_conn(), self._lock, template_id)
+        return _get_playbook_template(self._get_read_conn(), self._read_lock, template_id)
 
     def upsert_playbook_template(
         self,
@@ -1503,31 +1542,31 @@ class Database:
         return _insert_heal_outcome(self._get_conn(), self._lock, **kw)
 
     def get_heal_outcomes(self, **kw) -> list[dict]:
-        return _get_heal_outcomes(self._get_conn(), self._lock, **kw)
+        return _get_heal_outcomes(self._get_read_conn(), self._read_lock, **kw)
 
     def get_heal_success_rate(self, action_type: str, condition: str, **kw) -> float:
-        return _get_heal_success_rate(self._get_conn(), self._lock, action_type, condition, **kw)
+        return _get_heal_success_rate(self._get_read_conn(), self._read_lock, action_type, condition, **kw)
 
     def get_mean_time_to_resolve(self, condition: str, **kw) -> float | None:
-        return _get_mean_time_to_resolve(self._get_conn(), self._lock, condition, **kw)
+        return _get_mean_time_to_resolve(self._get_read_conn(), self._read_lock, condition, **kw)
 
     def get_escalation_frequency(self, rule_id: str, **kw) -> dict:
-        return _get_escalation_frequency(self._get_conn(), self._lock, rule_id, **kw)
+        return _get_escalation_frequency(self._get_read_conn(), self._read_lock, rule_id, **kw)
 
     def upsert_trust_state(self, rule_id: str, current_level: str, ceiling: str) -> None:
         _upsert_trust_state(self._get_conn(), self._lock, rule_id, current_level, ceiling)
 
     def get_trust_state(self, rule_id: str) -> dict | None:
-        return _get_trust_state(self._get_conn(), self._lock, rule_id)
+        return _get_trust_state(self._get_read_conn(), self._read_lock, rule_id)
 
     def list_trust_states(self) -> list[dict]:
-        return _list_trust_states(self._get_conn(), self._lock)
+        return _list_trust_states(self._get_read_conn(), self._read_lock)
 
     def insert_heal_suggestion(self, **kw) -> int:
         return _insert_heal_suggestion(self._get_conn(), self._lock, **kw)
 
     def list_heal_suggestions(self, **kw) -> list[dict]:
-        return _list_heal_suggestions(self._get_conn(), self._lock, **kw)
+        return _list_heal_suggestions(self._get_read_conn(), self._read_lock, **kw)
 
     def dismiss_heal_suggestion(self, suggestion_id: int) -> None:
         _dismiss_heal_suggestion(self._get_conn(), self._lock, suggestion_id)
@@ -1537,22 +1576,22 @@ class Database:
         return _insert_snapshot(self._get_conn(), self._lock, **kw)
 
     def get_snapshot_row(self, snap_id: int) -> dict | None:
-        return _get_snapshot_row(self._get_conn(), self._lock, snap_id)
+        return _get_snapshot_row(self._get_read_conn(), self._read_lock, snap_id)
 
     def get_snapshot_by_ledger_id(self, ledger_id: int) -> dict | None:
-        return _get_snapshot_by_ledger_id(self._get_conn(), self._lock, ledger_id)
+        return _get_snapshot_by_ledger_id(self._get_read_conn(), self._read_lock, ledger_id)
 
     # ── Integration Instances ─────────────────────────────────────────────────
     def insert_integration_instance(self, **kw) -> None:
         _insert_instance(self._get_conn(), self._lock, **kw)
 
     def get_integration_instance(self, instance_id: str) -> dict | None:
-        return _get_instance(self._get_conn(), self._lock, instance_id)
+        return _get_instance(self._get_read_conn(), self._read_lock, instance_id)
 
     def list_integration_instances(
         self, *, category: str | None = None, site: str | None = None
     ) -> list[dict]:
-        return _list_instances(self._get_conn(), self._lock, category=category, site=site)
+        return _list_instances(self._get_read_conn(), self._read_lock, category=category, site=site)
 
     def update_integration_health(self, instance_id: str, health_status: str) -> None:
         _update_integration_health(self._get_conn(), self._lock, instance_id, health_status)
@@ -1568,17 +1607,17 @@ class Database:
         _remove_from_group(self._get_conn(), self._lock, group_name, instance_id)
 
     def list_integration_group(self, group_name: str) -> list[dict]:
-        return _list_group(self._get_conn(), self._lock, group_name)
+        return _list_group(self._get_read_conn(), self._read_lock, group_name)
 
     def list_integration_groups(self) -> list[str]:
-        return _list_groups(self._get_conn(), self._lock)
+        return _list_groups(self._get_read_conn(), self._read_lock)
 
     # ── Capability Manifests ──────────────────────────────────────────────────
     def upsert_capability_manifest(self, hostname: str, manifest: str) -> None:
         _upsert_manifest(self._get_conn(), self._lock, hostname, manifest)
 
     def get_capability_manifest(self, hostname: str) -> dict | None:
-        return _get_manifest(self._get_conn(), self._lock, hostname)
+        return _get_manifest(self._get_read_conn(), self._read_lock, hostname)
 
     def mark_capability_degraded(self, hostname: str, tool_name: str) -> None:
         _mark_capability_degraded(self._get_conn(), self._lock, hostname, tool_name)
@@ -1588,10 +1627,10 @@ class Database:
         _dep_graph_insert(self._get_conn(), self._lock, **kw)
 
     def list_dep_graph_nodes(self) -> list[dict]:
-        return _dep_graph_list(self._get_conn(), self._lock)
+        return _dep_graph_list(self._get_read_conn(), self._read_lock)
 
     def get_dep_graph_node(self, target: str) -> dict | None:
-        return _dep_graph_get(self._get_conn(), self._lock, target)
+        return _dep_graph_get(self._get_read_conn(), self._read_lock, target)
 
     def delete_dep_graph_node(self, target: str) -> None:
         _dep_graph_delete(self._get_conn(), self._lock, target)
@@ -1604,7 +1643,24 @@ class Database:
         return _insert_heal_maint_window(self._get_conn(), self._lock, **kw)
 
     def get_active_heal_maintenance_windows(self) -> list[dict]:
-        return _get_active_heal_maint_windows(self._get_conn(), self._lock)
+        return _get_active_heal_maint_windows(self._get_read_conn(), self._read_lock)
 
     def end_heal_maintenance_window(self, window_id: int) -> bool:
         return _end_heal_maint_window(self._get_conn(), self._lock, window_id)
+
+    # ── Linked Providers ─────────────────────────────────────────────────────
+    def get_linked_providers(self, username: str) -> dict:
+        return _get_linked_providers(self._get_read_conn(), self._read_lock, username)
+
+    def link_provider(self, username: str, provider: str, email: str,
+                      name: str = "") -> None:
+        _link_provider(self._get_conn(), self._lock, username, provider,
+                       email, name)
+
+    def unlink_provider(self, username: str, provider: str) -> bool:
+        return _unlink_provider(self._get_conn(), self._lock, username,
+                                provider)
+
+    def find_user_by_provider(self, provider: str, email: str) -> str | None:
+        return _find_user_by_provider(self._get_read_conn(), self._read_lock, provider,
+                                      email)

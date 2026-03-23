@@ -11,6 +11,8 @@ import time
 import yaml
 
 from .config import NOBA_YAML, WEB_KEYS, _BACKUP_WEB_KEYS, _NOTIF_WEB_KEYS
+from .crypto import decrypt_value, encrypt_value
+from .schemas import is_secret_key
 
 logger = logging.getLogger("noba")
 
@@ -184,6 +186,11 @@ def read_yaml_settings() -> dict:
     except Exception as e:
         logger.warning("read_yaml_settings: %s", e)
 
+    # Decrypt secret values transparently on read
+    for k, v in defaults.items():
+        if isinstance(v, str) and is_secret_key(k):
+            defaults[k] = decrypt_value(v)
+
     with _settings_cache_lock:
         _settings_cache = defaults
         _settings_cache_t = time.time()
@@ -207,6 +214,12 @@ def write_yaml_settings(settings: dict) -> bool:
                 pass
         else:
             config = {}
+
+        # Encrypt secret values before writing to disk
+        settings = {
+            k: (encrypt_value(v) if isinstance(v, str) and is_secret_key(k) and v and v != "***" else v)
+            for k, v in settings.items()
+        }
 
         # Merge web section — only update keys present in the request,
         # preserving existing values for keys not in this save

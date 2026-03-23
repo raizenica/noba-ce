@@ -353,11 +353,6 @@ async def api_social_callback(provider: str, request: Request):
 
 
 # ── Account linking — connect social provider to existing NOBA account ───────
-# Stored as JSON in a linked_providers field on the user record.
-# {provider: {email: "...", linked_at: timestamp}}
-# TODO: persist to DB — _linked_providers is in-memory only, lost on restart
-_linked_providers: dict[str, dict] = {}  # username -> {provider: {email, linked_at}}
-_linked_lock = threading.Lock()
 
 
 @router.get("/api/auth/social/{provider}/link")
@@ -437,14 +432,7 @@ async def api_social_link_callback(provider: str, request: Request):
         if not provider_email:
             raise HTTPException(400, "Could not get email from provider")
         # Store the link
-        with _linked_lock:
-            if noba_username not in _linked_providers:
-                _linked_providers[noba_username] = {}
-            _linked_providers[noba_username][provider] = {
-                "email": provider_email,
-                "linked_at": time.time(),
-                "name": prov["name"],
-            }
+        db.link_provider(noba_username, provider, provider_email, prov["name"])
         db.audit_log("social_link", noba_username,
                      f"Linked {prov['name']} ({provider_email})", _client_ip(request))
         logger.info("User %s linked %s account (%s)", noba_username, provider, provider_email)
@@ -460,8 +448,7 @@ async def api_social_link_callback(provider: str, request: Request):
 def api_linked_providers(auth=Depends(_get_auth)):
     """List providers linked to the current user's account."""
     username, _ = auth
-    with _linked_lock:
-        linked = _linked_providers.get(username, {})
+    linked = db.get_linked_providers(username)
     return {
         provider: {"email": info["email"], "name": info["name"], "linked_at": info["linked_at"]}
         for provider, info in linked.items()
@@ -472,11 +459,8 @@ def api_linked_providers(auth=Depends(_get_auth)):
 def api_unlink_provider(provider: str, auth=Depends(_get_auth)):
     """Unlink a social provider from the current account."""
     username, _ = auth
-    with _linked_lock:
-        linked = _linked_providers.get(username, {})
-        if provider not in linked:
-            raise HTTPException(404, f"Provider '{provider}' not linked")
-        del linked[provider]
+    if not db.unlink_provider(username, provider):
+        raise HTTPException(404, f"Provider '{provider}' not linked")
     db.audit_log("social_unlink", username, f"Unlinked {provider}", "")
     return {"status": "unlinked", "provider": provider}
 
