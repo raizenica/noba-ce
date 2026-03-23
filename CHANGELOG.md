@@ -25,6 +25,7 @@ All notable changes to NOBA Command Center are documented in this file.
 ### Fixed
 - **Agent capability fallback for newer versions** — Agents reporting a version not explicitly in the capability registry (e.g. v2.3.0 when registry only listed up to v2.1.0) fell back to the v1.1.0 baseline (9 commands). Now any agent ≥ v2.0.0 gets full v2 capabilities (42 commands) automatically.
 - **Endpoint monitor self-referential deadlock** — Monitors targeting the same NOBA instance (`localhost:8080`) deadlocked the uvicorn process. Now detects self-referential URLs and returns `skipped` status with a clear error message.
+- **Healing dry-run ignores maintenance windows** — The `/api/healing/dry-run` endpoint did not check active maintenance windows, reporting full healing actions even for suppressed targets. Now queries the maintenance manager before simulation.
 - **Healing effectiveness always 0%** — Endpoint queried non-existent `outcome` field; now uses `verified`/`action_success` and returns `verified_count`/`failed_count`/`pending_count` matching the frontend chart.
 - **Circuit breaker never tripped** — Query limit equalled threshold (3), so any intermittent success prevented trip. Now looks back 50 entries within the time window.
 - **LedgerTimeline timestamps** — Unix seconds passed to `new Date()` without ×1000; all entries showed epoch dates.

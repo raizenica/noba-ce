@@ -345,7 +345,12 @@ async def api_dry_run(request: Request, auth=Depends(_require_operator)):
         metrics=event_data.get("metrics", {}),
     )
 
-    result = simulate_heal_event(event, db=db)
+    # Check healing maintenance windows for this target
+    from ..healing import get_pipeline as _get_pipeline
+    _pipeline = _get_pipeline()
+    in_maint = _pipeline._maintenance.is_in_maintenance(event.target)
+
+    result = simulate_heal_event(event, db=db, in_maintenance=in_maint)
     return result
 
 
