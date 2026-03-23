@@ -59,7 +59,9 @@ def api_uptime_dashboard(auth=Depends(_get_auth)):
             "status": "up" if r.get("status") == "Up" else "down",
             "ms": r.get("ms", 0),
         })
-    return items
+    up = sum(1 for i in items if i["status"] == "up")
+    pct = round(up / len(items) * 100, 1) if items else 0
+    return {"items": items, "percent": pct}
 
 
 # ── /api/health-score — Infrastructure Health Score (Feature 7) ──────────────

@@ -25,6 +25,11 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Rollback bypassed DB write lock** — Used raw `_get_conn()` outside lock; now uses `db.get_snapshot_by_ledger_id()` wrapper.
 - **Dead code in `get_heal_outcomes`** — Redundant LIMIT 0 query + double lock acquire removed.
 - **`_active_alerts` leak** — Targets added during suppressed paths (site isolation, root cause, maintenance, canary) stayed in the set forever, permanently blocking downstream healing. Split into TTL-based `_active_alerts` dict (dependency-graph signal, 5-min expiry, refreshed on every event) and `_active_heals` set (execution lifecycle, precise add/remove).
+- **Alert rules save was a no-op** — "Save Rules" in Settings sent the wrong payload to a single-rule endpoint. Added `PUT /api/alert-rules` batch endpoint; frontend now uses it. Rule IDs use `crypto.randomUUID()` to prevent duplicates.
+- **Uptime card always showed 0%** — Backend returned a flat list but frontend expected `{items, percent}`. Backend now computes and returns percent.
+- **Expired token crash** — DB fallback returned bare `None` instead of `(None, None)` tuple, causing TypeError on every expired-token request.
+- **Agent policy version always 0** — `_policy_version` was never incremented. Now uses a SHA-256 content hash so agents can detect policy changes.
+- **DNS flush hardcoded `pihole-FTL`** — Now reads `dnsService` from config with regex validation, defaults to `pihole-FTL`.
 - **Health score trigger** — Scheduler was passing Database object instead of health score categories to `evaluate_health_thresholds`. Now uses cached results from the last health score computation.
 - **Masonry grid after welcome dismiss** — Re-initializes ResizeObserver after the welcome screen is dismissed so cards lay out correctly.
 - **Self-update install step** — Added `--skip-deps` and `--no-restart` to install.sh invocation during self-update, preventing failure under `NoNewPrivileges=true` systemd environments and double-restart race condition.
@@ -33,10 +38,13 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Self-update system** — Check for updates and apply them from the UI (Settings → General). Backend: `GET /api/system/update/check` compares local version to remote via git, `POST /api/system/update/apply` pulls, rebuilds frontend, re-installs, and restarts the service. Frontend: glowing update pill in the header notifies admins when an update is available, with changelog preview and one-click apply.
 
 ### Changed
-- **Auth level corrections** — 9 routes corrected: container read endpoints (logs, inspect, stats, compose), network connections, and IaC exports downgraded to viewer; K8s scale, service discovery, and recovery actions downgraded to operator; custom reports upgraded to operator. TOTP setup lowered to viewer so all users can enable 2FA.
+- **Auth level corrections** — Container stats and compose projects downgraded to viewer (monitoring data). K8s scale, service discovery, and recovery actions downgraded from admin to operator. IaC exports downgraded from admin to operator. Custom reports upgraded to operator. Graylog search upgraded to operator (log data is sensitive). TOTP setup lowered to viewer so all users can enable 2FA.
 
 ### Security
 - **Script automation shell escalation blocked** — Automations with custom `command` fields now require admin role, preventing operator→shell privilege escalation.
+- **Automation variable injection blocked** — Operator-supplied variables substituted into `command` strings via `format_map` are now sanitized with `shlex.quote()`, preventing shell metacharacter injection.
+- **Agent key timing attack mitigated** — Agent key validation now uses `secrets.compare_digest` for constant-time comparison.
+- **Prometheus label injection prevented** — Service names and mount points in `/api/prometheus` metrics are now escaped per the exposition format spec.
 - **OAuth2/OIDC CSRF protection** — All social login and OIDC flows now generate and validate a cryptographic `state` parameter, preventing login CSRF attacks.
 - **OAuth token leak fixed** — Account linking no longer passes the NOBA session token as the OAuth `state` parameter. Tokens are stored server-side with a random nonce.
 - **Healing `run` action restricted** — Command execution via the healing pipeline is now restricted to an allowlist of safe prefixes (systemctl, docker, podman, restic, rclone, certbot).

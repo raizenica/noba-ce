@@ -1323,10 +1323,9 @@ class TestGraylogSearch:
         resp = client.get("/api/graylog/search")
         assert resp.status_code == 401
 
-    def test_viewer_can_access_not_configured(self, client, viewer_headers):
-        with patch("server.routers.admin.read_yaml_settings", return_value={}):
-            resp = client.get("/api/graylog/search", headers=viewer_headers)
-            assert resp.status_code == 404
+    def test_viewer_returns_403(self, client, viewer_headers):
+        resp = client.get("/api/graylog/search", headers=viewer_headers)
+        assert resp.status_code == 403
 
     def test_not_configured_returns_404(self, client, admin_headers):
         with patch("server.routers.admin.read_yaml_settings", return_value={}):

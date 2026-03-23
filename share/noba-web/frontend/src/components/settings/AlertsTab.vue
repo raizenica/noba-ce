@@ -5,7 +5,7 @@ import { useApi } from '../../composables/useApi'
 import AutonomySelector from '../automations/AutonomySelector.vue'
 
 const authStore = useAuthStore()
-const { get, post } = useApi()
+const { get, put } = useApi()
 
 const alertRules = ref([])
 const loading = ref(false)
@@ -31,7 +31,7 @@ async function fetchRules() {
 async function saveRules() {
   saveMsg.value = ''
   try {
-    await post('/api/alert-rules', { rules: alertRules.value })
+    await put('/api/alert-rules', { rules: alertRules.value })
     saveMsg.value = 'Saved.'
     setTimeout(() => { saveMsg.value = '' }, 2500)
   } catch {
@@ -65,7 +65,7 @@ function applyEdit(idx) {
 
 function addRule() {
   const newRule = {
-    id: 'rule-' + (alertRules.value.length + 1),
+    id: 'rule-' + crypto.randomUUID().slice(0, 8),
     condition: '',
     severity: 'warning',
     message: '',

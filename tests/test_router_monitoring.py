@@ -64,10 +64,14 @@ class TestUptimeDashboard:
         resp = client.get("/api/uptime", headers=admin_headers)
         assert resp.status_code == 200
 
-    def test_returns_list(self, client, admin_headers):
+    def test_returns_dict_with_items_and_percent(self, client, admin_headers):
         resp = client.get("/api/uptime", headers=admin_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        data = resp.json()
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert "percent" in data
+        assert isinstance(data["items"], list)
 
 
 # ===========================================================================

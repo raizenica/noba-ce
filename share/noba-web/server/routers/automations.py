@@ -208,13 +208,15 @@ async def api_automations_run(auto_id: str, request: Request, auth=Depends(_requ
     variables = body_data.get("variables", {}) if isinstance(body_data, dict) else {}
     if variables and isinstance(config, dict):
         config = dict(config)  # don't mutate original
+        safe_vars = {k: v for k, v in variables.items()
+                     if isinstance(k, str) and isinstance(v, (str, int, float))}
         for key in ("command", "url", "args"):
             if key in config and isinstance(config[key], str):
                 try:
-                    config[key] = config[key].format_map(
-                        {k: v for k, v in variables.items()
-                         if isinstance(k, str) and isinstance(v, (str, int, float))}
-                    )
+                    subs = safe_vars
+                    if key == "command":
+                        subs = {k: shlex.quote(str(v)) for k, v in safe_vars.items()}
+                    config[key] = config[key].format_map(subs)
                 except (KeyError, ValueError, IndexError):
                     pass
 

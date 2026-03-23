@@ -72,7 +72,7 @@ async def api_service_control(request: Request, auth=Depends(_require_operator))
 
 # ── Network analysis ─────────────────────────────────────────────────────────
 @router.get("/api/network/connections")
-def api_network_connections(auth=Depends(_get_auth)):
+def api_network_connections(auth=Depends(_require_operator)):
     """List active network connections."""
     return get_network_connections()
 

@@ -909,7 +909,7 @@ def api_runbook_detail(runbook_id: str, auth=Depends(_get_auth)):
 
 # ── /api/graylog/search ──────────────────────────────────────────────────────
 @router.get("/api/graylog/search")
-def api_graylog_search(request: Request, auth=Depends(_get_auth)):
+def api_graylog_search(request: Request, auth=Depends(_require_operator)):
     cfg = read_yaml_settings()
     url = cfg.get("graylogUrl", "")
     token = cfg.get("graylogToken", "")

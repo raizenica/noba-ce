@@ -54,10 +54,13 @@ async def api_recovery_tailscale(request: Request, auth=Depends(_require_operato
 async def api_recovery_dns(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip = _client_ip(request)
+    dns_svc = read_yaml_settings().get("dnsService", "pihole-FTL")
+    if not dns_svc or not re.match(r'^[a-zA-Z0-9@._-]+$', dns_svc):
+        return {"status": "error", "error": f"Invalid dnsService name in config: {dns_svc!r}"}
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["sudo", "-n", "systemctl", "restart", "pihole-FTL"],
+            ["sudo", "-n", "systemctl", "restart", dns_svc],
             capture_output=True, text=True, timeout=15,
         )
         db.audit_log("recovery_dns_flush", username, f"exit={result.returncode}", ip)

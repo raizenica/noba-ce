@@ -368,7 +368,7 @@ class TokenStore:
             if row:
                 expires = datetime.fromtimestamp(row["expires_at"])
                 if expires <= datetime.now():
-                    return None
+                    return None, None
                 with self._lock:
                     self._tokens[token] = (row["username"], row["role"], expires)
                 return row["username"], row["role"]

@@ -1,18 +1,18 @@
 """Noba -- Agent heal runtime: policy distribution and report ingestion."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 
 logger = logging.getLogger("noba")
 
 _LOW_RISK_TYPES = frozenset({"restart_container", "restart_service", "clear_cache", "flush_dns"})
-_policy_version = 0
 
 
 def build_agent_policy(hostname: str, rules_cfg: dict, db) -> dict:
     """Build a lightweight heal policy for a specific agent."""
-    global _policy_version
     agent_rules: list[dict] = []
 
     for rule_id, cfg in rules_cfg.items():
@@ -34,9 +34,13 @@ def build_agent_policy(hostname: str, rules_cfg: dict, db) -> dict:
                 "fallback_mode": None,
             })
 
+    version = hashlib.sha256(
+        json.dumps(agent_rules, sort_keys=True).encode()
+    ).hexdigest()[:12]
+
     return {
         "rules": agent_rules,
-        "version": _policy_version,
+        "version": version,
         "fallback_mode": "queue_for_server",
     }
 

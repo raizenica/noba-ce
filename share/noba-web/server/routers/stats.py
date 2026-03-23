@@ -183,14 +183,17 @@ def api_prometheus(auth=Depends(_get_auth)):
     lines = []
     lines.append(f'noba_cpu_percent {data.get("cpuPercent", 0)}')
     lines.append(f'noba_mem_percent {data.get("memPercent", 0)}')
+    def _prom_escape(v: str) -> str:
+        return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
     for disk in data.get("disks", []):
-        mount = disk["mount"].replace('"', '')
+        mount = _prom_escape(disk["mount"])
         lines.append(f'noba_disk_percent{{mount="{mount}"}} {disk["percent"]}')
     lines.append(f'noba_net_rx_bps {data.get("netRxRaw", 0):.0f}')
     lines.append(f'noba_net_tx_bps {data.get("netTxRaw", 0):.0f}')
     for svc in data.get("services", []):
         val = 1 if svc["status"] == "active" else 0
-        lines.append(f'noba_service_up{{name="{svc["name"]}"}} {val}')
+        lines.append(f'noba_service_up{{name="{_prom_escape(svc["name"])}"}} {val}')
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
@@ -215,6 +218,21 @@ def api_alert_rules(auth=Depends(_get_auth)):
     """List all configured alert rules."""
     cfg = read_yaml_settings()
     return cfg.get("alertRules", [])
+
+
+@router.put("/api/alert-rules")
+async def api_alert_rules_batch(request: Request, auth=Depends(_require_admin)):
+    """Replace all alert rules (batch save from settings UI)."""
+    username, _ = auth
+    body = await _read_body(request)
+    rules = body.get("rules")
+    if not isinstance(rules, list):
+        raise HTTPException(400, "Expected {rules: [...]}")
+    cfg = read_yaml_settings()
+    cfg["alertRules"] = rules
+    write_yaml_settings(cfg)
+    db.audit_log("alert_rules_batch", username, f"Saved {len(rules)} rules", _client_ip(request))
+    return {"status": "ok", "count": len(rules)}
 
 
 @router.post("/api/alert-rules")

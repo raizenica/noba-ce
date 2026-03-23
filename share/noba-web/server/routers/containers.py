@@ -53,7 +53,7 @@ async def api_container_control(request: Request, auth=Depends(_require_operator
 
 # ── Docker deep management ───────────────────────────────────────────────
 @router.get("/api/containers/{name}/logs")
-def api_container_logs(name: str, request: Request, auth=Depends(_get_auth)):
+def api_container_logs(name: str, request: Request, auth=Depends(_require_operator)):
     """Stream container logs (last N lines)."""
     if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
         raise HTTPException(400, "Invalid container name")
@@ -73,7 +73,7 @@ def api_container_logs(name: str, request: Request, auth=Depends(_get_auth)):
 
 
 @router.get("/api/containers/{name}/inspect")
-def api_container_inspect(name: str, auth=Depends(_get_auth)):
+def api_container_inspect(name: str, auth=Depends(_require_operator)):
     """Get detailed container info."""
     if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
         raise HTTPException(400, "Invalid container name")

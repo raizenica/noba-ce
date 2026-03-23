@@ -50,9 +50,10 @@ def _validate_agent_key(key: str) -> bool:
     """Check an agent key against configured keys (shared by report + WebSocket)."""
     if not key:
         return False
+    import secrets as _secrets
     cfg = read_yaml_settings()
     valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
-    return bool(valid_keys and key in valid_keys)
+    return any(_secrets.compare_digest(key, vk) for vk in valid_keys)
 
 
 # ── Agent endpoints ───────────────────────────────────────────────────────────
