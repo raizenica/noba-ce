@@ -43,46 +43,51 @@ Be respectful, constructive, and inclusive. Patience is appreciated on all sides
 
 ## Development Setup
 
-### Backend (Python server)
-
-No build step required. The server uses Python stdlib only.
+### Backend (FastAPI + Python 3.11+)
 
 ```bash
-# Run the server directly during development
-python3 share/noba-web/server.py
+# Install Python dependencies
+pip install fastapi 'uvicorn[standard]' psutil pyyaml httpx
 
-# Or via the launcher
-bash bin/noba-web
+# Run the server
+python3 share/noba-web/server/main.py
+# or via the installed launcher
+noba-web
 ```
 
 Environment variables for development:
 ```bash
 export PORT=8080
-export NOBA_CONFIG=./data/config/config.yaml
-export NOBA_SCRIPT_DIR=./libexec/noba
+export NOBA_CONFIG=~/.config/noba/config.yaml
 ```
 
-### Frontend
-
-No build step. Edit `share/noba-web/index.html` and `share/noba-web/static/app.js` directly and reload the browser.
-
-### Automation Scripts
+### Frontend (Vue 3 + Vite)
 
 ```bash
-# Test a script with dry-run
-bash libexec/backup-to-nas.sh --dry-run --verbose
+cd share/noba-web/frontend
 
-# Run the full test harness
-bash libexec/test-all.sh
+# Install dependencies
+npm ci
+
+# Dev server with hot reload
+npm run dev
+
+# Build for production
+npm run build
+# Output goes to share/noba-web/static/dist/
 ```
 
-### Docker development
+### Full install (bare metal)
+
+```bash
+bash install.sh
+```
+
+### Docker
 
 ```bash
 docker compose up --build
 ```
-
-The `docker-compose.yml` mounts `./data/config` into the container for live config editing.
 
 ---
 
@@ -90,169 +95,152 @@ The `docker-compose.yml` mounts `./data/config` into the container for live conf
 
 ```
 noba/
-├── bin/
-│   ├── noba               # CLI entry point / command router
-│   └── noba-web           # Web dashboard launcher
-├── libexec/
-│   ├── lib/
-│   │   └── noba-lib.sh    # Shared Bash library (logging, config, utils)
-│   ├── backup-to-nas.sh   # Incremental rsync backup
-│   ├── cloud-backup.sh    # rclone cloud sync
-│   ├── disk-sentinel.sh   # Disk space monitor
-│   ├── config-check.sh    # Dependency / config validator
-│   ├── noba-update.sh     # Git pull + system update
-│   └── ...                # Other automation scripts
 ├── share/noba-web/
-│   ├── server.py          # Python backend (single file, no deps)
-│   ├── index.html         # Frontend SPA (Alpine.js)
-│   └── static/
-│       ├── app.js         # Alpine.js dashboard component
-│       └── style.css      # Theme system
-├── systemd/               # Systemd user timer/service units
-├── tests/
-│   ├── test_checksum.bats # BATS test suite
-│   └── test_server.py     # Python unit tests
-├── docs/
-│   ├── user-guide.md
-│   ├── configuration.md
-│   ├── api.md
-│   └── troubleshooting.md
-├── install.sh             # Installer
-└── docker-compose.yml
+│   ├── server/                → FastAPI backend (13 routers, 235+ API routes)
+│   │   ├── app.py             → Application setup, lifespan, middleware
+│   │   ├── routers/           → API route modules
+│   │   ├── db/                → SQLite database layer (split by domain)
+│   │   ├── healing/           → Self-healing pipeline (20+ modules)
+│   │   ├── integrations/      → Integration platform handlers
+│   │   ├── metrics/           → System metric collectors
+│   │   ├── auth.py            → Authentication, tokens, rate limiting
+│   │   ├── config.py          → Constants and configuration
+│   │   ├── collector.py       → Background stats collector
+│   │   ├── scheduler.py       → Cron scheduler, endpoint checker, drift checker
+│   │   ├── workflow_engine.py → Workflow execution engine
+│   │   └── runner.py          → Concurrent job runner
+│   ├── frontend/
+│   │   ├── src/
+│   │   │   ├── views/         → Page-level Vue components (10 views)
+│   │   │   ├── components/    → Reusable components (80+)
+│   │   │   ├── stores/        → Pinia state stores
+│   │   │   ├── composables/   → Vue composables (useApi, useIntervals, useHealing)
+│   │   │   └── assets/styles/ → Global CSS with theme variables
+│   │   ├── package.json
+│   │   └── vite.config.js
+│   └── static/dist/           → Built Vue app (committed, served by FastAPI)
+├── share/noba-agent/          → Remote agent + installers (Linux, Windows)
+├── libexec/                   → Shell automation scripts
+├── scripts/                   → Build and utility scripts
+├── tests/                     → pytest backend test suite (2187+ tests)
+├── install.sh                 → Installer
+├── Dockerfile                 → Docker build
+└── docs/                      → Documentation
 ```
 
 ---
 
 ## Making Changes
 
-### Adding a new automation script
+### Adding a new API endpoint
 
-1. Create `libexec/my-script.sh`.
-2. Source the shared library at the top:
-   ```bash
-   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-   source "$SCRIPT_DIR/lib/noba-lib.sh"
-   ```
-3. Implement test harness compliance (required for CI):
-   ```bash
-   if [[ "${1:-}" == "--invalid-option" ]]; then exit 1; fi
-   if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-       echo "Usage: my-script.sh [OPTIONS]"; exit 0
-   fi
-   if [[ "${1:-}" == "--version" ]]; then
-       echo "my-script.sh version 1.0.0"; exit 0
-   fi
-   ```
-4. Add `--dry-run` and `--verbose` flags where applicable.
-5. Add a BATS test in `tests/`.
-6. Register the alias in `bin/noba` if appropriate.
+1. Add the route to the appropriate router in `share/noba-web/server/routers/`.
+2. Use proper auth decorators:
+   - `Depends(_get_auth)` for read access
+   - `Depends(_require_operator)` for control operations
+   - `Depends(_require_admin)` for admin-only
+3. Add audit logging for state-changing operations.
+4. Add tests in `tests/`.
 
 ### Adding a new dashboard integration
 
-1. Add the data-fetching function in `server.py` following the pattern of existing integrations (e.g. `get_pihole()`):
-   - Return a dict with consistent keys
-   - Handle errors gracefully (return `None` or an empty dict on failure)
-   - Use `TTLCache` for expensive or rate-limited calls
-2. Call the function from `collect_stats()` inside the `ThreadPoolExecutor`.
-3. Surface the data in the SSE/stats JSON payload.
-4. Add the card UI to `index.html` with an `x-show` condition.
-5. Add the Alpine.js data properties and fetch logic to `app.js`.
-6. Add the URL/key settings to the **Settings → Integrations** tab.
-7. Add the integration settings to `WEB_KEYS` in `server.py`.
-8. Document the new settings in `docs/configuration.md`.
+1. Add the integration handler in `share/noba-web/server/integrations/`.
+2. Register it in `share/noba-web/server/healing/integration_registry.py` if it supports heal operations.
+3. Add the card component in `share/noba-web/frontend/src/components/cards/`.
+4. Add a card template in `share/noba-web/frontend/src/data/cardTemplates.js`.
+5. Document new settings in `docs/configuration.md`.
 
-### Modifying the settings system
+### Adding a new frontend view
 
-The settings flow:
-1. Frontend sends `POST /api/settings` with a JSON object.
-2. `server.py` writes the values to `config.yaml` using `yq`.
-3. On next stats collection, settings are read via `read_yaml_settings()`.
-
-If you add a new setting key, add it to:
-- `WEB_KEYS` in `server.py`
-- `SETTINGS_KEYS` in `app.js`
-- `docs/configuration.md`
+1. Create the view in `share/noba-web/frontend/src/views/`.
+2. Add the route in `share/noba-web/frontend/src/router/index.js`.
+3. Add the sidebar link in `share/noba-web/frontend/src/components/layout/AppSidebar.vue`.
+4. Use `<script setup>` with Composition API.
+5. Use `useApi()` for authenticated API calls.
+6. Use the notifications store for user feedback — never use `alert()` or native `confirm()`.
 
 ---
 
 ## Coding Standards
 
-### Bash scripts
+### Python
 
-- Use `set -euo pipefail` at the top of every script.
-- Source `noba-lib.sh` and use its logging functions (`log_info`, `log_error`, etc.) — do not use raw `echo` for status output.
-- All scripts must pass `shellcheck -S warning`.
-- Use `--dry-run` flag pattern consistently.
-- No hardcoded paths — always resolve relative to `SCRIPT_DIR` or read from config.
+- Run `ruff check --fix` after editing `.py` files.
+- Use `from __future__ import annotations` in all modules.
+- Threading: always use locks when mutating module-level state.
+- Catch `HTTPException` before generic `Exception` in route handlers.
+- Use `db.execute_write()` or `db.transaction()` for writes — never access `_get_conn()` directly.
 
-### Python (server.py)
+### JavaScript (Vue 3)
 
-- No third-party dependencies. Python standard library only.
-- Thread safety: use the existing locks (`_tokens_lock`, `users_db_lock`, `_state_lock`).
-- Handle all network calls with timeouts and `try/except`.
-- Never expose secrets in the stats/SSE payload — only the backend should see API keys.
-- New endpoints should follow the existing pattern:
-  ```python
-  if path == '/api/my-endpoint':
-      username, role = authenticate_request(self.headers, qs)
-      if not username:
-          self._json({'error': 'Unauthorized'}, 401)
-          return
-      # ... handler logic
-      audit_log('my_action', username, 'details', ip)
-      self._json({'result': ...})
-      return
-  ```
+- Vue 3 `<script setup>` with Composition API — no Options API.
+- Pinia stores for shared state.
+- `useApi()` composable for all authenticated API calls.
+- `useModalsStore().confirm()` for destructive action confirmation — never use native `confirm()`.
+- Toast notifications via `useNotificationsStore().addToast()` — never use `alert()`.
+- `v-model.number` for numeric select inputs.
 
-### Frontend (JavaScript / HTML)
+### HTML / CSS
 
-- Keep it within the Alpine.js `dashboard()` component — no new global state.
-- Use the `LIVE_DATA_KEYS` allowlist when merging SSE data.
-- No `eval()` or `innerHTML` with untrusted content.
-- Test in both light/dark themes and at least two viewport widths.
+- Use existing CSS classes from `global.css` — check before inventing new ones.
+- 7 themes via CSS variables (default, dracula, nord, tokyo, catppuccin, gruvbox, bloodmoon).
+- Role gating: `v-if="authStore.isOperator"` or `v-if="authStore.isAdmin"`.
+
+### Shell Scripts
+
+- `set -euo pipefail` at the top.
+- Never `source` untrusted files — use safe key-value parsing.
+- Add cleanup traps for temp files.
+- Use `--verbose` flag pattern (default quiet).
 
 ---
 
 ## Testing
 
-### Run Python unit tests
+### Backend (pytest)
 
 ```bash
-python3 -m unittest tests/test_server.py -v
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_auth.py -v
+
+# Lint all Python
+ruff check share/noba-web/server/
 ```
 
-### Run BATS shell tests
+### Frontend (Vitest)
 
 ```bash
-# Install bats-core if not present
-sudo dnf install bats   # or apt install bats
+cd share/noba-web/frontend
 
-bats tests/
+# Run all tests
+npm test
+
+# Run specific test
+npx vitest run src/__tests__/stores/auth.test.js
 ```
 
-### Run ShellCheck
+### Build verification
 
 ```bash
-shellcheck -S warning libexec/*.sh bin/noba bin/noba-web install.sh
+# Build frontend
+cd share/noba-web/frontend && npm run build
 ```
 
-### Run the full test harness
-
-```bash
-bash libexec/test-all.sh --verbose
-```
-
-CI runs all of the above on every pull request (see `.github/workflows/`).
+All tests must pass before submitting a PR.
 
 ---
 
 ## Submitting a Pull Request
 
 1. **Ensure tests pass** locally before pushing.
-2. **Keep PRs focused** — one feature or fix per PR. Avoid combining unrelated changes.
+2. **Keep PRs focused** — one feature or fix per PR.
 3. **Write a clear PR description** — explain what, why, and how to test it.
 4. **Reference related issues** — use `Closes #123` in the PR description.
-5. **Update documentation** if your change adds, removes, or changes user-facing behaviour.
+5. **Update documentation** if your change affects user-facing behaviour.
+6. **Update CHANGELOG.md** with a summary of your changes.
 
 ### PR title conventions
 
@@ -269,11 +257,12 @@ CI runs all of the above on every pull request (see `.github/workflows/`).
 
 ## Reporting Bugs
 
-Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml). Include:
-- NOBA version
+Open an issue with:
+- NOBA version (shown in Settings or `GET /api/system/info`)
 - Deployment method (Docker / bare-metal)
 - Steps to reproduce
-- Relevant log output (`~/.local/share/noba-web-server.log`)
+- Browser console errors (if frontend issue)
+- Relevant log output (`journalctl --user -u noba-web`)
 
 ---
 
