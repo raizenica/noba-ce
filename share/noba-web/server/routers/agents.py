@@ -69,6 +69,13 @@ async def api_agent_report(request: Request):
     hostname = body.get("hostname", "unknown")[:253]
     body["_received"] = time.time()
     body["_ip"] = _client_ip(request)
+    # Extract and store capability manifest if present
+    capabilities = body.pop("_capabilities", None)
+    if capabilities and isinstance(capabilities, dict):
+        try:
+            db.upsert_capability_manifest(hostname, json.dumps(capabilities))
+        except Exception as exc:
+            logger.error("Failed to store capability manifest for %s: %s", hostname, exc)
     cmd_results = body.pop("_cmd_results", None)
     if cmd_results:
         with _agent_cmd_lock:

@@ -175,6 +175,33 @@ from .healing import (
     list_heal_suggestions as _list_heal_suggestions,
     dismiss_heal_suggestion as _dismiss_heal_suggestion,
 )
+from .integrations import (
+    upsert_manifest as _upsert_manifest,
+    get_manifest as _get_manifest,
+    mark_capability_degraded as _mark_capability_degraded,
+    insert_instance as _insert_instance,
+    get_instance as _get_instance,
+    list_instances as _list_instances,
+    update_health as _update_integration_health,
+    delete_instance as _delete_instance,
+    add_to_group as _add_to_group,
+    remove_from_group as _remove_from_group,
+    list_group as _list_group,
+    list_groups as _list_groups,
+)
+from .integrations import (  # noqa: E402
+    insert_dependency as _dep_graph_insert,
+    list_dependencies as _dep_graph_list,
+    get_dependency as _dep_graph_get,
+    delete_dependency as _dep_graph_delete,
+    upsert_dependency as _dep_graph_upsert,
+    insert_heal_maintenance_window as _insert_heal_maint_window,
+    get_active_heal_maintenance_windows as _get_active_heal_maint_windows,
+    end_heal_maintenance_window as _end_heal_maint_window,
+    insert_snapshot as _insert_snapshot,
+    get_snapshot_row as _get_snapshot_row,
+    get_snapshot_by_ledger_id as _get_snapshot_by_ledger_id,
+)
 
 logger = logging.getLogger("noba")
 
@@ -666,6 +693,71 @@ class Database:
                     dismissed INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER,
                     UNIQUE(category, rule_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS integration_instances (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    url TEXT,
+                    auth_config TEXT NOT NULL,
+                    site TEXT,
+                    tags TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    health_status TEXT DEFAULT 'unknown',
+                    last_seen INTEGER,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS integration_groups (
+                    group_name TEXT NOT NULL,
+                    instance_id TEXT NOT NULL REFERENCES integration_instances(id),
+                    PRIMARY KEY (group_name, instance_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS capability_manifests (
+                    hostname TEXT PRIMARY KEY,
+                    manifest TEXT NOT NULL,
+                    probed_at INTEGER NOT NULL,
+                    degraded_capabilities TEXT DEFAULT '[]'
+                );
+
+                CREATE TABLE IF NOT EXISTS dependency_graph (
+                    id INTEGER PRIMARY KEY,
+                    target TEXT NOT NULL UNIQUE,
+                    depends_on TEXT,
+                    node_type TEXT NOT NULL,
+                    health_check TEXT,
+                    site TEXT,
+                    auto_discovered INTEGER DEFAULT 0,
+                    confirmed INTEGER DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS heal_maintenance_windows (
+                    id         INTEGER PRIMARY KEY,
+                    target     TEXT NOT NULL,
+                    cron_expr  TEXT,
+                    duration_s INTEGER NOT NULL,
+                    reason     TEXT,
+                    action     TEXT NOT NULL DEFAULT 'suppress',
+                    active     INTEGER NOT NULL DEFAULT 1,
+                    created_by TEXT,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_heal_maint_active
+                    ON heal_maintenance_windows(active, expires_at);
+
+                CREATE TABLE IF NOT EXISTS heal_snapshots (
+                    id INTEGER PRIMARY KEY,
+                    ledger_id INTEGER,
+                    target TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_heal_snapshots_ledger
+                    ON heal_snapshots(ledger_id);
             """)
             # Migrate existing databases: add assigned_to column if missing
             try:
@@ -683,6 +775,22 @@ class Database:
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+            # Migrate heal_ledger: add extended audit trail columns if missing
+            _extended_columns = [
+                ("heal_ledger", "risk_level", "TEXT"),
+                ("heal_ledger", "snapshot_id", "INTEGER"),
+                ("heal_ledger", "rollback_status", "TEXT"),
+                ("heal_ledger", "dependency_root", "TEXT"),
+                ("heal_ledger", "suppressed_by", "TEXT"),
+                ("heal_ledger", "maintenance_window_id", "INTEGER"),
+                ("heal_ledger", "instance_id", "TEXT"),
+            ]
+            for table, col, col_type in _extended_columns:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass  # column already exists
+            conn.commit()
         # Seed default playbook templates (outside the with-lock block so
         # _seed_default_playbooks can acquire the lock itself without deadlocking)
         _seed_default_playbooks(self._get_conn(), self._lock)
@@ -1387,3 +1495,80 @@ class Database:
 
     def dismiss_heal_suggestion(self, suggestion_id: int) -> None:
         _dismiss_heal_suggestion(self._get_conn(), self._lock, suggestion_id)
+
+    # ── Heal Snapshots ────────────────────────────────────────────────────────
+    def insert_snapshot(self, **kw) -> int:
+        return _insert_snapshot(self._get_conn(), self._lock, **kw)
+
+    def get_snapshot_row(self, snap_id: int) -> dict | None:
+        return _get_snapshot_row(self._get_conn(), self._lock, snap_id)
+
+    def get_snapshot_by_ledger_id(self, ledger_id: int) -> dict | None:
+        return _get_snapshot_by_ledger_id(self._get_conn(), self._lock, ledger_id)
+
+    # ── Integration Instances ─────────────────────────────────────────────────
+    def insert_integration_instance(self, **kw) -> None:
+        _insert_instance(self._get_conn(), self._lock, **kw)
+
+    def get_integration_instance(self, instance_id: str) -> dict | None:
+        return _get_instance(self._get_conn(), self._lock, instance_id)
+
+    def list_integration_instances(
+        self, *, category: str | None = None, site: str | None = None
+    ) -> list[dict]:
+        return _list_instances(self._get_conn(), self._lock, category=category, site=site)
+
+    def update_integration_health(self, instance_id: str, health_status: str) -> None:
+        _update_integration_health(self._get_conn(), self._lock, instance_id, health_status)
+
+    def delete_integration_instance(self, instance_id: str) -> None:
+        _delete_instance(self._get_conn(), self._lock, instance_id)
+
+    # ── Integration Groups ────────────────────────────────────────────────────
+    def add_to_integration_group(self, group_name: str, instance_id: str) -> None:
+        _add_to_group(self._get_conn(), self._lock, group_name, instance_id)
+
+    def remove_from_integration_group(self, group_name: str, instance_id: str) -> None:
+        _remove_from_group(self._get_conn(), self._lock, group_name, instance_id)
+
+    def list_integration_group(self, group_name: str) -> list[dict]:
+        return _list_group(self._get_conn(), self._lock, group_name)
+
+    def list_integration_groups(self) -> list[str]:
+        return _list_groups(self._get_conn(), self._lock)
+
+    # ── Capability Manifests ──────────────────────────────────────────────────
+    def upsert_capability_manifest(self, hostname: str, manifest: str) -> None:
+        _upsert_manifest(self._get_conn(), self._lock, hostname, manifest)
+
+    def get_capability_manifest(self, hostname: str) -> dict | None:
+        return _get_manifest(self._get_conn(), self._lock, hostname)
+
+    def mark_capability_degraded(self, hostname: str, tool_name: str) -> None:
+        _mark_capability_degraded(self._get_conn(), self._lock, hostname, tool_name)
+
+    # ── Dependency Graph ──────────────────────────────────────────────────────
+    def insert_dep_graph_node(self, **kw) -> None:
+        _dep_graph_insert(self._get_conn(), self._lock, **kw)
+
+    def list_dep_graph_nodes(self) -> list[dict]:
+        return _dep_graph_list(self._get_conn(), self._lock)
+
+    def get_dep_graph_node(self, target: str) -> dict | None:
+        return _dep_graph_get(self._get_conn(), self._lock, target)
+
+    def delete_dep_graph_node(self, target: str) -> None:
+        _dep_graph_delete(self._get_conn(), self._lock, target)
+
+    def upsert_dep_graph_node(self, **kw) -> None:
+        _dep_graph_upsert(self._get_conn(), self._lock, **kw)
+
+    # ── Heal Maintenance Windows ───────────────────────────────────────────────
+    def insert_heal_maintenance_window(self, **kw) -> int:
+        return _insert_heal_maint_window(self._get_conn(), self._lock, **kw)
+
+    def get_active_heal_maintenance_windows(self) -> list[dict]:
+        return _get_active_heal_maint_windows(self._get_conn(), self._lock)
+
+    def end_heal_maintenance_window(self, window_id: int) -> bool:
+        return _end_heal_maint_window(self._get_conn(), self._lock, window_id)

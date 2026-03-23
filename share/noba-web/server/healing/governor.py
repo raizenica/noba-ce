@@ -7,8 +7,15 @@ import time
 
 logger = logging.getLogger("noba")
 
-_LEVEL_ORDER = {"notify": 0, "approve": 1, "execute": 2}
-_LEVEL_BELOW = {"execute": "approve", "approve": "notify", "notify": "notify"}
+_ALL_LEVELS = ["observation", "dry_run", "notify", "approve", "execute"]
+_LEVEL_ORDER = {lvl: i for i, lvl in enumerate(_ALL_LEVELS)}
+_LEVEL_BELOW = {
+    "execute": "approve",
+    "approve": "notify",
+    "notify": "dry_run",
+    "dry_run": "observation",
+    "observation": "observation",
+}
 
 CIRCUIT_BREAKER_THRESHOLD = 3
 CIRCUIT_BREAKER_WINDOW_S = 3600
@@ -22,8 +29,12 @@ def effective_trust(rule_id: str, source: str, db) -> str:
     if not state:
         return "notify"
     level = state["current_level"]
-    if source == "prediction":
-        level = _LEVEL_BELOW.get(level, "notify")
+    if source in ("prediction", "anomaly", "health_score"):
+        demoted = _LEVEL_BELOW.get(level, "notify")
+        # Prediction/anomaly sources cap at minimum "notify" — never go into canary levels
+        if _LEVEL_ORDER.get(demoted, 0) < _LEVEL_ORDER.get("notify", 2):
+            demoted = "notify"
+        level = demoted
     return level
 
 

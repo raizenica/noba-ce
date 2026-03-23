@@ -42,7 +42,7 @@ from .simple import (  # noqa: F401
     get_speedtest,
     get_tautulli,
     get_traefik,
-    get_truenas,
+    get_truenas as _get_truenas_rest,  # legacy REST — kept as fallback
     get_vaultwarden,
     get_weather,
     get_xcpng,
@@ -64,6 +64,9 @@ from .proxmox import get_proxmox  # noqa: F401
 
 # Home Assistant (Bearer token)
 from .hass import get_hass, get_hass_entities, get_hass_services  # noqa: F401
+
+# TrueNAS (JSON-RPC 2.0 over WebSocket, with REST fallback)
+from .truenas_ws import get_truenas  # noqa: F401
 
 # Re-export httpx for tests that patch server.integrations.httpx.*
 import httpx  # noqa: F401

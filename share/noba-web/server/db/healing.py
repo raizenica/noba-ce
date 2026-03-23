@@ -28,6 +28,14 @@ def insert_heal_outcome(
     trust_level: str | None = None,
     source: str | None = None,
     approval_id: int | None = None,
+    # Extended audit trail fields
+    risk_level: str | None = None,
+    snapshot_id: int | None = None,
+    rollback_status: str | None = None,
+    dependency_root: str | None = None,
+    suppressed_by: str | None = None,
+    maintenance_window_id: int | None = None,
+    instance_id: str | None = None,
 ) -> int:
     """Insert a heal outcome record and return its row id."""
     now = int(time.time())
@@ -48,6 +56,13 @@ def insert_heal_outcome(
         source,
         approval_id,
         now,
+        risk_level,
+        snapshot_id,
+        rollback_status,
+        dependency_root,
+        suppressed_by,
+        maintenance_window_id,
+        instance_id,
     )
     with lock:
         cur = conn.execute(
@@ -57,8 +72,11 @@ def insert_heal_outcome(
                  action_type, action_params, escalation_step,
                  action_success, verified, duration_s,
                  metrics_before, metrics_after, trust_level,
-                 source, approval_id, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 source, approval_id, created_at,
+                 risk_level, snapshot_id, rollback_status,
+                 dependency_root, suppressed_by, maintenance_window_id,
+                 instance_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             params,
         )
@@ -187,7 +205,7 @@ def upsert_trust_state(
 ) -> None:
     """Insert or update trust state; track promotions/demotions."""
     now = int(time.time())
-    _LEVELS = ["notify", "suggest", "execute"]
+    _LEVELS = ["notify", "approve", "execute"]
 
     with lock:
         existing = conn.execute(
