@@ -500,6 +500,22 @@ if [[ -f "$SCRIPT_DIR/bin/noba" ]]; then
 fi
 
 # 4. Web dashboard
+# ── Python dependencies for web dashboard ────────────────────────────────────
+header "Python Dependencies"
+_py_deps=(fastapi "uvicorn[standard]" psutil pyyaml httpx websocket-client)
+if [[ "$DRY_RUN" == true ]]; then
+    dry "pip install ${_py_deps[*]}"
+else
+    if python3 -m pip install --quiet --upgrade "${_py_deps[@]}" 2>/dev/null; then
+        say_ok "Python packages: ${_py_deps[*]}"
+    elif pip3 install --quiet --upgrade "${_py_deps[@]}" 2>/dev/null; then
+        say_ok "Python packages: ${_py_deps[*]}"
+    else
+        say_warn "Could not install Python packages automatically."
+        say_warn "Please install manually: pip install ${_py_deps[*]}"
+    fi
+fi
+
 header "Installing Web Dashboard"
 
 for f in server.py; do
