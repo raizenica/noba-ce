@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 
 from .connectivity_monitor import ConnectivityMonitor
 from .correlation import HealCorrelator
@@ -45,8 +46,15 @@ class HealPipeline:
         self._dep_graph: DependencyGraph | None = None
         self._connectivity = ConnectivityMonitor()
         self._maintenance = self._init_maintenance(db)
-        self._active_alerts: set[str] = set()  # currently-failing targets
+        # Dependency-graph signal: "this target is broken" — TTL-based, refreshed
+        # on every incoming event. Used by root-cause suppression checks.
+        self._active_alerts: dict[str, float] = {}  # target -> expiry timestamp
         self._active_alerts_lock = threading.Lock()
+        self._alert_ttl = 300.0  # 5 minutes — ages out when events stop arriving
+        # Execution lifecycle: "we are actively healing this target" — precise
+        # add-on-execute, remove-on-outcome. Prevents duplicate heals.
+        self._active_heals: set[str] = set()
+        self._active_heals_lock = threading.Lock()
         self.on_outcome = None  # optional callback for testing
 
     @staticmethod
@@ -88,15 +96,31 @@ class HealPipeline:
         self._dep_graph = DependencyGraph.from_config(config)
         logger.info("Dependency graph loaded: %d nodes", len(self._dep_graph.all_nodes()))
 
+    def _refresh_alert(self, target: str) -> None:
+        """Mark a target as actively failing, extending its TTL."""
+        now = time.time()
+        with self._active_alerts_lock:
+            self._active_alerts[target] = now + self._alert_ttl
+            # Sweep expired entries opportunistically
+            expired = [t for t, exp in self._active_alerts.items() if exp <= now]
+            for t in expired:
+                del self._active_alerts[t]
+
+    def _is_alerting(self, target: str) -> bool:
+        """Check if a target is currently in the active-alerts set (not expired)."""
+        with self._active_alerts_lock:
+            exp = self._active_alerts.get(target)
+            return exp is not None and exp > time.time()
+
     def handle_heal_event(self, event: HealEvent) -> None:
         """Non-blocking pipeline entry point. Safe to call from any thread."""
+        # Refresh alert TTL on every event — even if absorbed by correlator.
+        # This keeps the dependency-graph signal alive as long as events arrive.
+        self._refresh_alert(event.target)
+
         request = self._correlator.correlate(event)
         if request is None:
             return  # absorbed
-
-        # Track this target as actively alerting
-        with self._active_alerts_lock:
-            self._active_alerts.add(event.target)
 
         # Site isolation check
         if self._dep_graph:
@@ -112,7 +136,8 @@ class HealPipeline:
             # failing, this target's failure is likely a downstream symptom — suppress
             if node and node.depends_on:
                 with self._active_alerts_lock:
-                    current_alerts = set(self._active_alerts)
+                    now = time.time()
+                    current_alerts = {t for t, exp in self._active_alerts.items() if exp > now}
 
                 # Check if any ancestor is failing
                 ancestors = self._dep_graph.get_ancestors(event.target)
@@ -245,6 +270,10 @@ class HealPipeline:
 
     def _handle_execute(self, plan: HealPlan, chain: list[dict]) -> None:
         from . import ledger
+        target = plan.request.primary_target
+
+        with self._active_heals_lock:
+            self._active_heals.add(target)
 
         def on_complete(outcome: HealOutcome) -> None:
             ledger.record(outcome, self._db)
@@ -252,8 +281,11 @@ class HealPipeline:
                 self.on_outcome(outcome)
 
             if outcome.verified:
+                with self._active_heals_lock:
+                    self._active_heals.discard(target)
+                # Clear the alert signal — target recovered
                 with self._active_alerts_lock:
-                    self._active_alerts.discard(plan.request.primary_target)
+                    self._active_alerts.pop(target, None)
                 self._planner.clear_escalation(plan.request.correlation_key)
                 return
 
@@ -266,6 +298,10 @@ class HealPipeline:
             next_plan = self._planner.advance(outcome, chain, self._db, effective_trust=trust)
             if next_plan:
                 self._executor.execute(next_plan, on_complete=on_complete)
+            else:
+                # Escalation chain exhausted — clean up execution tracker
+                with self._active_heals_lock:
+                    self._active_heals.discard(target)
 
         self._executor.execute(plan, on_complete=on_complete)
 

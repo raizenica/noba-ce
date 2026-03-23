@@ -24,6 +24,7 @@ All notable changes to NOBA Command Center are documented in this file.
 - **`total_agents` NameError** — Variable undefined if monitoring coverage section threw; now initialized before the try block.
 - **Rollback bypassed DB write lock** — Used raw `_get_conn()` outside lock; now uses `db.get_snapshot_by_ledger_id()` wrapper.
 - **Dead code in `get_heal_outcomes`** — Redundant LIMIT 0 query + double lock acquire removed.
+- **`_active_alerts` leak** — Targets added during suppressed paths (site isolation, root cause, maintenance, canary) stayed in the set forever, permanently blocking downstream healing. Split into TTL-based `_active_alerts` dict (dependency-graph signal, 5-min expiry, refreshed on every event) and `_active_heals` set (execution lifecycle, precise add/remove).
 - **Health score trigger** — Scheduler was passing Database object instead of health score categories to `evaluate_health_thresholds`. Now uses cached results from the last health score computation.
 - **Masonry grid after welcome dismiss** — Re-initializes ResizeObserver after the welcome screen is dismissed so cards lay out correctly.
 - **Self-update install step** — Added `--skip-deps` and `--no-restart` to install.sh invocation during self-update, preventing failure under `NoNewPrivileges=true` systemd environments and double-restart race condition.
