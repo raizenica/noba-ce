@@ -161,9 +161,11 @@ class TestNetworkConnections:
         resp = client.get("/api/network/connections")
         assert resp.status_code == 401
 
-    def test_viewer_returns_403(self, client, viewer_headers):
-        resp = client.get("/api/network/connections", headers=viewer_headers)
-        assert resp.status_code == 403
+    def test_viewer_can_access(self, client, viewer_headers):
+        with patch("server.routers.infrastructure.get_network_connections",
+                   return_value=[]):
+            resp = client.get("/api/network/connections", headers=viewer_headers)
+        assert resp.status_code == 200
 
     def test_operator_returns_200(self, client, operator_headers):
         fake = [{"laddr": "0.0.0.0:80", "raddr": "1.2.3.4:54321", "status": "ESTABLISHED"}]
@@ -574,7 +576,7 @@ class TestK8sScale:
             )
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
+    def test_operator_can_access(self, client, operator_headers):
         with patch("server.routers.infrastructure.read_yaml_settings",
                    return_value=_K8S_SETTINGS):
             resp = client.post(
@@ -582,7 +584,7 @@ class TestK8sScale:
                 json={"replicas": 2},
                 headers=operator_headers,
             )
-        assert resp.status_code == 403
+        assert resp.status_code != 403
 
     def test_admin_success(self, client, admin_headers):
         fake_resp = _make_httpx_response(200, {"spec": {"replicas": 2}})

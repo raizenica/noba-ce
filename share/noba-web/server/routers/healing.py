@@ -54,14 +54,17 @@ def api_healing_effectiveness(request: Request, auth=Depends(_get_auth)):
     outcomes = db.get_heal_outcomes(limit=500)
     total = len(outcomes)
     if total == 0:
-        return {"total": 0, "success": 0, "failure": 0, "success_rate": 0.0}
-    success = sum(1 for o in outcomes if o.get("outcome") == "success")
-    failure = total - success
+        return {"total": 0, "verified_count": 0, "failed_count": 0,
+                "pending_count": 0, "success_rate": 0.0}
+    verified = sum(1 for o in outcomes if o.get("verified") == 1)
+    pending = sum(1 for o in outcomes if o.get("action_success") is None)
+    failed = total - verified - pending
     return {
         "total": total,
-        "success": success,
-        "failure": failure,
-        "success_rate": round(success / total, 4) if total else 0.0,
+        "verified_count": verified,
+        "failed_count": failed,
+        "pending_count": pending,
+        "success_rate": round(verified / total, 4) if total else 0.0,
     }
 
 
@@ -293,13 +296,9 @@ def api_delete_maintenance(window_id: int, auth=Depends(_require_operator)):
 @router.post("/api/healing/rollback/{ledger_id}")
 def api_rollback(ledger_id: int, auth=Depends(_require_admin)):
     """Execute a rollback for a heal ledger entry using its pre-heal snapshot."""
-    from ..healing.snapshots import execute_rollback, get_snapshot_by_ledger, is_reversible
-    from ..db import db as _db
+    from ..healing.snapshots import execute_rollback, is_reversible
 
-    conn = _db._get_conn()
-    lock = _db._lock
-
-    snapshot = get_snapshot_by_ledger(conn, lock, ledger_id)
+    snapshot = db.get_snapshot_by_ledger_id(ledger_id)
     if snapshot is None:
         raise HTTPException(404, f"No snapshot found for ledger entry {ledger_id}")
 

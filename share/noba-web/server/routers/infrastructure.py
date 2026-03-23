@@ -72,7 +72,7 @@ async def api_service_control(request: Request, auth=Depends(_require_operator))
 
 # ── Network analysis ─────────────────────────────────────────────────────────
 @router.get("/api/network/connections")
-def api_network_connections(auth=Depends(_require_operator)):
+def api_network_connections(auth=Depends(_get_auth)):
     """List active network connections."""
     return get_network_connections()
 
@@ -304,7 +304,7 @@ def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
 
 
 @router.post("/api/k8s/deployments/{namespace}/{name}/scale")
-async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depends(_require_admin)):
+async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depends(_require_operator)):
     """Scale a deployment."""
     namespace = _validate_k8s_name(namespace, "namespace")
     name = _validate_k8s_name(name, "name")

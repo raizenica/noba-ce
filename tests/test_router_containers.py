@@ -97,9 +97,10 @@ class TestContainerLogs:
         resp = client.get("/api/containers/nginx/logs")
         assert resp.status_code == 401
 
-    def test_viewer_returns_403(self, client, viewer_headers):
-        resp = client.get("/api/containers/nginx/logs", headers=viewer_headers)
-        assert resp.status_code == 403
+    def test_viewer_can_access(self, client, viewer_headers):
+        with patch("server.routers.containers.subprocess.run", side_effect=FileNotFoundError):
+            resp = client.get("/api/containers/nginx/logs", headers=viewer_headers)
+        assert resp.status_code in (200, 404)
 
     def test_invalid_name_returns_400(self, client, operator_headers):
         resp = client.get("/api/containers/bad name!/logs", headers=operator_headers)
@@ -146,9 +147,10 @@ class TestContainerInspect:
         resp = client.get("/api/containers/nginx/inspect")
         assert resp.status_code == 401
 
-    def test_viewer_returns_403(self, client, viewer_headers):
-        resp = client.get("/api/containers/nginx/inspect", headers=viewer_headers)
-        assert resp.status_code == 403
+    def test_viewer_can_access(self, client, viewer_headers):
+        with patch("server.routers.containers.subprocess.run", side_effect=FileNotFoundError):
+            resp = client.get("/api/containers/nginx/inspect", headers=viewer_headers)
+        assert resp.status_code in (200, 404)
 
     def test_success_returns_container_fields(self, client, operator_headers):
         fake_inspect = json.dumps([{
@@ -215,9 +217,10 @@ class TestContainerStats:
         resp = client.get("/api/containers/stats")
         assert resp.status_code == 401
 
-    def test_viewer_returns_403(self, client, viewer_headers):
-        resp = client.get("/api/containers/stats", headers=viewer_headers)
-        assert resp.status_code == 403
+    def test_viewer_can_access(self, client, viewer_headers):
+        with patch("server.routers.containers.subprocess.run", side_effect=FileNotFoundError):
+            resp = client.get("/api/containers/stats", headers=viewer_headers)
+        assert resp.status_code in (200, 404)
 
     def test_success_returns_list(self, client, operator_headers):
         mock_result = MagicMock()
@@ -299,15 +302,15 @@ class TestContainerPull:
 # ===========================================================================
 
 class TestComposeProjects:
-    """List compose projects — operator auth required."""
+    """List compose projects — viewer auth required."""
 
     def test_no_auth_returns_401(self, client):
         resp = client.get("/api/compose/projects")
         assert resp.status_code == 401
 
-    def test_viewer_returns_403(self, client, viewer_headers):
+    def test_viewer_can_access(self, client, viewer_headers):
         resp = client.get("/api/compose/projects", headers=viewer_headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
     def test_success_returns_list(self, client, operator_headers):
         fake_projects = json.dumps([

@@ -721,7 +721,7 @@ def api_anomaly_report(request: Request, auth=Depends(_get_auth)):
 
 
 @router.post("/api/reports/custom")
-async def api_custom_report(request: Request, auth=Depends(_get_auth)):
+async def api_custom_report(request: Request, auth=Depends(_require_operator)):
     """Generate a custom report from a template definition."""
     body = await _read_body(request)
     metrics = body.get("metrics", ["cpu_percent", "mem_percent"])

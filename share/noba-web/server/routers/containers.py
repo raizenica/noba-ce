@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from ..config import ALLOWED_ACTIONS
-from ..deps import _client_ip, _int_param, _read_body, _require_admin, _require_operator, db
+from ..deps import _client_ip, _get_auth, _int_param, _read_body, _require_admin, _require_operator, db
 from ..metrics import bust_container_cache, strip_ansi
 from ..runner import job_runner
 from ..yaml_config import read_yaml_settings
@@ -53,7 +53,7 @@ async def api_container_control(request: Request, auth=Depends(_require_operator
 
 # ── Docker deep management ───────────────────────────────────────────────
 @router.get("/api/containers/{name}/logs")
-def api_container_logs(name: str, request: Request, auth=Depends(_require_operator)):
+def api_container_logs(name: str, request: Request, auth=Depends(_get_auth)):
     """Stream container logs (last N lines)."""
     if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
         raise HTTPException(400, "Invalid container name")
@@ -73,7 +73,7 @@ def api_container_logs(name: str, request: Request, auth=Depends(_require_operat
 
 
 @router.get("/api/containers/{name}/inspect")
-def api_container_inspect(name: str, auth=Depends(_require_operator)):
+def api_container_inspect(name: str, auth=Depends(_get_auth)):
     """Get detailed container info."""
     if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$", name):
         raise HTTPException(400, "Invalid container name")
@@ -118,7 +118,7 @@ def api_container_inspect(name: str, auth=Depends(_require_operator)):
 
 
 @router.get("/api/containers/stats")
-def api_container_stats(auth=Depends(_require_operator)):
+def api_container_stats(auth=Depends(_get_auth)):
     """Get per-container resource usage."""
     for runtime in ("docker", "podman"):
         try:
@@ -177,7 +177,7 @@ async def api_container_pull(name: str, request: Request, auth=Depends(_require_
 
 # ── /api/compose ──────────────────────────────────────────────────────────────
 @router.get("/api/compose/projects")
-def api_compose_projects(auth=Depends(_require_operator)):
+def api_compose_projects(auth=Depends(_get_auth)):
     try:
         r = subprocess.run(["docker", "compose", "ls", "--format", "json"],
                           capture_output=True, text=True, timeout=10)

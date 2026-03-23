@@ -204,7 +204,7 @@ def api_impact_analysis(service: str, auth=Depends(_get_auth)):
 
 @router.post("/api/dependencies/discover/{hostname}")
 async def api_discover_services(hostname: str, request: Request,
-                                auth=Depends(_require_admin)):
+                                auth=Depends(_require_operator)):
     """Trigger discover_services command on a remote agent."""
     username, _ = auth
     ip = _client_ip(request)

@@ -543,7 +543,7 @@ class TestImpactAnalysis:
 # ===========================================================================
 
 class TestDiscoverServices:
-    """POST /api/dependencies/discover/{hostname} — admin required."""
+    """POST /api/dependencies/discover/{hostname} — operator required."""
 
     def test_no_auth_returns_401(self, client):
         resp = client.post("/api/dependencies/discover/myhost")
@@ -555,11 +555,11 @@ class TestDiscoverServices:
         )
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
+    def test_operator_can_access(self, client, operator_headers):
         resp = client.post(
             "/api/dependencies/discover/myhost", headers=operator_headers
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
     def test_admin_queues_command_for_unknown_host(self, client, admin_headers):
         resp = client.post(

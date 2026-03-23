@@ -38,9 +38,11 @@ class TestRecoveryTailscale:
         resp = client.post("/api/recovery/tailscale-reconnect", headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.post("/api/recovery/tailscale-reconnect", headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.routers.operations.subprocess.run",
+                   return_value=_make_proc(0, "VPN is up", "")):
+            resp = client.post("/api/recovery/tailscale-reconnect", headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_admin_success(self, client, admin_headers):
         with patch("server.routers.operations.subprocess.run",
@@ -83,9 +85,11 @@ class TestRecoveryDnsFlush:
         resp = client.post("/api/recovery/dns-flush", headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.post("/api/recovery/dns-flush", headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.routers.operations.subprocess.run",
+                   return_value=_make_proc(0, "", "")):
+            resp = client.post("/api/recovery/dns-flush", headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_admin_success(self, client, admin_headers):
         with patch("server.routers.operations.subprocess.run",
@@ -126,10 +130,12 @@ class TestRecoveryServiceRestart:
                            json={"service": "nginx"}, headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.post("/api/recovery/service-restart",
-                           json={"service": "nginx"}, headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.routers.operations.subprocess.run",
+                   return_value=_make_proc(0, "", "")):
+            resp = client.post("/api/recovery/service-restart",
+                               json={"service": "nginx"}, headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_admin_empty_service_returns_400(self, client, admin_headers):
         resp = client.post("/api/recovery/service-restart",
@@ -717,9 +723,11 @@ class TestExportAnsible:
         resp = client.get("/api/export/ansible", headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.get("/api/export/ansible", headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.iac_export.generate_ansible",
+                   return_value="---\n- hosts: all\n"):
+            resp = client.get("/api/export/ansible", headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_admin_can_access(self, client, admin_headers):
         with patch("server.iac_export.generate_ansible",
@@ -759,9 +767,12 @@ class TestExportDockerCompose:
         resp = client.get("/api/export/docker-compose?hostname=h1", headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.get("/api/export/docker-compose?hostname=h1", headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.iac_export.generate_docker_compose",
+                   return_value="version: '3'\n"):
+            resp = client.get("/api/export/docker-compose?hostname=h1",
+                              headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_missing_hostname_returns_400(self, client, admin_headers):
         resp = client.get("/api/export/docker-compose", headers=admin_headers)
@@ -797,9 +808,12 @@ class TestExportShell:
         resp = client.get("/api/export/shell?hostname=h1", headers=viewer_headers)
         assert resp.status_code == 403
 
-    def test_operator_returns_403(self, client, operator_headers):
-        resp = client.get("/api/export/shell?hostname=h1", headers=operator_headers)
-        assert resp.status_code == 403
+    def test_operator_can_access(self, client, operator_headers):
+        with patch("server.iac_export.generate_shell_script",
+                   return_value="#!/bin/bash\n"):
+            resp = client.get("/api/export/shell?hostname=h1",
+                              headers=operator_headers)
+        assert resp.status_code == 200
 
     def test_missing_hostname_returns_400(self, client, admin_headers):
         resp = client.get("/api/export/shell", headers=admin_headers)

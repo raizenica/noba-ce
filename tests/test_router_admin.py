@@ -983,17 +983,17 @@ class TestAnomalyReport:
 # ===========================================================================
 
 class TestCustomReport:
-    """Custom report generation — any authenticated user."""
+    """Custom report generation — operator required."""
 
     def test_no_auth_returns_401(self, client):
         resp = client.post("/api/reports/custom", json={"metrics": ["cpu_percent"]})
         assert resp.status_code == 401
 
-    def test_viewer_can_access(self, client, viewer_headers):
+    def test_viewer_returns_403(self, client, viewer_headers):
         resp = client.post("/api/reports/custom",
                            json={"metrics": ["cpu_percent"], "title": "Test"},
                            headers=viewer_headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
     def test_returns_report_structure(self, client, admin_headers):
         resp = client.post("/api/reports/custom",

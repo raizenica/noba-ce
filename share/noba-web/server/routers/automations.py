@@ -128,6 +128,11 @@ async def api_automations_create(request: Request, auth=Depends(_require_operato
         raise HTTPException(400, f"Type must be one of: {', '.join(sorted(_AUTO_TYPES))}")
     if not isinstance(config, dict):
         raise HTTPException(400, "Config must be a JSON object")
+    # Script automations with custom commands require admin (shell access)
+    if atype == "script" and config.get("command"):
+        _, role = auth
+        if role != "admin":
+            raise HTTPException(403, "Custom script commands require admin role")
     _validate_auto_config(atype, config)
     auto_id = uuid.uuid4().hex[:12]
     if not db.insert_automation(auto_id, name, atype, config, schedule, enabled):
@@ -153,6 +158,11 @@ async def api_automations_update(auto_id: str, request: Request, auth=Depends(_r
         updates["type"] = body["type"]
     if "config" in body:
         atype = body.get("type", existing["type"])
+        # Script automations with custom commands require admin (shell access)
+        if atype == "script" and body["config"].get("command"):
+            _, role = auth
+            if role != "admin":
+                raise HTTPException(403, "Custom script commands require admin role")
         _validate_auto_config(atype, body["config"])
         updates["config"] = body["config"]
     if "schedule" in body:

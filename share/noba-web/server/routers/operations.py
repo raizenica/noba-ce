@@ -35,7 +35,7 @@ router = APIRouter(tags=["operations"])
 
 # ── /api/recovery ─────────────────────────────────────────────────────────────
 @router.post("/api/recovery/tailscale-reconnect")
-async def api_recovery_tailscale(request: Request, auth=Depends(_require_admin)):
+async def api_recovery_tailscale(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip = _client_ip(request)
     try:
@@ -51,7 +51,7 @@ async def api_recovery_tailscale(request: Request, auth=Depends(_require_admin))
 
 
 @router.post("/api/recovery/dns-flush")
-async def api_recovery_dns(request: Request, auth=Depends(_require_admin)):
+async def api_recovery_dns(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip = _client_ip(request)
     try:
@@ -68,7 +68,7 @@ async def api_recovery_dns(request: Request, auth=Depends(_require_admin)):
 
 
 @router.post("/api/recovery/service-restart")
-async def api_recovery_service(request: Request, auth=Depends(_require_admin)):
+async def api_recovery_service(request: Request, auth=Depends(_require_operator)):
     username, _ = auth
     ip = _client_ip(request)
     body = await _read_body(request)
@@ -352,7 +352,7 @@ def api_processes_current(auth=Depends(_get_auth)):
 # ── IaC Export endpoints ─────────────────────────────────────────────────────
 
 @router.get("/api/export/ansible")
-async def api_export_ansible(request: Request, auth=Depends(_require_admin)):
+async def api_export_ansible(request: Request, auth=Depends(_require_operator)):
     """Generate an Ansible playbook from live agent data."""
     from ..iac_export import generate_ansible
 
@@ -364,7 +364,7 @@ async def api_export_ansible(request: Request, auth=Depends(_require_admin)):
 
 
 @router.get("/api/export/docker-compose")
-async def api_export_docker_compose(request: Request, auth=Depends(_require_admin)):
+async def api_export_docker_compose(request: Request, auth=Depends(_require_operator)):
     """Generate a docker-compose.yml from live agent container data."""
     from ..iac_export import generate_docker_compose
 
@@ -378,7 +378,7 @@ async def api_export_docker_compose(request: Request, auth=Depends(_require_admi
 
 
 @router.get("/api/export/shell")
-async def api_export_shell(request: Request, auth=Depends(_require_admin)):
+async def api_export_shell(request: Request, auth=Depends(_require_operator)):
     """Generate a bash setup script from live agent data."""
     from ..iac_export import generate_shell_script
 

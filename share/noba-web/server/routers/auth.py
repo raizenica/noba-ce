@@ -14,7 +14,7 @@ from ..auth import (
     rate_limiter, token_store, users, valid_username, verify_password,
 )
 from ..config import VALID_ROLES
-from ..deps import _client_ip, _get_auth, _read_body, _require_admin, _require_operator, db
+from ..deps import _client_ip, _get_auth, _read_body, _require_admin, db
 from ..yaml_config import read_yaml_settings
 
 logger = logging.getLogger("noba")
@@ -113,7 +113,7 @@ async def api_logout(request: Request):
 
 # ── TOTP 2FA routes ──────────────────────────────────────────────────────────
 @router.post("/api/auth/totp/setup")
-async def api_totp_setup(request: Request, auth=Depends(_require_operator)):
+async def api_totp_setup(request: Request, auth=Depends(_get_auth)):
     from ..auth import generate_totp_secret
     username, _ = auth
     secret = generate_totp_secret()

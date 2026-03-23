@@ -41,7 +41,7 @@ def effective_trust(rule_id: str, source: str, db) -> str:
 def check_circuit_breaker(rule_id: str, db) -> bool:
     """Check if circuit breaker should trip. Returns True if tripped (demoted)."""
     cutoff = int(time.time()) - CIRCUIT_BREAKER_WINDOW_S
-    outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=CIRCUIT_BREAKER_THRESHOLD)
+    outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=50)
     recent_failures = [
         o for o in outcomes
         if o["created_at"] >= cutoff

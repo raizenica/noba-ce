@@ -30,6 +30,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
     categories: dict[str, dict] = {}
     stats = bg_stats or {}
     now = int(time.time())
+    total_agents = 0
 
     # ── 1. Monitoring coverage: agents online / total agents (0-10) ───────
     try:

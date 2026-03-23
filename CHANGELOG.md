@@ -15,6 +15,15 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Zero CDN dependencies** — Font Awesome, Chakra Petch, and JetBrains Mono are now bundled locally via npm. No external requests needed — works fully offline and fixes font/icon rendering issues in Docker.
 
 ### Fixed
+- **Healing effectiveness always 0%** — Endpoint queried non-existent `outcome` field; now uses `verified`/`action_success` and returns `verified_count`/`failed_count`/`pending_count` matching the frontend chart.
+- **Circuit breaker never tripped** — Query limit equalled threshold (3), so any intermittent success prevented trip. Now looks back 50 entries within the time window.
+- **LedgerTimeline timestamps** — Unix seconds passed to `new Date()` without ×1000; all entries showed epoch dates.
+- **Expired tokens accepted from DB** — Token fallback path promoted expired tokens to memory without checking expiry.
+- **Double JSON encoding** — `evidence` field in health trigger suggestions was pre-serialized then re-serialized by `insert_heal_suggestion`.
+- **Dict passed as string** — Canary dry-run passed a dict to `suggested_action` (typed `str | None`); now serialized with `json.dumps()`.
+- **`total_agents` NameError** — Variable undefined if monitoring coverage section threw; now initialized before the try block.
+- **Rollback bypassed DB write lock** — Used raw `_get_conn()` outside lock; now uses `db.get_snapshot_by_ledger_id()` wrapper.
+- **Dead code in `get_heal_outcomes`** — Redundant LIMIT 0 query + double lock acquire removed.
 - **Health score trigger** — Scheduler was passing Database object instead of health score categories to `evaluate_health_thresholds`. Now uses cached results from the last health score computation.
 - **Masonry grid after welcome dismiss** — Re-initializes ResizeObserver after the welcome screen is dismissed so cards lay out correctly.
 - **Self-update install step** — Added `--skip-deps` and `--no-restart` to install.sh invocation during self-update, preventing failure under `NoNewPrivileges=true` systemd environments and double-restart race condition.
@@ -22,7 +31,11 @@ All notable changes to NOBA Command Center are documented in this file.
 ### Added
 - **Self-update system** — Check for updates and apply them from the UI (Settings → General). Backend: `GET /api/system/update/check` compares local version to remote via git, `POST /api/system/update/apply` pulls, rebuilds frontend, re-installs, and restarts the service. Frontend: glowing update pill in the header notifies admins when an update is available, with changelog preview and one-click apply.
 
+### Changed
+- **Auth level corrections** — 9 routes corrected: container read endpoints (logs, inspect, stats, compose), network connections, and IaC exports downgraded to viewer; K8s scale, service discovery, and recovery actions downgraded to operator; custom reports upgraded to operator. TOTP setup lowered to viewer so all users can enable 2FA.
+
 ### Security
+- **Script automation shell escalation blocked** — Automations with custom `command` fields now require admin role, preventing operator→shell privilege escalation.
 - **OAuth2/OIDC CSRF protection** — All social login and OIDC flows now generate and validate a cryptographic `state` parameter, preventing login CSRF attacks.
 - **OAuth token leak fixed** — Account linking no longer passes the NOBA session token as the OAuth `state` parameter. Tokens are stored server-side with a random nonce.
 - **Healing `run` action restricted** — Command execution via the healing pipeline is now restricted to an allowlist of safe prefixes (systemctl, docker, podman, restic, rclone, certbot).

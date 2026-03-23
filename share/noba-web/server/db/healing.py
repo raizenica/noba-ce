@@ -108,15 +108,11 @@ def get_heal_outcomes(
             f"SELECT * FROM heal_ledger {where} ORDER BY created_at DESC LIMIT ?",
             args,
         ).fetchall()
+        if not rows:
+            return []
         cols = [d[0] for d in conn.execute(
-            f"SELECT * FROM heal_ledger {where} LIMIT 0", args[:-1]
-        ).description or []]
-    if not rows:
-        return []
-    # Re-fetch column names from a fresh describe
-    with lock:
-        cur = conn.execute("SELECT * FROM heal_ledger LIMIT 0")
-        cols = [d[0] for d in cur.description]
+            "SELECT * FROM heal_ledger LIMIT 0"
+        ).description]
     return [dict(zip(cols, row)) for row in rows]
 
 

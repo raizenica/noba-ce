@@ -81,7 +81,7 @@ def evaluate_health_thresholds(
             "message": msg,
             "rule_id": f"health:{cat_name}",
             "suggested_action": json.dumps(actionable.get("suggested_actions", [])),
-            "evidence": json.dumps({"score": score, "threshold": threshold, "details": details}),
+            "evidence": {"score": score, "threshold": threshold, "details": details},
         })
 
         # For very low scores in actionable categories, emit heal event

@@ -1,6 +1,7 @@
 """Noba -- Self-healing pipeline."""
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -181,7 +182,7 @@ class HealPipeline:
                     severity=event.severity,
                     message=f"Dry-run simulation for {event.rule_id} on {event.target}",
                     rule_id=event.rule_id,
-                    suggested_action=sim.get("would_select", {}),
+                    suggested_action=json.dumps(sim.get("would_select", {})),
                     evidence=sim,
                 )
             except Exception as exc:

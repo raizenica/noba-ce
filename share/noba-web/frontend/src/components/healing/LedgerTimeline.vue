@@ -65,7 +65,7 @@ function resultLabel(entry) {
 
 function formatTime(ts) {
   if (!ts) return ''
-  const d = new Date(ts)
+  const d = new Date(ts * 1000)
   const now = Date.now()
   const diff = now - d.getTime()
   const mins = Math.floor(diff / 60000)
