@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import socket
 from urllib.parse import urlparse
 
 import httpx
@@ -13,6 +14,11 @@ from ..deps import _get_auth, _read_body, _require_admin, _require_operator, db
 
 logger = logging.getLogger("noba")
 router = APIRouter(tags=["integrations"])
+
+_UPDATABLE_FIELDS = frozenset({
+    "name", "url", "api_key", "username", "password", "site", "tags",
+    "enabled", "group_id", "verify_ssl", "extra",
+})
 
 
 def _is_safe_url(url: str) -> bool:
@@ -31,10 +37,23 @@ def _is_safe_url(url: str) -> bool:
         # Block private IP ranges
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                 return False
         except ValueError:
-            pass  # hostname is a domain name, allow it
+            pass  # hostname is a domain name — resolve and check below
+        # If it's a hostname (not an IP), resolve it and check the resolved IP
+        try:
+            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for family, _, _, _, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                try:
+                    ip = ipaddress.ip_address(ip_str)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                        return False
+                except ValueError:
+                    continue
+        except socket.gaierror:
+            return False  # can't resolve = not safe
         return True
     except Exception:
         return False
@@ -137,6 +156,9 @@ async def api_update_instance(
         update_fields["tags"] = json.dumps(t) if isinstance(t, list) else t
 
     if update_fields:
+        invalid = set(update_fields.keys()) - _UPDATABLE_FIELDS
+        if invalid:
+            raise HTTPException(400, f"Invalid fields: {', '.join(invalid)}")
         try:
             conn = db._get_conn()
             lock = db._lock

@@ -1,6 +1,7 @@
 """Noba – Agent management: CRUD, commands, WebSocket, deploy, file transfer."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -778,7 +779,7 @@ async def api_agent_network_stats(hostname: str, request: Request, auth=Depends(
 # ── Agent log streaming endpoints ────────────────────────────────────────────
 
 @router.post("/api/agents/{hostname}/stream-logs")
-async def api_agent_stream_logs(hostname: str, request: Request, auth=Depends(_require_admin)):
+async def api_agent_stream_logs(hostname: str, request: Request, auth=Depends(_require_operator)):
     """Start a live log stream on a remote agent via follow_logs command."""
     username, _ = auth
     ip = _client_ip(request)
@@ -801,7 +802,7 @@ async def api_agent_stream_logs(hostname: str, request: Request, auth=Depends(_r
 
 
 @router.delete("/api/agents/{hostname}/stream-logs/{cmd_id}")
-async def api_agent_stop_stream(hostname: str, cmd_id: str, auth=Depends(_require_admin)):
+async def api_agent_stop_stream(hostname: str, cmd_id: str, auth=Depends(_require_operator)):
     """Stop a running log stream on a remote agent."""
     username, _ = auth
     stop_id = secrets.token_hex(8)
@@ -989,7 +990,8 @@ async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
         ssh_cmd = ["ssh", "-p", str(target_port)] + _ssh_common
 
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             scp_cmd + [str(agent_path), f"{target}:/tmp/noba-agent.py"],
             capture_output=True, text=True, timeout=30, env=env,
         )
@@ -1024,7 +1026,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now noba-agent 2>&1
 systemctl is-active noba-agent
 """
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ssh_cmd + [target, "bash", "-s"],
             input=install_cmds, capture_output=True, text=True,
             timeout=60, env=env,

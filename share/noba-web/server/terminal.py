@@ -12,8 +12,11 @@ import struct
 import subprocess
 import termios
 import threading
+import time
 
 from fastapi import WebSocket, WebSocketDisconnect
+
+from .deps import db
 
 logger = logging.getLogger("noba")
 
@@ -25,14 +28,21 @@ TERMINAL_ENABLED = os.environ.get("NOBA_TERMINAL_ENABLED", "true").lower() in (
 )
 
 
-async def terminal_handler(ws: WebSocket, username: str) -> None:
+async def terminal_handler(ws: WebSocket, username: str, role: str = "admin") -> None:
     """Handle a WebSocket terminal session."""
     if not TERMINAL_ENABLED:
         await ws.close(code=4003, reason="Terminal disabled")
         return
 
     await ws.accept()
-    logger.info("Terminal session opened by %s", username)
+
+    client_ip = ""
+    if ws.client:
+        client_ip = ws.client.host or ""
+
+    start_time = time.time()
+    logger.info("Terminal session started: user=%s, role=%s, ip=%s", username, role, client_ip)
+    db.audit_log("terminal_session_start", username, f"PTY session opened (role={role})", client_ip)
 
     # Create PTY
     master_fd, slave_fd = pty.openpty()
@@ -141,4 +151,6 @@ async def terminal_handler(ws: WebSocket, username: str) -> None:
             await ws.close()
         except Exception:
             pass
-        logger.info("Terminal session closed for %s", username)
+        duration = int(time.time() - start_time)
+        logger.info("Terminal session ended: user=%s, duration=%ds", username, duration)
+        db.audit_log("terminal_session_end", username, f"PTY session closed (duration={duration}s)", client_ip)

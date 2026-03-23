@@ -5,7 +5,7 @@ import { useApi } from '../../composables/useApi'
 import { useModalsStore } from '../../stores/modals'
 
 const authStore = useAuthStore()
-const { get, post, put } = useApi()
+const { get, post, put, del } = useApi()
 const modals = useModalsStore()
 
 const spComponents = ref([])
@@ -49,10 +49,7 @@ async function createStatusComponent() {
 async function deleteStatusComponent(id) {
   if (!await modals.confirm('Delete this component?')) return
   try {
-    await fetch(`/api/status/components/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${authStore.token}` },
-    })
+    await del(`/api/status/components/${id}`)
     await fetchComponents()
   } catch { /* silent */ }
 }

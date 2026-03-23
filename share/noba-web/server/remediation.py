@@ -1,12 +1,48 @@
 """Noba – Remediation action registry."""
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import subprocess
 import time
+from urllib.parse import urlparse
 
 from .yaml_config import read_yaml_settings
+
+_RUN_ALLOWED_PREFIXES = (
+    "systemctl restart", "systemctl reload", "systemctl start", "systemctl stop",
+    "docker restart", "docker start", "docker stop",
+    "podman restart", "podman start", "podman stop",
+    "restic backup", "restic snapshots",
+    "rclone sync", "rclone copy",
+    "certbot renew",
+)
+
+
+def _is_safe_webhook_url(url: str) -> bool:
+    """Block requests to private/internal networks."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        if not hostname:
+            return False
+        # Block common internal hostnames
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+        # Try to parse as IP and check for private ranges
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False
+        except ValueError:
+            pass  # hostname, not IP — allow (DNS resolution check would need async)
+        # Block cloud metadata endpoints
+        if hostname == "169.254.169.254":
+            return False
+        return True
+    except Exception:
+        return False
 
 logger = logging.getLogger("noba")
 
@@ -720,7 +756,9 @@ def _handle_run(params):
     import shlex
     command = params.get("command", "")
     if not command:
-        return {"success": False, "output": "No command specified"}
+        return {"success": False, "error": "No command specified"}
+    if not any(command.strip().startswith(prefix) for prefix in _RUN_ALLOWED_PREFIXES):
+        return {"success": False, "error": f"Command not in allowlist: {command.split()[0]}"}
     r = subprocess.run(shlex.split(command), timeout=60, capture_output=True, text=True)
     return {"success": r.returncode == 0, "output": (r.stdout + r.stderr)[:500]}
 
@@ -728,6 +766,8 @@ def _handle_run(params):
 def _handle_webhook(params):
     import urllib.request
     url = params.get("url", "")
+    if not _is_safe_webhook_url(url):
+        return {"success": False, "error": f"URL blocked by SSRF protection: {url}"}
     method = params.get("method", "POST").upper()
     if not url or not url.startswith(("http://", "https://")):
         return {"success": False, "output": "Invalid URL"}

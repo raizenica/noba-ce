@@ -623,9 +623,8 @@ def authenticate_ldap(username: str, password: str, read_settings_fn) -> tuple[s
         server = ldap3.Server(ldap_url, get_info=ldap3.NONE, connect_timeout=5)
         # First bind with service account to search for user
         conn = ldap3.Connection(server, user=bind_dn, password=bind_pw, auto_bind=True)
-        # Escape LDAP special characters to prevent injection
-        safe_name = username.replace("\\", "\\5c").replace("*", "\\2a").replace(
-            "(", "\\28").replace(")", "\\29").replace("\x00", "\\00")
+        # Escape LDAP special characters to prevent injection (RFC 4515)
+        safe_name = _ldap_escape(username)
         conn.search(base_dn, f"(|(uid={safe_name})(sAMAccountName={safe_name})(mail={safe_name}))",
                     attributes=["memberOf", "cn"])
         if not conn.entries:
@@ -647,6 +646,20 @@ def authenticate_ldap(username: str, password: str, read_settings_fn) -> tuple[s
         return None, None
 
 
+def _ldap_escape(s: str) -> str:
+    """RFC 4515 LDAP filter value escaping."""
+    out = []
+    for c in s:
+        if c in ('\\', '*', '(', ')', '\x00'):
+            out.append(f"\\{ord(c):02x}")
+        elif ord(c) > 127:
+            for b in c.encode("utf-8"):
+                out.append(f"\\{b:02x}")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
 def authenticate(authorization: str = "") -> tuple[str | None, str | None]:
     """Extract and validate token from Authorization header or API key."""
     if authorization.startswith("Bearer "):
@@ -658,5 +671,7 @@ def authenticate(authorization: str = "") -> tuple[str | None, str | None]:
         from .db import db
         key_data = db.get_api_key(key_hash)
         if key_data:
+            if key_data.get("expires_at") and key_data["expires_at"] < int(time.time()):
+                return None, None
             return f"apikey:{key_data['name']}", key_data['role']
     return None, None

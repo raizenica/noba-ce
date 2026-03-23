@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import Sortable from 'sortablejs'
 import { useDashboardStore } from '../stores/dashboard'
 import { useSettingsStore } from '../stores/settings'

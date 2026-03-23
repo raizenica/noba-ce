@@ -1,6 +1,7 @@
 """Noba – System operations, recovery, journal, backups, and IaC export endpoints."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -38,7 +39,8 @@ async def api_recovery_tailscale(request: Request, auth=Depends(_require_admin))
     username, _ = auth
     ip = _client_ip(request)
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["sudo", "-n", "tailscale", "up"], capture_output=True, text=True, timeout=15,
         )
         db.audit_log("recovery_tailscale", username, f"exit={result.returncode}", ip)
@@ -53,7 +55,8 @@ async def api_recovery_dns(request: Request, auth=Depends(_require_admin)):
     username, _ = auth
     ip = _client_ip(request)
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["sudo", "-n", "systemctl", "restart", "pihole-FTL"],
             capture_output=True, text=True, timeout=15,
         )
@@ -73,7 +76,8 @@ async def api_recovery_service(request: Request, auth=Depends(_require_admin)):
     if not service or len(service) > 256 or not re.match(r'^[a-zA-Z0-9@._-]+$', service):
         raise HTTPException(400, "Invalid service name")
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["sudo", "-n", "systemctl", "restart", service],
             capture_output=True, text=True, timeout=30,
         )
@@ -140,6 +144,12 @@ def api_journal(request: Request, auth=Depends(_require_operator)):
         # Reject patterns with nested quantifiers (ReDoS risk)
         if re.search(r'\([^)]*[+*][^)]*\)[+*]', grep_pattern):
             raise HTTPException(400, "Unsafe regex pattern")
+        # Validate regex is syntactically correct
+        import re as _re
+        try:
+            _re.compile(grep_pattern[:100])
+        except _re.error:
+            raise HTTPException(400, "Invalid regex pattern")
         cmd += ["-g", grep_pattern[:100]]
 
     try:
@@ -299,7 +309,7 @@ async def api_cpu_governor(request: Request, auth=Depends(_require_admin)):
     if governor not in allowed:
         raise HTTPException(400, f"Governor must be one of: {', '.join(allowed)}")
     try:
-        r = subprocess.run(["sudo", "-n", "cpupower", "frequency-set", "-g", governor],
+        r = await asyncio.to_thread(subprocess.run, ["sudo", "-n", "cpupower", "frequency-set", "-g", governor],
                           capture_output=True, timeout=10)
         ok = r.returncode == 0
     except Exception:
@@ -503,7 +513,7 @@ def _git(repo_dir: str, *args: str, timeout: int = 30) -> subprocess.CompletedPr
 
 
 @router.get("/api/system/update/check")
-async def api_update_check(auth=Depends(_get_auth)):
+async def api_update_check(auth=Depends(_require_operator)):
     """Check if a newer version is available on the remote."""
     repo_dir = _find_repo_dir()
     if not repo_dir:
@@ -515,7 +525,7 @@ async def api_update_check(auth=Depends(_get_auth)):
 
     try:
         # Fetch latest from remote without modifying working tree
-        fetch = _git(repo_dir, "fetch", "--quiet", "origin", timeout=15)
+        fetch = await asyncio.to_thread(_git, repo_dir, "fetch", "--quiet", "origin", timeout=15)
         if fetch.returncode != 0:
             return {
                 "update_available": False,
@@ -524,18 +534,18 @@ async def api_update_check(auth=Depends(_get_auth)):
             }
 
         # Get current branch
-        branch_result = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        branch_result = await asyncio.to_thread(_git, repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
         branch = branch_result.stdout.strip() or "main"
 
         # Count commits behind
-        behind = _git(repo_dir, "rev-list", "--count", f"HEAD..origin/{branch}")
+        behind = await asyncio.to_thread(_git, repo_dir, "rev-list", "--count", f"HEAD..origin/{branch}")
         commits_behind = int(behind.stdout.strip()) if behind.returncode == 0 else 0
 
         # Get remote version from config.py
         remote_version = VERSION
         if commits_behind > 0:
-            ver_result = _git(
-                repo_dir, "show", f"origin/{branch}:share/noba-web/server/config.py",
+            ver_result = await asyncio.to_thread(
+                _git, repo_dir, "show", f"origin/{branch}:share/noba-web/server/config.py",
             )
             if ver_result.returncode == 0:
                 import re as _re
@@ -544,8 +554,8 @@ async def api_update_check(auth=Depends(_get_auth)):
                     remote_version = m.group(1)
 
             # Get recent commit summaries for changelog
-            log_result = _git(
-                repo_dir, "log", "--oneline", f"HEAD..origin/{branch}", "--max-count=20",
+            log_result = await asyncio.to_thread(
+                _git, repo_dir, "log", "--oneline", f"HEAD..origin/{branch}", "--max-count=20",
             )
             changelog = log_result.stdout.strip().splitlines() if log_result.returncode == 0 else []
         else:
@@ -588,7 +598,7 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
 
     try:
         # Step 1: git pull
-        pull = _git(repo_dir, "pull", "--ff-only", "origin", timeout=60)
+        pull = await asyncio.to_thread(_git, repo_dir, "pull", "--ff-only", "origin", timeout=60)
         steps.append({
             "step": "git pull",
             "success": pull.returncode == 0,
@@ -600,7 +610,8 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
         # Step 2: rebuild frontend (if npm is available)
         build_script = os.path.join(repo_dir, "scripts", "build-frontend.sh")
         if os.path.isfile(build_script):
-            build = subprocess.run(
+            build = await asyncio.to_thread(
+                subprocess.run,
                 ["bash", build_script],
                 cwd=repo_dir, capture_output=True, text=True, timeout=120,
             )
@@ -613,7 +624,8 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
         # Step 3: re-install
         install_script = os.path.join(repo_dir, "install.sh")
         if os.path.isfile(install_script):
-            install = subprocess.run(
+            install = await asyncio.to_thread(
+                subprocess.run,
                 ["bash", install_script, "--auto-approve"],
                 cwd=repo_dir, capture_output=True, text=True, timeout=120,
             )

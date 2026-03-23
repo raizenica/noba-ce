@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { useApi } from '../../composables/useApi'
 import { useNotificationsStore } from '../../stores/notifications'

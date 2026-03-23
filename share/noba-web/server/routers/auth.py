@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,14 +14,27 @@ from ..auth import (
     rate_limiter, token_store, users, valid_username, verify_password,
 )
 from ..config import VALID_ROLES
-from ..deps import _client_ip, _get_auth, _read_body, _require_admin, db
+from ..deps import _client_ip, _get_auth, _read_body, _require_admin, _require_operator, db
 from ..yaml_config import read_yaml_settings
 
 logger = logging.getLogger("noba")
 
 # One-time OIDC exchange codes: {code: (noba_token, expiry_time)}
 _oidc_codes: dict[str, tuple[str, float]] = {}
-_oidc_codes_lock = __import__("threading").Lock()
+_oidc_codes_lock = threading.Lock()
+
+# OAuth CSRF state parameters: {state_nonce: {"purpose": str, "ts": float, ...}}
+_oauth_states: dict[str, dict] = {}
+_oauth_states_lock = threading.Lock()
+
+
+def _prune_oauth_states():
+    """Remove OAuth state entries older than 10 minutes."""
+    now = time.time()
+    with _oauth_states_lock:
+        expired = [k for k, v in _oauth_states.items() if now - v.get("ts", 0) > 600]
+        for k in expired:
+            del _oauth_states[k]
 
 router = APIRouter()
 
@@ -99,7 +113,7 @@ async def api_logout(request: Request):
 
 # ── TOTP 2FA routes ──────────────────────────────────────────────────────────
 @router.post("/api/auth/totp/setup")
-async def api_totp_setup(request: Request, auth=Depends(_get_auth)):
+async def api_totp_setup(request: Request, auth=Depends(_require_operator)):
     from ..auth import generate_totp_secret
     username, _ = auth
     secret = generate_totp_secret()
@@ -233,17 +247,22 @@ def api_auth_providers():
 @router.get("/api/auth/social/{provider}/login")
 async def api_social_login(provider: str, request: Request):
     """Redirect to social provider for authentication."""
+    _prune_oauth_states()
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg, provider)
     if not prov:
         raise HTTPException(400, f"Provider '{provider}' not configured")
     import urllib.parse
     redirect_uri = str(request.url_for("api_social_callback", provider=provider))
+    state = secrets.token_urlsafe(32)
+    with _oauth_states_lock:
+        _oauth_states[state] = {"purpose": "login", "ts": time.time()}
     params = {
         "client_id": prov["client_id"],
         "response_type": "code",
         "scope": prov["scope"],
         "redirect_uri": redirect_uri,
+        "state": state,
     }
     # Google requires access_type for refresh tokens
     if provider == "google":
@@ -255,6 +274,11 @@ async def api_social_login(provider: str, request: Request):
 @router.get("/api/auth/social/{provider}/callback")
 async def api_social_callback(provider: str, request: Request):
     """Handle social provider callback — exchange code, create session."""
+    state = request.query_params.get("state", "")
+    with _oauth_states_lock:
+        entry = _oauth_states.pop(state, None)
+    if not entry or entry.get("purpose") != "login" or time.time() - entry.get("ts", 0) > 600:
+        raise HTTPException(400, "Invalid or expired OAuth state")
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg, provider)
     if not prov:
@@ -309,7 +333,7 @@ async def api_social_callback(provider: str, request: Request):
         if not users.exists(email):
             users.add(email, "!oidc:disabled", "viewer")
             logger.info("Social login: created user %s via %s", email, provider)
-        user_role = users.role(email)
+        user_role = users.get(email)[1]
         noba_token = token_store.generate(email, user_role)
         db.audit_log("social_login", email, f"{prov['name']} login", _client_ip(request))
         # Issue one-time code
@@ -331,29 +355,38 @@ async def api_social_callback(provider: str, request: Request):
 # ── Account linking — connect social provider to existing NOBA account ───────
 # Stored as JSON in a linked_providers field on the user record.
 # {provider: {email: "...", linked_at: timestamp}}
+# TODO: persist to DB — _linked_providers is in-memory only, lost on restart
 _linked_providers: dict[str, dict] = {}  # username -> {provider: {email, linked_at}}
-_linked_lock = __import__("threading").Lock()
+_linked_lock = threading.Lock()
 
 
 @router.get("/api/auth/social/{provider}/link")
 async def api_social_link(provider: str, request: Request):
     """Initiate account linking — redirect to provider, come back to link callback."""
+    _prune_oauth_states()
+    token = request.query_params.get("token", "")
+    if not token:
+        raise HTTPException(401, "Token required")
+    # Validate token is real
+    from ..auth import authenticate as _authenticate
+    user, role = _authenticate(f"Bearer {token}")
+    if not user:
+        raise HTTPException(401, "Invalid token")
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg, provider)
     if not prov:
         raise HTTPException(400, f"Provider '{provider}' not configured")
     import urllib.parse
     redirect_uri = str(request.url_for("api_social_link_callback", provider=provider))
-    # Pass the NOBA token as state so we know who's linking
-    token = request.query_params.get("token", "")
-    if not token:
-        raise HTTPException(400, "Missing token — must be logged in to link accounts")
+    state = secrets.token_urlsafe(32)
+    with _oauth_states_lock:
+        _oauth_states[state] = {"purpose": "link", "token": token, "ts": time.time()}
     params = {
         "client_id": prov["client_id"],
         "response_type": "code",
         "scope": prov["scope"],
         "redirect_uri": redirect_uri,
-        "state": token,  # NOBA auth token as state
+        "state": state,
     }
     return RedirectResponse(f"{prov['authorize_url']}?{urllib.parse.urlencode(params)}")
 
@@ -361,16 +394,21 @@ async def api_social_link(provider: str, request: Request):
 @router.get("/api/auth/social/{provider}/link/callback")
 async def api_social_link_callback(provider: str, request: Request):
     """Handle link callback — associate provider email with existing NOBA user."""
+    state = request.query_params.get("state", "")
+    with _oauth_states_lock:
+        entry = _oauth_states.pop(state, None)
+    if not entry or entry.get("purpose") != "link" or time.time() - entry.get("ts", 0) > 600:
+        raise HTTPException(400, "Invalid or expired OAuth state")
+    token = entry["token"]
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg, provider)
     if not prov:
         raise HTTPException(400, f"Provider '{provider}' not configured")
     code = request.query_params.get("code", "")
-    state = request.query_params.get("state", "")  # NOBA auth token
-    if not code or not state:
-        raise HTTPException(400, "Missing code or state")
+    if not code:
+        raise HTTPException(400, "Missing authorization code")
     # Verify the NOBA token to find who's linking
-    noba_user = token_store.validate(state)
+    noba_user = token_store.validate(token)
     if not noba_user:
         raise HTTPException(401, "Invalid or expired token — please log in again")
     noba_username = noba_user[0]
@@ -447,17 +485,22 @@ def api_unlink_provider(provider: str, auth=Depends(_get_auth)):
 @router.get("/api/auth/oidc/login")
 async def api_oidc_login(request: Request):
     """Redirect to OIDC provider for authentication."""
+    _prune_oauth_states()
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg)
     if not prov:
         raise HTTPException(400, "OIDC not configured")
     import urllib.parse
     redirect_uri = str(request.url_for("api_oidc_callback"))
+    state = secrets.token_urlsafe(32)
+    with _oauth_states_lock:
+        _oauth_states[state] = {"purpose": "oidc_login", "ts": time.time()}
     params = urllib.parse.urlencode({
         "client_id": prov["client_id"],
         "response_type": "code",
         "scope": prov["scope"],
         "redirect_uri": redirect_uri,
+        "state": state,
     })
     return RedirectResponse(f"{prov['authorize_url']}?{params}")
 
@@ -465,6 +508,11 @@ async def api_oidc_login(request: Request):
 @router.get("/api/auth/oidc/callback")
 async def api_oidc_callback(request: Request):
     """Handle OIDC callback -- exchange code for token, create session."""
+    state = request.query_params.get("state", "")
+    with _oauth_states_lock:
+        entry = _oauth_states.pop(state, None)
+    if not entry or entry.get("purpose") != "oidc_login" or time.time() - entry.get("ts", 0) > 600:
+        raise HTTPException(400, "Invalid or expired OAuth state")
     cfg = read_yaml_settings()
     prov = _resolve_provider(cfg)
     if not prov:
@@ -495,7 +543,7 @@ async def api_oidc_callback(request: Request):
             raise HTTPException(400, "Could not determine user identity from OIDC")
         if not users.exists(email):
             users.add(email, "!oidc:disabled", "viewer")
-        user_role = users.role(email)
+        user_role = users.get(email)[1]
         noba_token = token_store.generate(email, user_role)
         db.audit_log("oidc_login", email, "OIDC login", _client_ip(request))
         oidc_code = secrets.token_urlsafe(32)
@@ -756,6 +804,9 @@ async def api_ssh_keys_add(request: Request, auth=Depends(_require_admin)):
     key = body.get("key", "").strip()
     if not key or not key.startswith(("ssh-", "ecdsa-", "sk-")):
         raise HTTPException(400, "Invalid SSH public key")
+    # Reject keys with embedded options (command=, from=, etc.)
+    if any(key.strip().startswith(opt) for opt in ("command=", "from=", "environment=", "permit", "restrict", "tunnel=", "no-")):
+        raise HTTPException(400, "SSH key contains embedded options which are not allowed")
     ak_path = pathlib.Path.home() / ".ssh" / "authorized_keys"
     ak_path.parent.mkdir(mode=0o700, exist_ok=True)
     with open(ak_path, "a") as f:

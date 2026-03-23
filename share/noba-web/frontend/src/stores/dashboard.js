@@ -10,8 +10,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     timestamp: 0, uptime: '', loadavg: [], memory: {},
     cpuPercent: 0, cpuTemp: null, gpuTemp: null,
     disks: [], services: [], zfs: {},
-    containers: [], alerts: [], services: [],
-    disks: [], zfs: {}, diskIo: [],
+    containers: [], alerts: [], diskIo: [],
     // System info (from collect_system + collect_hardware)
     osName: '', kernel: '', hostname: '', defaultIp: '',
     memPercent: 0, battery: null,

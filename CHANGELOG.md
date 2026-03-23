@@ -7,6 +7,28 @@ All notable changes to NOBA Command Center are documented in this file.
 ### Added
 - **Self-update system** — Check for updates and apply them from the UI (Settings → General). Backend: `GET /api/system/update/check` compares local version to remote via git, `POST /api/system/update/apply` pulls, rebuilds frontend, re-installs, and restarts the service. Frontend: glowing update pill in the header notifies admins when an update is available, with changelog preview and one-click apply.
 
+### Security
+- **OAuth2/OIDC CSRF protection** — All social login and OIDC flows now generate and validate a cryptographic `state` parameter, preventing login CSRF attacks.
+- **OAuth token leak fixed** — Account linking no longer passes the NOBA session token as the OAuth `state` parameter. Tokens are stored server-side with a random nonce.
+- **Healing `run` action restricted** — Command execution via the healing pipeline is now restricted to an allowlist of safe prefixes (systemctl, docker, podman, restic, rclone, certbot).
+- **API key expiry enforced** — Expired API keys are now rejected at authentication time.
+- **Webhook SSRF protection** — Remediation webhook handler blocks requests to private networks, loopback, link-local, reserved ranges, and cloud metadata endpoints.
+- **SSRF DNS resolution validation** — Integration instance URL validation now resolves hostnames and checks resolved IPs against private ranges.
+- **LDAP filter injection fix** — Username escaping now uses proper RFC 4515 encoding instead of partial character replacement.
+- **Terminal audit logging** — PTY sessions now log start/end events with user, role, IP, and duration to the audit trail.
+- **SSH key validation** — Rejects authorized_keys entries with embedded options (`command=`, `from=`, etc.).
+- **SQL column allowlist** — Integration instance updates validate field names against an explicit allowlist.
+- **HTTPException guards** — Added `except HTTPException: raise` across all routers to prevent HTTP errors from being swallowed as 500s.
+- **Journal regex validation** — Grep patterns are pre-validated with `re.compile()` before passing to `journalctl`.
+- **Auth level corrections** — TOTP setup upgraded to operator, stream-logs downgraded from admin to operator, update check upgraded to operator, social link endpoint validates tokens.
+- **Async event loop safety** — 20+ `subprocess.run()` calls in async routes wrapped in `asyncio.to_thread()` to prevent blocking the event loop.
+
+### Improved
+- **DB module split** — `db/automations.py` (1468 lines) split into 5 focused modules: `automations.py`, `api_keys.py`, `notifications.py`, `user_dashboards.py`, `tokens.py`.
+- **Frontend consistency** — 3 components migrated from raw `fetch()` to `useApi()` composable. 8 unused imports removed. Duplicate reactive keys fixed in dashboard store.
+- **Shell script safety** — Added cleanup trap for temp files in `noba-dashboard.sh`.
+- **Test coverage** — Added 344 new tests (2187 → 2531): admin router (178), stats router (57), integration instances (51), collector (22), healing governor (+22), healing executor (+13), remediation allowlist (+1).
+
 ### Fixed
 - **Event loop safety** — Converted `_transfer_lock` from `threading.Lock` to `asyncio.Lock` across agent store, app.py, and routers/agents.py. All 8 usages now use `async with` instead of blocking the event loop.
 - **Cleanup loop backoff** — Moved sleep to end of loop so backoff actually affects retry frequency instead of adding noise after the fixed 300s wait.

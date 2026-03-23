@@ -19,8 +19,14 @@ class TestRunAction:
     def test_execute_run_success(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         from server.remediation import _handle_run
-        result = _handle_run({"command": "echo hello"})
+        result = _handle_run({"command": "systemctl restart nginx"})
         assert result["success"] is True
+
+    def test_execute_run_blocked_by_allowlist(self):
+        from server.remediation import _handle_run
+        result = _handle_run({"command": "echo hello"})
+        assert result["success"] is False
+        assert "allowlist" in result["error"].lower()
 
 
 class TestWebhookAction:

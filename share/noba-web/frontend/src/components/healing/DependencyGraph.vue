@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref } from 'vue'
 import { useHealingStore } from '../../stores/healing'
 
 const store = useHealingStore()

@@ -570,6 +570,8 @@ async def api_webhook(request: Request, auth=Depends(_require_operator)):
             success = 200 <= r.getcode() < 300
         db.audit_log("webhook", username, f"Webhook {hook_id} {success}", ip)
         return {"success": success}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Webhook %s failed: %s", hook_id, e)
         db.audit_log("webhook", username, f"Webhook {hook_id} failed: {e}", ip)

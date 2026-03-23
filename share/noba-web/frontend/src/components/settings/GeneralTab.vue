@@ -9,7 +9,7 @@ import { useModalsStore } from '../../stores/modals'
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
 const notify = useNotificationsStore()
-const { get, post } = useApi()
+const { get, post, del, download, request } = useApi()
 const modals = useModalsStore()
 
 const saving = ref(false)
@@ -78,10 +78,7 @@ async function save() {
 
 async function downloadConfigBackup() {
   try {
-    const res = await fetch('/api/settings/backup', {
-      headers: { Authorization: `Bearer ${authStore.token}` },
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await download('/api/settings/backup')
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -98,12 +95,7 @@ async function uploadConfigRestore(evt) {
   const formData = new FormData()
   formData.append('file', file)
   try {
-    const res = await fetch('/api/settings/restore', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authStore.token}` },
-      body: formData,
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    await request('/api/settings/restore', { method: 'POST', body: formData })
     notify.addToast('Config restored — reload to apply', 'success')
   } catch (e) {
     notify.addToast('Restore failed: ' + e.message, 'danger')
@@ -113,11 +105,7 @@ async function uploadConfigRestore(evt) {
 async function resetLayout() {
   if (!await modals.confirm('Reset your dashboard layout to the factory defaults?')) return
   try {
-    const res = await fetch('/api/user/preferences', {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${authStore.token}` },
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    await del('/api/user/preferences')
     saveMsg.value = 'Layout reset to defaults.'
     setTimeout(() => { saveMsg.value = '' }, 2500)
   } catch (e) {

@@ -10,7 +10,6 @@ import ServiceList    from '../components/infrastructure/ServiceList.vue'
 import K8sBrowser     from '../components/infrastructure/K8sBrowser.vue'
 import NetworkDevices from '../components/infrastructure/NetworkDevices.vue'
 import ConfigDrift    from '../components/infrastructure/ConfigDrift.vue'
-import AppModal       from '../components/ui/AppModal.vue'
 import ChartWrapper   from '../components/ui/ChartWrapper.vue'
 
 const dashboardStore = useDashboardStore()

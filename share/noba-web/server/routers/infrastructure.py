@@ -1,6 +1,7 @@
 """Noba – Infrastructure management: network, K8s, Proxmox, services, terminal."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import secrets
@@ -54,7 +55,7 @@ async def api_service_control(request: Request, auth=Depends(_require_operator))
     cmd = (["systemctl", "--user", action, svc] if is_user
            else ["sudo", "-n", "systemctl", action, svc])
     try:
-        r = subprocess.run(cmd, timeout=10, capture_output=True)
+        r = await asyncio.to_thread(subprocess.run, cmd, timeout=10, capture_output=True)
         success = r.returncode == 0
         db.audit_log("service_control", username, f"{action} {svc} (user={is_user}) -> {success}", ip)
         if not success:
@@ -190,6 +191,8 @@ def api_k8s_namespaces(auth=Depends(_get_auth)):
                  "status": ns.get("status", {}).get("phase", ""),
                  "created": ns.get("metadata", {}).get("creationTimestamp", "")}
                 for ns in items]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"K8s API error: {e}")
 
@@ -235,6 +238,8 @@ def api_k8s_pods(request: Request, auth=Depends(_get_auth)):
                 "containers": containers,
             })
         return pods
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"K8s API error: {e}")
 
@@ -261,6 +266,8 @@ def api_k8s_pod_logs(namespace: str, name: str, request: Request, auth=Depends(_
                       headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=15)
         r.raise_for_status()
         return PlainTextResponse(r.text[-65536:] or "No logs.")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"K8s log fetch failed: {e}")
 
@@ -290,6 +297,8 @@ def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
             "available": d.get("status", {}).get("availableReplicas", 0),
             "updated": d.get("status", {}).get("updatedReplicas", 0),
         } for d in items[:100]]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"K8s API error: {e}")
 
@@ -319,6 +328,8 @@ async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depend
         r.raise_for_status()
         db.audit_log("k8s_scale", username, f"Scaled {namespace}/{name} to {replicas}", _client_ip(request))
         return {"success": True, "replicas": replicas}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"K8s scale failed: {e}")
 
@@ -388,6 +399,8 @@ def api_pmx_snapshots(node: str, vmid: int, request: Request, auth=Depends(_get_
         return [{"name": s.get("name", ""), "description": s.get("description", ""),
                  "snaptime": s.get("snaptime", 0), "parent": s.get("parent", "")}
                 for s in r.json().get("data", [])]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Proxmox API error: {e}")
 
@@ -418,6 +431,8 @@ async def api_pmx_create_snapshot(node: str, vmid: int, request: Request, auth=D
         r.raise_for_status()
         db.audit_log("pmx_snapshot", username, f"Created snapshot {snapname} for {vtype}/{vmid}", _client_ip(request))
         return {"success": True, "task": r.json().get("data", "")}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Snapshot creation failed: {e}")
 
@@ -444,7 +459,7 @@ async def ws_terminal(ws: WebSocket):
         await ws.close(code=4001, reason="Unauthorized")
         return
     from ..terminal import terminal_handler
-    await terminal_handler(ws, username)
+    await terminal_handler(ws, username, role)
 
 
 # ── Network discovery endpoints ───────────────────────────────────────────────

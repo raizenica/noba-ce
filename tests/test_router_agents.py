@@ -798,13 +798,13 @@ class TestStreamLogs:
         )
         assert resp.status_code == 403
 
-    def test_start_stream_operator_returns_403(self, client, operator_headers):
+    def test_start_stream_operator_returns_200(self, client, operator_headers):
         resp = client.post(
             "/api/agents/h/stream-logs",
             json={"unit": "nginx", "lines": 10},
             headers=operator_headers,
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
     def test_start_stream_admin_returns_200(self, client, admin_headers):
         resp = client.post(

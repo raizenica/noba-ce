@@ -1,6 +1,7 @@
 """Noba – Container and VM management endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -34,13 +35,15 @@ async def api_container_control(request: Request, auth=Depends(_require_operator
         raise HTTPException(400, "Invalid container name")
     for runtime in ("docker", "podman"):
         try:
-            r = subprocess.run([runtime, ct_action, ct_name], capture_output=True, timeout=15)
+            r = await asyncio.to_thread(subprocess.run, [runtime, ct_action, ct_name], capture_output=True, timeout=15)
             if r.returncode == 0:
                 bust_container_cache()
                 db.audit_log("container_control", username, f"{ct_action} {ct_name} via {runtime}", ip)
                 return {"success": True, "runtime": runtime}
         except FileNotFoundError:
             continue
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error("Container control error: %s", e)
             db.audit_log("container_control", username, f"{ct_action} {ct_name} error: {e}", ip)
@@ -153,7 +156,7 @@ async def api_container_pull(name: str, request: Request, auth=Depends(_require_
         raise HTTPException(400, "Invalid container name")
     for runtime in ("docker", "podman"):
         try:
-            r = subprocess.run([runtime, "inspect", "--format", "{{.Config.Image}}", name],
+            r = await asyncio.to_thread(subprocess.run, [runtime, "inspect", "--format", "{{.Config.Image}}", name],
                              capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 image = r.stdout.strip()
@@ -196,7 +199,7 @@ async def api_compose_action(project: str, action: str, request: Request, auth=D
     if action == "up":
         cmd.append("-d")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
         ok = r.returncode == 0
         db.audit_log("compose", username, f"{action} {project} -> {ok}", _client_ip(request))
         return {"success": ok, "output": r.stdout[-500:] if r.stdout else r.stderr[-500:]}
@@ -232,6 +235,8 @@ async def api_truenas_vm(request: Request, auth=Depends(_require_operator)):
             success = r.getcode() == 200
         db.audit_log("vm_action", username, f"VM {vm_id} {action} {success}", ip)
         return {"success": success}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("VM action failed: %s", e)
         db.audit_log("vm_action", username, f"VM {vm_id} {action} failed: {e}", ip)

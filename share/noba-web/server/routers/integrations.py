@@ -1,6 +1,7 @@
 """Noba – Service-specific proxy and control endpoints (cameras, HA, Pi-hole, etc.)."""
 from __future__ import annotations
 
+import asyncio
 import re
 import subprocess
 
@@ -30,6 +31,8 @@ def api_camera_snapshot(cam: str, auth=Depends(_get_auth)):
         r.raise_for_status()
         return Response(content=r.content, media_type="image/jpeg",
                        headers={"Cache-Control": "no-cache, max-age=5"})
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(502, "Failed to fetch snapshot")
 
@@ -117,6 +120,8 @@ async def api_hass_proxy(domain: str, service: str, request: Request, auth=Depen
                        json=body, headers={"Authorization": f"Bearer {hass_token}"}, timeout=10)
         db.audit_log("hass_service", username, f"{domain}.{service}", _client_ip(request))
         return {"status": "ok", "http_status": r.status_code}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"HA service call failed: {e}")
 
@@ -172,6 +177,8 @@ async def api_hass_toggle(entity_id: str, request: Request, auth=Depends(_requir
                        headers={"Authorization": f"Bearer {hass_token}"}, timeout=10)
         db.audit_log("hass_toggle", username, f"Toggled {entity_id}", _client_ip(request))
         return {"success": r.status_code == 200, "entity_id": entity_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"HA toggle failed: {e}")
 
@@ -192,6 +199,8 @@ async def api_hass_scene(entity_id: str, request: Request, auth=Depends(_require
                        headers={"Authorization": f"Bearer {hass_token}"}, timeout=10)
         db.audit_log("hass_scene", username, f"Activated {entity_id}", _client_ip(request))
         return {"success": r.status_code == 200}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Scene activation failed: {e}")
 
@@ -221,6 +230,8 @@ async def api_pihole_toggle(request: Request, auth=Depends(_require_operator)):
                        headers={"sid": ph_tok} if ph_tok else {}, timeout=5)
         db.audit_log("pihole_toggle", username, f"{action} (duration={duration}s)", _client_ip(request))
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Pi-hole toggle failed: {e}")
 
@@ -287,7 +298,7 @@ async def api_cloud_remote_create(request: Request, auth=Depends(_require_admin)
             raise HTTPException(400, f"Invalid parameter value for {k}")
         cmd.append(f"{k}={sv}")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
             raise HTTPException(422, r.stderr.strip()[:200] or "Failed to create remote")
         db.audit_log("cloud_remote_create", username, f"Created remote '{name}' ({remote_type})", _client_ip(request))
@@ -325,7 +336,7 @@ async def api_cloud_test(request: Request, auth=Depends(_require_operator)):
     if not remote or not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9 ._-]{0,63}$", remote):
         raise HTTPException(400, "Invalid remote name")
     try:
-        r = subprocess.run(["rclone", "lsd", remote + ":", "--max-depth", "1"],
+        r = await asyncio.to_thread(subprocess.run, ["rclone", "lsd", remote + ":", "--max-depth", "1"],
                            capture_output=True, text=True, timeout=15)
         err_line = next(
             (line for line in r.stderr.strip().splitlines() if line.strip() and not line.startswith("NOTICE")),
@@ -341,6 +352,8 @@ async def api_cloud_test(request: Request, auth=Depends(_require_operator)):
         raise HTTPException(504, "Connection timed out (15s)")
     except FileNotFoundError:
         raise HTTPException(424, "rclone not found on this system")
+    except HTTPException:
+        raise
     except Exception as e:
         _logging.getLogger("noba").error("Cloud test error: %s", e)
         raise HTTPException(500, "Cloud test error")

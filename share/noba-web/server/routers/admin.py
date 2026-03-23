@@ -474,6 +474,8 @@ async def api_backup_restore(request: Request, auth=Depends(_require_admin)):
         import shutil
         os.makedirs(os.path.dirname(restore_to), exist_ok=True)
         shutil.copy2(resolved, restore_to)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Restore failed: {e}")
 
