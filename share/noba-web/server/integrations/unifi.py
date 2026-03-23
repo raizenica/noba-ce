@@ -5,14 +5,14 @@ import httpx
 
 
 # ── UniFi Controller ─────────────────────────────────────────────────────────
-def get_unifi(url: str, user: str, password: str, site: str = "default"):
+def get_unifi(url: str, user: str, password: str, site: str = "default", *, verify_ssl=True):
     if not url or not user:
         return None
     try:
         base = url.rstrip("/")
         site = site or "default"
         # Login — use a separate client to avoid cookie jar contamination
-        with httpx.Client(timeout=4, verify=False) as uclient:
+        with httpx.Client(timeout=4, verify=verify_ssl) as uclient:
             login_r = uclient.post(f"{base}/api/login", json={"username": user, "password": password}, headers={"Referer": base})
             if login_r.status_code != 200:
                 return None
@@ -38,12 +38,12 @@ def get_unifi(url: str, user: str, password: str, site: str = "default"):
 
 
 # ── UniFi Protect ────────────────────────────────────────────────────────────
-def get_unifi_protect(url: str, user: str, password: str) -> dict | None:
+def get_unifi_protect(url: str, user: str, password: str, *, verify_ssl=True) -> dict | None:
     if not url or not user:
         return None
     try:
         base = url.rstrip("/")
-        with httpx.Client(timeout=6, verify=False, follow_redirects=True) as up_client:
+        with httpx.Client(timeout=6, verify=verify_ssl, follow_redirects=True) as up_client:
             login_r = up_client.post(
                 f"{base}/api/auth/login",
                 json={"username": user, "password": password},

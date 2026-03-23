@@ -25,6 +25,20 @@ _client = httpx.Client(
 )
 
 
+def ssl_verify(setting: bool | str = True):
+    """Convert a verify_ssl config value to the httpx verify parameter.
+
+    - True/False → passed directly (verify or skip)
+    - str → treated as a CA bundle file path
+    """
+    if isinstance(setting, str) and setting not in ("", "0", "false", "False"):
+        if os.path.isfile(setting):
+            return setting  # CA bundle path
+    if isinstance(setting, str):
+        return setting.lower() not in ("", "0", "false", "no")
+    return bool(setting)
+
+
 def _http_get(url: str, headers: dict | None = None, timeout: int = 4) -> dict | list:
     r = _client.get(url, headers=headers or {}, timeout=timeout)
     r.raise_for_status()

@@ -28,6 +28,7 @@ const authPass = ref('')
 const authApiKey = ref('')
 const instanceSite = ref('')
 const instanceTags = ref('')
+const verifySsl = ref(true)
 
 // Step 4
 const testing = ref(false)
@@ -94,6 +95,7 @@ async function testConnection() {
       platform: selectedPlatform.value,
       url: instanceUrl.value,
       auth_config: buildAuthConfig(),
+      verify_ssl: verifySsl.value,
     })
     testResult.value = res
   } catch (e) {
@@ -117,6 +119,7 @@ async function saveInstance() {
       auth_config: buildAuthConfig(),
       site: instanceSite.value || null,
       tags,
+      verify_ssl: verifySsl.value ? 1 : 0,
     })
     notifications.addToast('Integration saved successfully', 'success')
     emit('saved')
@@ -208,6 +211,13 @@ async function saveInstance() {
         <div>
           <label class="field-label">Tags (comma-separated, optional)</label>
           <input v-model="instanceTags" class="field-input" placeholder="e.g., production, media-storage" />
+        </div>
+        <div style="margin-top:.5rem">
+          <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;cursor:pointer">
+            <input type="checkbox" v-model="verifySsl" />
+            Verify SSL certificate
+          </label>
+          <span class="help-text">Disable for self-signed certificates. Not recommended for production.</span>
         </div>
       </div>
       <div style="display:flex;gap:.5rem;margin-top:1rem">

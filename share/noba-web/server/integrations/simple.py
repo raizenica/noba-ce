@@ -616,13 +616,13 @@ def get_pikvm(url: str, user: str, password: str) -> dict | None:
 
 
 # ── Kubernetes ───────────────────────────────────────────────────────────────
-def get_k8s(url: str, token: str) -> dict | None:
+def get_k8s(url: str, token: str, *, verify_ssl=True) -> dict | None:
     if not url or not token:
         return None
     try:
         base = url.rstrip("/")
         hdrs = {"Authorization": f"Bearer {token}"}
-        r = httpx.get(f"{base}/api/v1/pods", headers=hdrs, timeout=6, verify=False)
+        r = httpx.get(f"{base}/api/v1/pods", headers=hdrs, timeout=6, verify=verify_ssl)
         r.raise_for_status()
         data = r.json()
         pods = data.get("items", [])

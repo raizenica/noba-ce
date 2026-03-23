@@ -182,7 +182,8 @@ def collect_stats(qs: dict) -> dict:
     ag_fut    = _pool.submit(get_adguard, ag_url, ag_user, ag_pass) if ag_url else None
     jf_fut    = _pool.submit(get_jellyfin, jf_url, jf_key) if jf_url else None
     hass_fut  = _pool.submit(get_hass, hass_url, hass_tok) if hass_url else None
-    unifi_fut = _pool.submit(get_unifi, unifi_url, unifi_user, unifi_pass, unifi_site) if unifi_url else None
+    _unifi_ssl = cfg.get("unifiVerifySsl", False)  # default False: UniFi uses self-signed certs
+    unifi_fut = _pool.submit(get_unifi, unifi_url, unifi_user, unifi_pass, unifi_site, verify_ssl=_unifi_ssl) if unifi_url else None
     spd_fut   = _pool.submit(get_speedtest, spd_url) if spd_url else None
 
     # New integration futures
@@ -206,9 +207,11 @@ def collect_stats(qs: dict) -> dict:
     hb_fut      = _pool.submit(get_homebridge, hb_url, hb_user, hb_pass) if hb_url else None
     z2m_fut     = _pool.submit(get_z2m, z2m_url) if z2m_url else None
     esp_fut     = _pool.submit(get_esphome, esp_url) if esp_url else None
-    protect_fut = _pool.submit(get_unifi_protect, protect_url, protect_user, protect_pass) if protect_url else None
+    _protect_ssl = cfg.get("unifiProtectVerifySsl", False)
+    protect_fut = _pool.submit(get_unifi_protect, protect_url, protect_user, protect_pass, verify_ssl=_protect_ssl) if protect_url else None
     pikvm_fut   = _pool.submit(get_pikvm, pikvm_url, pikvm_user, pikvm_pass) if pikvm_url else None
-    k8s_fut     = _pool.submit(get_k8s, k8s_url, k8s_tok) if k8s_url else None
+    _k8s_ssl = cfg.get("k8sVerifySsl", True)
+    k8s_fut     = _pool.submit(get_k8s, k8s_url, k8s_tok, verify_ssl=_k8s_ssl) if k8s_url else None
     gitea_fut   = _pool.submit(get_gitea, gitea_url, gitea_tok) if gitea_url else None
     gitlab_fut  = _pool.submit(get_gitlab, gitlab_url, gitlab_tok) if gitlab_url else None
     github_fut  = _pool.submit(get_github, github_tok) if github_tok else None

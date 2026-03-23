@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import socket
 from urllib.parse import urlparse
 
@@ -17,7 +18,7 @@ router = APIRouter(tags=["integrations"])
 
 _UPDATABLE_FIELDS = frozenset({
     "name", "url", "api_key", "username", "password", "site", "tags",
-    "enabled", "group_id", "verify_ssl", "extra",
+    "enabled", "group_id", "verify_ssl", "ca_bundle", "extra",
 })
 
 
@@ -201,8 +202,13 @@ async def api_test_connection(request: Request, auth=Depends(_require_operator))
     if not _is_safe_url(url):
         return {"success": False, "error": "URL targets a private/internal network", "platform": platform, "url": url}
 
+    verify = body.get("verify_ssl", True)
+    if isinstance(verify, str) and os.path.isfile(verify):
+        pass  # CA bundle path
+    else:
+        verify = bool(verify) if not isinstance(verify, str) else verify.lower() not in ("0", "false", "no")
     try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10, verify=verify) as client:
             r = await client.get(url)
             return {
                 "success": r.status_code < 500,

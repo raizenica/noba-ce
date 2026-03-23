@@ -51,6 +51,7 @@ All notable changes to NOBA Command Center are documented in this file.
 ### Security
 - **OpenAPI docs disabled by default** — `/api/docs`, `/api/redoc`, and `/api/openapi.json` are now hidden unless `NOBA_DEV=1` is set, preventing API schema disclosure to unauthenticated users.
 - **CSP tightened** — Removed `unsafe-eval` and `unsafe-inline` from `script-src`, stripped all external CDN allowances (fonts/icons already bundled). Service worker registration moved from inline script to the main JS bundle.
+- **TLS verification configurable** — All integration HTTP calls (K8s, Proxmox, UniFi, UniFi Protect) now respect per-integration `verifySsl` settings instead of hardcoded `verify=False`. Integration instances have a `verify_ssl` DB column and UI checkbox. Supports CA bundle file paths for custom certificates.
 - **Script automation shell escalation blocked** — Automations with custom `command` fields now require admin role, preventing operator→shell privilege escalation.
 - **Automation variable injection blocked** — Operator-supplied variables substituted into `command` strings via `format_map` are now sanitized with `shlex.quote()`, preventing shell metacharacter injection.
 - **Agent key timing attack mitigated** — Agent key validation now uses `secrets.compare_digest` for constant-time comparison.

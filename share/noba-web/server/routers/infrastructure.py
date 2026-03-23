@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import secrets
 import subprocess
@@ -29,6 +30,22 @@ from ..yaml_config import read_yaml_settings
 logger = logging.getLogger("noba")
 
 router = APIRouter(tags=["infrastructure"])
+
+
+def _k8s_verify(cfg: dict):
+    """Get the TLS verify setting for K8s API calls."""
+    v = cfg.get("k8sVerifySsl", True)
+    if isinstance(v, str) and os.path.isfile(v):
+        return v  # CA bundle path
+    return bool(v) if not isinstance(v, str) else v.lower() not in ("", "0", "false", "no")
+
+
+def _pmx_verify(cfg: dict):
+    """Get the TLS verify setting for Proxmox API calls."""
+    v = cfg.get("proxmoxVerifySsl", True)
+    if isinstance(v, str) and os.path.isfile(v):
+        return v
+    return bool(v) if not isinstance(v, str) else v.lower() not in ("", "0", "false", "no")
 
 
 def _validate_k8s_name(val: str, label: str = "name") -> str:
@@ -184,7 +201,7 @@ def api_k8s_namespaces(auth=Depends(_get_auth)):
     import httpx as _httpx
     try:
         r = _httpx.get(f"{url.rstrip('/')}/api/v1/namespaces",
-                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+                      headers={"Authorization": f"Bearer {token}"}, verify=_k8s_verify(cfg), timeout=10)
         r.raise_for_status()
         items = r.json().get("items", [])
         return [{"name": ns.get("metadata", {}).get("name", ""),
@@ -211,7 +228,7 @@ def api_k8s_pods(request: Request, auth=Depends(_get_auth)):
     import httpx as _httpx
     try:
         r = _httpx.get(f"{url.rstrip('/')}{path}",
-                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+                      headers={"Authorization": f"Bearer {token}"}, verify=_k8s_verify(cfg), timeout=10)
         r.raise_for_status()
         items = r.json().get("items", [])
         pods = []
@@ -263,7 +280,7 @@ def api_k8s_pod_logs(namespace: str, name: str, request: Request, auth=Depends(_
     import httpx as _httpx
     try:
         r = _httpx.get(f"{url.rstrip('/')}{path}",
-                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=15)
+                      headers={"Authorization": f"Bearer {token}"}, verify=_k8s_verify(cfg), timeout=15)
         r.raise_for_status()
         return PlainTextResponse(r.text[-65536:] or "No logs.")
     except HTTPException:
@@ -286,7 +303,7 @@ def api_k8s_deployments(request: Request, auth=Depends(_get_auth)):
     import httpx as _httpx
     try:
         r = _httpx.get(f"{url.rstrip('/')}{path}",
-                      headers={"Authorization": f"Bearer {token}"}, verify=False, timeout=10)
+                      headers={"Authorization": f"Bearer {token}"}, verify=_k8s_verify(cfg), timeout=10)
         r.raise_for_status()
         items = r.json().get("items", [])
         return [{
@@ -323,7 +340,7 @@ async def api_k8s_scale(namespace: str, name: str, request: Request, auth=Depend
             f"{url.rstrip('/')}/apis/apps/v1/namespaces/{namespace}/deployments/{name}/scale",
             json={"spec": {"replicas": replicas}},
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/merge-patch+json"},
-            verify=False, timeout=10,
+            verify=_k8s_verify(cfg), timeout=10,
         )
         r.raise_for_status()
         db.audit_log("k8s_scale", username, f"Scaled {namespace}/{name} to {replicas}", _client_ip(request))
@@ -362,7 +379,7 @@ def api_pmx_node_vms(node: str, auth=Depends(_get_auth)):
     for ep, vtype in (("qemu", "qemu"), ("lxc", "lxc")):
         try:
             r = _httpx.get(f"{url.rstrip('/')}/api2/json/nodes/{node}/{ep}",
-                          headers=hdrs, verify=False, timeout=8)
+                          headers=hdrs, verify=_pmx_verify(cfg), timeout=8)
             r.raise_for_status()
             for vm in r.json().get("data", [])[:50]:
                 mmem = vm.get("maxmem", 1) or 1
@@ -394,7 +411,7 @@ def api_pmx_snapshots(node: str, vmid: int, request: Request, auth=Depends(_get_
     import httpx as _httpx
     try:
         r = _httpx.get(f"{url.rstrip('/')}/api2/json/nodes/{node}/{vtype}/{vmid}/snapshot",
-                      headers=hdrs, verify=False, timeout=8)
+                      headers=hdrs, verify=_pmx_verify(cfg), timeout=8)
         r.raise_for_status()
         return [{"name": s.get("name", ""), "description": s.get("description", ""),
                  "snaptime": s.get("snaptime", 0), "parent": s.get("parent", "")}
@@ -427,7 +444,7 @@ async def api_pmx_create_snapshot(node: str, vmid: int, request: Request, auth=D
     try:
         r = _httpx.post(f"{url.rstrip('/')}/api2/json/nodes/{node}/{vtype}/{vmid}/snapshot",
                        json={"snapname": snapname, "description": description},
-                       headers=hdrs, verify=False, timeout=30)
+                       headers=hdrs, verify=_pmx_verify(cfg), timeout=30)
         r.raise_for_status()
         db.audit_log("pmx_snapshot", username, f"Created snapshot {snapname} for {vtype}/{vmid}", _client_ip(request))
         return {"success": True, "task": r.json().get("data", "")}

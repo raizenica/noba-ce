@@ -858,6 +858,8 @@ class Database:
                 ("heal_ledger", "suppressed_by", "TEXT"),
                 ("heal_ledger", "maintenance_window_id", "INTEGER"),
                 ("heal_ledger", "instance_id", "TEXT"),
+                ("integration_instances", "verify_ssl", "INTEGER DEFAULT 1"),
+                ("integration_instances", "ca_bundle", "TEXT"),
             ]
             for table, col, col_type in _extended_columns:
                 try:
