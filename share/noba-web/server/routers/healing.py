@@ -71,8 +71,8 @@ async def api_promote_trust(rule_id: str, request: Request, auth=Depends(_requir
     from ..deps import _read_body
     body = await _read_body(request)
     target_level = body.get("level", "approve")
-    if target_level not in ("approve", "execute"):
-        raise HTTPException(400, "level must be 'approve' or 'execute'")
+    if target_level not in ("observation", "dry_run", "notify", "approve", "execute"):
+        raise HTTPException(400, "level must be one of: observation, dry_run, notify, approve, execute")
     state = db.get_trust_state(rule_id)
     if not state:
         raise HTTPException(404, f"No trust state for rule: {rule_id}")
@@ -87,8 +87,8 @@ async def api_demote_trust(rule_id: str, request: Request, auth=Depends(_require
     from ..deps import _read_body
     body = await _read_body(request)
     target_level = body.get("level", "notify")
-    if target_level not in ("notify", "approve"):
-        raise HTTPException(400, "level must be 'notify' or 'approve'")
+    if target_level not in ("observation", "dry_run", "notify", "approve"):
+        raise HTTPException(400, "level must be one of: observation, dry_run, notify, approve")
     state = db.get_trust_state(rule_id)
     if not state:
         raise HTTPException(404, f"No trust state for rule: {rule_id}")
@@ -307,3 +307,68 @@ def api_rollback(ledger_id: int, auth=Depends(_require_admin)):
     db.audit_log("rollback", username,
                  f"ledger_id={ledger_id} action_type={action_type} success={result.get('success')}")
     return result
+
+
+# ── Dry-run / Chaos / Health ──────────────────────────────────────────────────
+
+@router.post("/api/healing/dry-run")
+async def api_dry_run(request: Request, auth=Depends(_require_operator)):
+    """Run a heal event through the pipeline in simulation mode."""
+    from ..deps import _read_body
+    from ..healing.dry_run import simulate_heal_event
+    from ..healing.models import HealEvent
+
+    body = await _read_body(request)
+    event_data = body.get("event", body)
+
+    event = HealEvent(
+        source=event_data.get("source", "dry-run"),
+        rule_id=event_data.get("rule_id", "dry-run"),
+        condition=event_data.get("condition", ""),
+        target=event_data.get("target", ""),
+        severity=event_data.get("severity", "info"),
+        timestamp=0,
+        metrics=event_data.get("metrics", {}),
+    )
+
+    result = simulate_heal_event(event, db=db)
+    return result
+
+
+@router.get("/api/healing/chaos/scenarios")
+def api_chaos_scenarios(auth=Depends(_require_admin)):
+    """List available chaos test scenarios."""
+    from ..healing.chaos import ChaosRunner
+
+    runner = ChaosRunner()
+    return runner.list_scenarios()
+
+
+@router.post("/api/healing/chaos/run")
+async def api_chaos_run(request: Request, auth=Depends(_require_admin)):
+    """Run a chaos test scenario."""
+    from ..deps import _read_body
+    from ..healing.chaos import ChaosRunner
+
+    body = await _read_body(request)
+    scenario = body.get("scenario", "")
+    dry_run = body.get("dry_run", True)
+
+    runner = ChaosRunner()
+    result = runner.run_scenario(scenario, dry_run=dry_run)
+    return result
+
+
+@router.get("/api/healing/health")
+def api_healing_health(auth=Depends(_get_auth)):
+    """Return component health summary from the watchdog."""
+
+    try:
+        from ..healing import _watchdog
+        if _watchdog is not None:
+            return _watchdog.get_health_summary()
+    except (ImportError, AttributeError):
+        pass
+
+    # Default healthy response when no watchdog is initialized
+    return {"degraded": False}

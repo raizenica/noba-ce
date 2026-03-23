@@ -159,6 +159,35 @@ class HealPipeline:
         if check_circuit_breaker(event.rule_id, self._db):
             trust = "notify"
 
+        # Canary: observation mode — log and return, no event emitted
+        if trust == "observation":
+            logger.info(
+                "Canary observation for rule %s target %s — would have fired",
+                event.rule_id, event.target,
+            )
+            return
+
+        # Canary: dry_run mode — simulate without execution, record as suggestion
+        if trust == "dry_run":
+            from .dry_run import simulate_heal_event
+            sim = simulate_heal_event(event, db=self._db, rules_cfg=self._rules_cfg)
+            logger.info(
+                "Canary dry-run for rule %s target %s — simulation: %s",
+                event.rule_id, event.target, sim.get("would_select", {}),
+            )
+            try:
+                self._db.insert_heal_suggestion(
+                    category="canary_dry_run",
+                    severity=event.severity,
+                    message=f"Dry-run simulation for {event.rule_id} on {event.target}",
+                    rule_id=event.rule_id,
+                    suggested_action=sim.get("would_select", {}),
+                    evidence=sim,
+                )
+            except Exception as exc:
+                logger.debug("Could not record dry-run suggestion: %s", exc)
+            return
+
         plan = self._planner.select_action(request, chain, self._db, effective_trust=trust)
         if plan is None:
             return  # escalation in progress or chain exhausted
