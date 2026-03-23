@@ -232,7 +232,11 @@ class Scheduler:
             try:
                 from .healing.health_triggers import evaluate_health_thresholds
                 from .healing import get_pipeline as _get_pipeline
-                suggestions, events = evaluate_health_thresholds(db)
+                # Health score categories are cached from the last /api/health-score
+                # call. Use the latest cached result if available.
+                _cached_hs = getattr(db, '_cached_health_score', None)
+                _categories = _cached_hs.get("categories", {}) if isinstance(_cached_hs, dict) else {}
+                suggestions, events = evaluate_health_thresholds(_categories) if _categories else ([], [])
                 if suggestions:
                     for s in suggestions:
                         db.insert_heal_suggestion(**s)

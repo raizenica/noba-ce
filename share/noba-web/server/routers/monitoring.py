@@ -71,7 +71,10 @@ async def api_health_score(auth=Depends(_get_auth)):
     stats = _deps.bg_collector.get() if _deps.bg_collector else {}
     with _agent_data_lock:
         agent_snapshot = dict(_agent_data)
-    return await compute_health_score(db, agent_snapshot, stats)
+    result = await compute_health_score(db, agent_snapshot, stats)
+    # Cache for scheduler health trigger evaluation
+    db._cached_health_score = result
+    return result
 
 
 # ── Status page endpoints ────────────────────────────────────────────────────
