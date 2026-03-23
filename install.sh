@@ -55,6 +55,7 @@ Options:
       --skip-deps        Skip dependency installation
       --no-completion    Skip shell completion setup
       --no-systemd       Skip systemd unit installation and reload
+      --no-restart       Skip service restart after install
   -y, --auto-approve     Auto-approve all prompts (unattended/CI install)
   -u, --uninstall        Remove a previously installed suite (reads manifest)
   -n, --dry-run          Show what would be done without making changes
@@ -87,6 +88,7 @@ SKIP_DEPS=false
 UNINSTALL=false
 NO_COMPLETION=false
 NO_SYSTEMD=false
+NO_RESTART=false
 AUTO_APPROVE=false
 USER_EMAIL="${EMAIL:-}"
 
@@ -403,6 +405,7 @@ while [[ $# -gt 0 ]]; do
            --skip-deps)    SKIP_DEPS=true;           shift   ;;
            --no-completion)NO_COMPLETION=true;       shift   ;;
            --no-systemd)   NO_SYSTEMD=true;          shift   ;;
+           --no-restart)   NO_RESTART=true;          shift   ;;
         -y|--auto-approve) AUTO_APPROVE=true;        shift   ;;
         -u|--uninstall)    UNINSTALL=true;           shift   ;;
         -n|--dry-run)      DRY_RUN=true;             shift   ;;
@@ -790,7 +793,7 @@ fi
 reload_systemd
 
 # ── Restart web service if running ───────────────────────────────────────
-if [[ "$DRY_RUN" == false && "$NO_SYSTEMD" != true ]] && command -v systemctl &>/dev/null; then
+if [[ "$DRY_RUN" == false && "$NO_SYSTEMD" != true && "$NO_RESTART" != true ]] && command -v systemctl &>/dev/null; then
     if systemctl --user is-active noba-web.service &>/dev/null; then
         if systemctl --user restart noba-web.service 2>/dev/null; then
             say_ok "noba-web service restarted."

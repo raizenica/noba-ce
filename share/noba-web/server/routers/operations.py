@@ -626,7 +626,7 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
         if os.path.isfile(install_script):
             install = await asyncio.to_thread(
                 subprocess.run,
-                ["bash", install_script, "--auto-approve"],
+                ["bash", install_script, "--auto-approve", "--skip-deps", "--no-restart"],
                 cwd=repo_dir, capture_output=True, text=True, timeout=120,
             )
             steps.append({
@@ -635,7 +635,8 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
                 "output": (install.stdout + install.stderr).strip()[-500:],
             })
             if install.returncode != 0:
-                raise HTTPException(500, f"install.sh failed: {install.stderr.strip()[:300]}")
+                detail = (install.stdout + install.stderr).strip()[-500:]
+                raise HTTPException(500, f"install.sh failed: {detail}")
 
         db.audit_log("system_update", username, f"Updated from repo {repo_dir}", ip=ip)
 

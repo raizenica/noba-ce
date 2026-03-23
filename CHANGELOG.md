@@ -4,6 +4,9 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Self-update install step** — Added `--skip-deps` to install.sh invocation during self-update, preventing failure under `NoNewPrivileges=true` systemd environments. Improved error output to show full install.sh output on failure.
+
 ### Added
 - **Self-update system** — Check for updates and apply them from the UI (Settings → General). Backend: `GET /api/system/update/check` compares local version to remote via git, `POST /api/system/update/apply` pulls, rebuilds frontend, re-installs, and restarts the service. Frontend: glowing update pill in the header notifies admins when an update is available, with changelog preview and one-click apply.
 
