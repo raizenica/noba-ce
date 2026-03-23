@@ -2,10 +2,10 @@
 
 # 🛸 NOBA Command Center
 
-**Your homelab deserves a mission control.**
+**Infrastructure management, from one dashboard.**
 
 Real-time monitoring · Self-healing infrastructure · Remote agents · Predictive intelligence · 40+ integrations
-All from a single dashboard.
+Deploy anywhere — bare metal, Docker, multi-site.
 
 `FastAPI` · `Vue 3 + Vite` · `Chart.js` · `SQLite WAL` · `Pinia`
 
@@ -205,11 +205,12 @@ Fully autonomous infrastructure repair with safety controls and graduated trust.
 
 - 🧭 **Sidebar navigation** — persistent left sidebar with icon-only collapse
 - 🔍 **Global search** — `Ctrl+K` command palette
-- 🎭 **6 themes** — Default, Nord, Dracula, Tokyo, Catppuccin, Gruvbox
+- 🎭 **7 themes** — Default, Nord, Dracula, Tokyo, Catppuccin, Gruvbox, Blood Moon
 - 👁️ **Quick glance** — press `g` to collapse all cards to headers
 - ⌨️ **Keyboard shortcuts** — fully customizable hotkeys
 - 🔔 **Notification center** — bell icon with unread count + PWA push
 - 💻 **Embedded terminal** — WebSocket PTY via xterm.js (admin-only)
+- 🔄 **Self-update** — check for updates and apply them from the UI (Settings → General)
 - 📚 **API docs** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc`, OpenAPI schema at `/api/openapi.json`
 
 ---

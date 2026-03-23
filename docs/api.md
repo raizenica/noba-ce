@@ -16,8 +16,9 @@ Tokens are valid for 24 hours and expire automatically. A cleanup job runs every
 
 | Role | Access |
 |------|--------|
-| `viewer` | Read-only: stats, history, logs |
-| `admin` | Full access: settings, user management, service control, audit log |
+| `viewer` | Read-only: stats, history, logs, dashboards |
+| `operator` | Viewer + service control, automations, agent commands, approvals |
+| `admin` | Full access: settings, user management, system update, audit log |
 
 ---
 

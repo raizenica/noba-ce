@@ -1,6 +1,6 @@
 # Contributing to NOBA // Command Center
 
-Thank you for your interest in contributing! NOBA is a homelab-focused project and we welcome contributions of all kinds: bug fixes, new integrations, documentation improvements, and more.
+Thank you for your interest in contributing! NOBA is an open-source infrastructure management platform and we welcome contributions of all kinds: bug fixes, new integrations, documentation improvements, and more.
 
 ---
 
@@ -20,7 +20,7 @@ Thank you for your interest in contributing! NOBA is a homelab-focused project a
 
 ## Code of Conduct
 
-Be respectful, constructive, and inclusive. This is a homelab project maintained in spare time — patience is appreciated on all sides.
+Be respectful, constructive, and inclusive. Patience is appreciated on all sides.
 
 ---
 

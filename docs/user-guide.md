@@ -23,11 +23,13 @@
 
 ## 1. Overview
 
-NOBA // Command Center is a lightweight, zero-build homelab dashboard built with Python and Alpine.js. It provides:
+NOBA // Command Center is a self-hosted infrastructure management platform built with FastAPI and Vue 3. It provides:
 
-- **Real-time system stats** — CPU, memory, disk, temperature, network I/O
-- **Service management** — start/stop/restart systemd services from the UI
-- **Integration cards** — Pi-hole, TrueNAS SCALE, Plex, qBittorrent, Radarr/Sonarr, Uptime Kuma
+- **Real-time system metrics** — CPU, memory, disk, temperature, network I/O, containers, ZFS
+- **Remote agent management** — deploy agents to any host, manage from one dashboard
+- **40+ integration cards** — Pi-hole, TrueNAS, Proxmox, Plex, Home Assistant, UniFi, and more
+- **Self-healing pipeline** — automatic detection, remediation, and graduated trust
+- **Automation engine** — workflows, webhooks, cron scheduling, approval gates
 - **Automation triggers** — run backup scripts, webhooks, and custom shell commands
 - **Historical charts** — time-series graphs for all key metrics
 - **Audit logging** — full audit trail of all user actions

@@ -5,6 +5,33 @@ All notable changes to NOBA Command Center are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Self-update system** — Check for updates and apply them from the UI (Settings → General). Backend: `GET /api/system/update/check` compares local version to remote via git, `POST /api/system/update/apply` pulls, rebuilds frontend, re-installs, and restarts the service. Frontend: glowing update pill in the header notifies admins when an update is available, with changelog preview and one-click apply.
+
+### Fixed
+- **Event loop safety** — Converted `_transfer_lock` from `threading.Lock` to `asyncio.Lock` across agent store, app.py, and routers/agents.py. All 8 usages now use `async with` instead of blocking the event loop.
+- **Cleanup loop backoff** — Moved sleep to end of loop so backoff actually affects retry frequency instead of adding noise after the fixed 300s wait.
+- **Graph workflow cycle protection** — Added visited-node tracking and depth limit (200) to prevent stack overflow from cyclic workflow graphs.
+- **JobRunner race condition** — Moved capacity check and slot registration into a single atomic lock scope, preventing concurrent submits from exceeding max_concurrent.
+- **API key expiry** — `get_api_key` now checks `expires_at` — expired API keys no longer authenticate.
+- **SPA fallback masking API errors** — Routes starting with `api/` now return 404 instead of the frontend index.html.
+- **Security header matching** — Changed `startswith()` to exact `not in` match to prevent false prefix matches on docs paths.
+- **Transfer cleanup performance** — Hoisted `os.listdir` outside the per-transfer loop and moved file deletion outside the lock.
+- **Agent polling latency** — Replaced `time.sleep(0.5)` busy-wait polling with `threading.Condition` signaling across endpoint checker, drift checker, agent verify, and command wait. Responses now wake consumers instantly.
+- **Dashboard save data loss** — `save_user_dashboard` changed from `INSERT OR REPLACE` (which wiped unset columns) to `ON CONFLICT ... COALESCE` upsert preserving existing values.
+- **Plugin/scheduler startup isolation** — Each component wrapped in try/except so one failure doesn't block the rest.
+- **Cache policy** — Hashed `/assets` now get 1-year cache, mutable `/static` gets 5-minute cache.
+- **Health check** — Now uses `execute_write(SELECT 1)` testing connection, lock, and WAL path instead of a read-only query.
+- **LoginView test failures** — Fixed 2 pre-existing test bugs: loading state mock now matches auth store flow, SSO test updated for dynamic provider UI.
+
+### Improved
+- **UX: Error handling** — `useApi` now returns human-readable error messages ("Permission denied", "Connection lost") instead of raw HTTP status codes. Error toasts stay 8s, warnings 6s, success 4s.
+- **UX: Confirm dialogs** — Replaced all 16 native `confirm()` calls with themed `ConfirmDialog` via global Pinia store. Accessible, keyboard-friendly, matches app theme.
+- **UX: Empty states** — AgentsView, AutomationsView, and HealingView now show contextual guidance with action buttons when no data exists.
+- **UX: Error visibility** — Replaced 50+ silent `catch {}` blocks with contextual error toasts across SecurityView, LogsView, AgentsView, and settings tabs.
+- **UX: Settings feedback** — All save/restore/download operations now use toast notifications instead of mixed `alert()`/inline messages.
+- **DB: Transaction support** — Added `transaction()` method to Database for atomic multi-step writes with rollback on error.
+- **DB: Missing indexes** — Added `idx_audit_ts`, `idx_audit_user_action`, and `idx_api_keys_hash` for frequently queried tables.
+
 - **Integration instance management** — Full CRUD API for managing integration instances (`/api/integrations/instances`). Connection test endpoint verifies platform reachability before saving. Integration catalog API lists all 29 categories and their platforms from the registry. Instance group management API. User-friendly 4-step setup wizard in Settings → Integrations: pick category → pick platform → configure URL/auth/site/tags → test connection → save. Managed instances listed with health status badges and delete buttons. IntegrationCards auto-rendered on the dashboard for all configured instances. Template-driven card rendering supports 12+ platform templates with status badges, percent bars, temperature, age, and bytes metric types.
 
 - **Self-healing validation (Phase 6)** — Component watchdog for internal resilience: subsystems register heartbeats, watchdog thread detects stalls, triggers recovery callbacks, enters degraded mode when 3+ components fail simultaneously. Dry-run pipeline simulation: `POST /api/healing/dry-run` runs the full pipeline (correlation, dependency analysis, trust resolution, plan selection, pre-flight, rollback classification) without executing any action — returns detailed report of what would happen. Chaos testing framework with 12 built-in scenarios (container crash recovery, dependency cascade suppression, escalation chain walk, site isolation, heal storm circuit breaker, stale metrics guard, capability mismatch, maintenance suppression, approval timeout, rollback on failure, power flicker debounce, manual fix race). Canary rollout mode: new trust levels `observation` (track "would have fired" without emitting events) and `dry_run` (full pipeline simulation without execution) below the existing notify→approve→execute chain. New API endpoints: dry-run simulation, chaos scenario listing and execution, pipeline health status. Three new modules: `watchdog.py`, `dry_run.py`, `chaos.py`.
