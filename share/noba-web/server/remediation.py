@@ -83,7 +83,7 @@ ACTION_TYPES = {
         "reversible": False,
     },
     "run": {
-        "risk": "medium",
+        "risk": "high",
         "params": {"command": str},
         "description": "Execute a shell command",
         "timeout_s": 60,
@@ -470,6 +470,10 @@ ACTION_TYPES = {
     },
 }
 
+# IMPORTANT: cmd strings in FALLBACK_CHAINS are for capability matching ONLY.
+# They are NEVER executed directly via subprocess. Actual execution uses
+# the registered _HANDLERS functions which apply _safe_name() validation.
+# Do NOT add code that passes these cmd strings to subprocess/shell.
 FALLBACK_CHAINS: dict[str, list[dict[str, str]]] = {
     "service_restart": [
         {"requires": "systemctl", "cmd": "systemctl restart {service}"},

@@ -68,7 +68,7 @@ class TestIntegrationInstanceAPI:
             "id": "upd-test", "category": "media", "platform": "plex",
             "url": "http://old-url", "auth_config": {},
         }, headers=admin_headers)
-        r = client.put("/api/integrations/instances/upd-test", json={
+        r = client.patch("/api/integrations/instances/upd-test", json={
             "url": "http://new-url",
         }, headers=admin_headers)
         assert r.status_code == 200

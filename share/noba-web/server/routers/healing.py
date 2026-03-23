@@ -41,13 +41,28 @@ def api_healing_ledger(request: Request, auth=Depends(_get_auth)):
 
 @router.get("/api/healing/effectiveness")
 def api_healing_effectiveness(request: Request, auth=Depends(_get_auth)):
-    action_type = request.query_params.get("action_type", "")
-    condition = request.query_params.get("condition", "")
+    action_type = request.query_params.get("action_type")
+    condition = request.query_params.get("condition")
     target = request.query_params.get("target")
-    if not action_type or not condition:
-        raise HTTPException(400, "action_type and condition required")
-    rate = db.get_heal_success_rate(action_type, condition, target=target)
-    return {"action_type": action_type, "condition": condition, "success_rate": rate}
+
+    # If both filters provided, return specific effectiveness
+    if action_type and condition:
+        rate = db.get_heal_success_rate(action_type, condition, target=target)
+        return {"action_type": action_type, "condition": condition, "success_rate": rate}
+
+    # Otherwise return aggregate effectiveness across all actions
+    outcomes = db.get_heal_outcomes(limit=500)
+    total = len(outcomes)
+    if total == 0:
+        return {"total": 0, "success": 0, "failure": 0, "success_rate": 0.0}
+    success = sum(1 for o in outcomes if o.get("outcome") == "success")
+    failure = total - success
+    return {
+        "total": total,
+        "success": success,
+        "failure": failure,
+        "success_rate": round(success / total, 4) if total else 0.0,
+    }
 
 
 @router.get("/api/healing/suggestions")
@@ -124,7 +139,7 @@ def api_list_dependencies(auth=Depends(_get_auth)):
 
 
 @router.post("/api/healing/dependencies/validate")
-async def api_validate_dependencies(request: Request, auth=Depends(_require_operator)):
+async def api_validate_dependencies(request: Request, auth=Depends(_get_auth)):
     """Validate a dependency config list for cycles and missing references."""
     from ..deps import _read_body
     body = await _read_body(request)
@@ -336,7 +351,7 @@ async def api_dry_run(request: Request, auth=Depends(_require_operator)):
 
 
 @router.get("/api/healing/chaos/scenarios")
-def api_chaos_scenarios(auth=Depends(_require_admin)):
+def api_chaos_scenarios(auth=Depends(_get_auth)):
     """List available chaos test scenarios."""
     from ..healing.chaos import ChaosRunner
 

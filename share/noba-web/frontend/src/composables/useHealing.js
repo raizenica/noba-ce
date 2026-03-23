@@ -29,5 +29,14 @@ export function useHealing() {
     refreshCapabilities: (hostname) => post(`/api/healing/capabilities/${encodeURIComponent(hostname)}/refresh`),
     // Rollback
     rollback: (ledgerId) => post(`/api/healing/rollback/${ledgerId}`),
+    // Trust demotion
+    demoteTrust: (ruleId) => post(`/api/healing/trust/${encodeURIComponent(ruleId)}/demote`),
+    // Dry-run
+    dryRun: (event) => post('/api/healing/dry-run', { event }),
+    // Chaos
+    fetchChaosScenarios: () => get('/api/healing/chaos/scenarios'),
+    runChaos: (scenario, dryRun = true) => post('/api/healing/chaos/run', { scenario, dry_run: dryRun }),
+    // Health
+    fetchHealth: () => get('/api/healing/health'),
   }
 }

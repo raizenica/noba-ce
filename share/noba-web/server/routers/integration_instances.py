@@ -1,16 +1,43 @@
 """Noba -- Integration instance management API."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ..deps import _get_auth, _read_body, _require_operator, db
+from ..deps import _get_auth, _read_body, _require_admin, _require_operator, db
 
 logger = logging.getLogger("noba")
 router = APIRouter(tags=["integrations"])
+
+
+def _is_safe_url(url: str) -> bool:
+    """Block requests to private/internal networks."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Block common internal targets
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+        # Block metadata endpoints
+        if hostname.startswith("169.254."):
+            return False
+        # Block private IP ranges
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return False
+        except ValueError:
+            pass  # hostname is a domain name, allow it
+        return True
+    except Exception:
+        return False
 
 
 # ── Instances CRUD ───────────────────────────────────────────────
@@ -22,7 +49,13 @@ def api_list_instances(
     auth=Depends(_get_auth),
 ):
     """List integration instances, optionally filtered by category or site."""
-    return db.list_integration_instances(category=category, site=site)
+    results = db.list_integration_instances(category=category, site=site)
+    username, role = auth
+    if role != "admin":
+        for item in results:
+            if isinstance(item, dict):
+                item["auth_config"] = {"redacted": True}
+    return results
 
 
 @router.get("/api/integrations/instances/{instance_id}")
@@ -39,11 +72,14 @@ def api_get_instance(instance_id: str, auth=Depends(_get_auth)):
                 result[field] = json.loads(result[field])
             except (json.JSONDecodeError, TypeError):
                 pass
+    username, role = auth
+    if role != "admin":
+        result["auth_config"] = {"redacted": True}
     return result
 
 
 @router.post("/api/integrations/instances")
-async def api_create_instance(request: Request, auth=Depends(_require_operator)):
+async def api_create_instance(request: Request, auth=Depends(_require_admin)):
     """Create a new integration instance."""
     body = await _read_body(request)
 
@@ -76,11 +112,11 @@ async def api_create_instance(request: Request, auth=Depends(_require_operator))
     return {"id": body["id"], "status": "created"}
 
 
-@router.put("/api/integrations/instances/{instance_id}")
+@router.patch("/api/integrations/instances/{instance_id}")
 async def api_update_instance(
-    instance_id: str, request: Request, auth=Depends(_require_operator),
+    instance_id: str, request: Request, auth=Depends(_require_admin),
 ):
-    """Update an integration instance."""
+    """Update an integration instance (partial)."""
     body = await _read_body(request)
 
     inst = db.get_integration_instance(instance_id)
@@ -118,7 +154,7 @@ async def api_update_instance(
 
 
 @router.delete("/api/integrations/instances/{instance_id}")
-def api_delete_instance(instance_id: str, auth=Depends(_require_operator)):
+def api_delete_instance(instance_id: str, auth=Depends(_require_admin)):
     """Delete an integration instance."""
     inst = db.get_integration_instance(instance_id)
     if not inst:
@@ -139,6 +175,9 @@ async def api_test_connection(request: Request, auth=Depends(_require_operator))
 
     if not url:
         return {"success": False, "error": "No URL provided", "platform": platform}
+
+    if not _is_safe_url(url):
+        return {"success": False, "error": "URL targets a private/internal network", "platform": platform, "url": url}
 
     try:
         async with httpx.AsyncClient(timeout=10, verify=False) as client:
@@ -205,7 +244,7 @@ def api_list_group_members(group_name: str, auth=Depends(_get_auth)):
 
 @router.post("/api/integrations/groups/{group_name}/members")
 async def api_add_group_member(
-    group_name: str, request: Request, auth=Depends(_require_operator),
+    group_name: str, request: Request, auth=Depends(_require_admin),
 ):
     """Add an instance to a group."""
     body = await _read_body(request)
@@ -218,7 +257,7 @@ async def api_add_group_member(
 
 @router.delete("/api/integrations/groups/{group_name}/members/{instance_id}")
 def api_remove_group_member(
-    group_name: str, instance_id: str, auth=Depends(_require_operator),
+    group_name: str, instance_id: str, auth=Depends(_require_admin),
 ):
     """Remove an instance from a group."""
     db.remove_from_integration_group(group_name, instance_id)
