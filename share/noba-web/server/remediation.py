@@ -578,8 +578,18 @@ _AGENT_COMMAND_MAP: dict[str, tuple] = {
         "container": p.get("container", ""),
         "action": "restart",
     }),
+    "scale_container": ("container_control", lambda p: {
+        "container": p.get("container", ""),
+        "action": p.get("action", "start"),
+    }),
     "restart_service": ("restart_service", lambda p: {
         "service": p.get("service", ""),
+    }),
+    "flush_dns": ("restart_service", lambda p: {
+        "service": p.get("service", "pihole-FTL"),
+    }),
+    "agent_command": ("exec", lambda p: {
+        "command": p.get("command", ""),
     }),
 }
 
