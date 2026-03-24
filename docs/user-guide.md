@@ -150,11 +150,11 @@ curl -sf "http://noba-server:8080/api/agent/install-script?key=YOUR_KEY" | sudo 
 
 ### Capabilities
 
-- 32+ command types (service control, file transfer, log streaming, security scan, etc.)
+- 42+ command types (service control, file transfer, log streaming, security scan, network diagnostics, etc.)
 - WebSocket real-time communication with HTTP polling fallback
 - Browser-based remote terminal (PTY via xterm.js, admin-only)
 - File transfer up to 50 MB with SHA256 verification
-- Risk-tiered permissions (viewer/operator/admin)
+- Risk-tiered permissions (operator/admin — viewers have read-only access, no agent commands)
 - Agents self-update from the NOBA server automatically
 
 ---

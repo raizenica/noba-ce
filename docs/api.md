@@ -12,7 +12,7 @@ Pass the token in either:
 
 Tokens are valid for 24 hours and expire automatically. A cleanup job runs every 5 minutes to purge expired tokens.
 
-> **Full interactive API docs** are available at `/api/docs` (Swagger UI) and `/api/redoc` (ReDoc) when the server is running. This document covers the core endpoints — for the complete reference (235+ routes across 13 routers), use the interactive docs.
+> **Full interactive API docs** are available at `/api/docs` (Swagger UI) and `/api/redoc` (ReDoc) when the server is running. This document covers the core endpoints — for the complete reference (300+ routes across 15 routers), use the interactive docs (disabled by default — set `NOBA_OPENAPI=1` to enable).
 
 ### Roles
 
@@ -34,7 +34,7 @@ Health check. No authentication required.
 ```json
 {
   "status": "ok",
-  "version": "1.11.0",
+  "version": "2.0.0",
   "uptime_s": 3723
 }
 ```
@@ -248,7 +248,7 @@ Retrieve audit log entries. **Admin only.**
 
 ### `GET /api/settings`
 
-Read all persisted settings. **Admin only.**
+Read all persisted settings. **Authenticated (any role).**
 
 **Response `200`:**
 ```json
@@ -458,7 +458,7 @@ Test connectivity to an rclone remote.
 
 ---
 
-### `GET /api/notifications/test`
+### `POST /api/notifications/test`
 
 Send a test notification via all configured channels. **Admin only.**
 

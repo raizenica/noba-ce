@@ -8,7 +8,7 @@
 
 ## Project Layout
 ```
-share/noba-web/server/       → Python backend modules (13 routers)
+share/noba-web/server/       → Python backend modules (15 routers)
 share/noba-web/frontend/     → Vue 3 source (src/views/, src/components/, src/stores/)
 share/noba-web/static/dist/  → Built Vue app (committed, served by FastAPI)
 share/noba-web/static/       → Legacy static assets (favicon, style.css)

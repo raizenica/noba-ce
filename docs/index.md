@@ -20,7 +20,7 @@ features:
     details: CPU, RAM, disk, network, temps, containers — all at a glance via SSE. 6 themes, mobile responsive.
   - icon: "\U0001F916"
     title: Remote Agents
-    details: Deploy lightweight agents to any Linux box. 32+ command types, WebSocket delivery, live log streaming.
+    details: Deploy lightweight agents to any Linux box. 42+ command types, WebSocket delivery, live log streaming, multi-homed support.
   - icon: "\U0001F50C"
     title: 40+ Integrations
     details: Plex, TrueNAS, Proxmox, Pi-hole, Home Assistant, UniFi, K8s, and many more. One dashboard.
