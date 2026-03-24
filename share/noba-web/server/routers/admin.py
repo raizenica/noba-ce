@@ -13,6 +13,15 @@ from fastapi.responses import PlainTextResponse
 
 from ..alerts import dispatch_notifications
 from ..config import ACTION_LOG, HISTORY_METRICS, LOG_DIR, NOBA_YAML
+from ..constants import (
+    CONFIG_UPLOAD_MAX_BYTES,
+    DIFF_NAMES_LIMIT,
+    DIR_ENTRIES_LIMIT,
+    ERROR_TRUNCATE_LEN,
+    FILE_VERSIONS_LIMIT,
+    HISTORY_RESOLUTION_S,
+    SNAPSHOT_LIST_LIMIT,
+)
 from ..deps import (
     _client_ip, _get_auth, _int_param, _read_body, _require_admin,
     _require_operator, _run_cmd, _safe_int, db,
@@ -138,7 +147,7 @@ def api_config_backup(request: Request, auth=Depends(_require_admin)):
 async def api_config_restore(request: Request, auth=Depends(_require_admin)):
     username, _ = auth
     raw = await request.body()
-    if len(raw) > 512 * 1024:
+    if len(raw) > CONFIG_UPLOAD_MAX_BYTES:
         raise HTTPException(413, "Upload too large (max 512 KB)")
     if not raw:
         raise HTTPException(400, "Empty body")
@@ -305,7 +314,7 @@ def api_backup_history(auth=Depends(_get_auth)):
             snapshots.append(info)
     except OSError as e:
         logger.warning("backup/history scan error: %s", e)
-    return {"snapshots": snapshots[:200], "dest": dest}
+    return {"snapshots": snapshots[:SNAPSHOT_LIST_LIMIT], "dest": dest}
 
 
 # ── /api/backup/snapshots ────────────────────────────────────────────────────
@@ -339,7 +348,7 @@ def api_snapshot_browse(name: str, request: Request, auth=Depends(_get_auth)):
                 continue
     except OSError as e:
         raise HTTPException(500, f"Cannot read directory: {e}")
-    return {"type": "dir", "path": subpath or "/", "entries": entries[:2000]}
+    return {"type": "dir", "path": subpath or "/", "entries": entries[:DIR_ENTRIES_LIMIT]}
 
 
 @router.get("/api/backup/snapshots/diff")
@@ -375,7 +384,7 @@ def api_snapshot_diff(request: Request, auth=Depends(_get_auth)):
         raise HTTPException(500, f"Cannot scan snapshots: {e}")
 
     all_names = sorted(set(files_a) | set(files_b))
-    for name in all_names[:5000]:
+    for name in all_names[:DIFF_NAMES_LIMIT]:
         sa = files_a.get(name)
         sb = files_b.get(name)
         if sa and not sb:
@@ -424,7 +433,7 @@ def api_file_versions(request: Request, auth=Depends(_get_auth)):
     for v in versions:
         v["unique"] = v["inode"] not in seen_inodes
         seen_inodes.add(v["inode"])
-    return {"path": file_path, "versions": versions[:100]}
+    return {"path": file_path, "versions": versions[:FILE_VERSIONS_LIMIT]}
 
 
 # ── /api/backup/restore ──────────────────────────────────────────────────────
@@ -554,7 +563,7 @@ def api_restic_status(auth=Depends(_get_auth)):
         r = subprocess.run(["restic", "-r", repo, "snapshots", "--json", "--latest", "5"],
                           capture_output=True, text=True, timeout=30, env=env)
         if r.returncode != 0:
-            return {"configured": True, "error": r.stderr.strip()[:200]}
+            return {"configured": True, "error": r.stderr.strip()[:ERROR_TRUNCATE_LEN]}
         snapshots = json.loads(r.stdout)
         return {
             "configured": True,
@@ -673,11 +682,11 @@ def api_action_log(auth=Depends(_require_operator)):
 def api_bandwidth_report(request: Request, auth=Depends(_get_auth)):
     """Bandwidth usage report per interface over configurable period."""
     range_h = _int_param(request, "range", 24, 1, 8760)
-    rx_points = db.get_history("net_rx_bytes", range_hours=range_h, resolution=3600)
-    tx_points = db.get_history("net_tx_bytes", range_hours=range_h, resolution=3600)
+    rx_points = db.get_history("net_rx_bytes", range_hours=range_h, resolution=HISTORY_RESOLUTION_S)
+    tx_points = db.get_history("net_tx_bytes", range_hours=range_h, resolution=HISTORY_RESOLUTION_S)
 
-    total_rx = sum(p["value"] * 3600 for p in rx_points)
-    total_tx = sum(p["value"] * 3600 for p in tx_points)
+    total_rx = sum(p["value"] * HISTORY_RESOLUTION_S for p in rx_points)
+    total_tx = sum(p["value"] * HISTORY_RESOLUTION_S for p in tx_points)
 
     hourly = []
     for rx, tx in zip(rx_points, tx_points):
@@ -705,7 +714,7 @@ def api_anomaly_report(request: Request, auth=Depends(_get_auth)):
     metrics = ["cpu_percent", "mem_percent", "cpu_temp"]
     results = {}
     for metric in metrics:
-        points = db.get_history(metric, range_hours=range_h, resolution=3600, anomaly=True)
+        points = db.get_history(metric, range_hours=range_h, resolution=HISTORY_RESOLUTION_S, anomaly=True)
         anomalies = [p for p in points if p.get("anomaly")]
         if anomalies:
             results[metric] = {
@@ -732,7 +741,7 @@ async def api_custom_report(request: Request, auth=Depends(_require_operator)):
     for metric in metrics:
         if metric not in HISTORY_METRICS:
             continue
-        points = db.get_history(metric, range_hours=range_h, resolution=3600)
+        points = db.get_history(metric, range_hours=range_h, resolution=HISTORY_RESOLUTION_S)
         if points:
             values = [p["value"] for p in points]
             report_data[metric] = {

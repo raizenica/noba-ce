@@ -925,6 +925,29 @@
         .modal-box      { padding: 1rem; }
         .settings-tabs .stab { padding: .5rem .7rem; }
     }
+
+    /* ── Inline-style utility classes ─────────────────────────────────────── */
+    /* Table header cells (used in healing, automations, infrastructure)       */
+    .th-left   { padding: 10px 14px; text-align: left;   border-bottom: 1px solid var(--border); }
+    .th-center { padding: 10px 14px; text-align: center; border-bottom: 1px solid var(--border); }
+    .th-right  { padding: 10px 14px; text-align: right;  border-bottom: 1px solid var(--border); }
+
+    /* Table data cells — compact (.4rem) variant for infrastructure/automations */
+    .td-left   { padding: .4rem; text-align: left;   }
+    .td-center { padding: .4rem; text-align: center; }
+    .td-right  { padding: .4rem; text-align: right;  }
+    .td-cell   { padding: .4rem; }
+
+    /* Table body cells — standard (9px 14px) variant for healing tables      */
+    .td-body        { padding: 9px 14px; }
+    .td-body-center { padding: 9px 14px; text-align: center; }
+    .td-body-right  { padding: 9px 14px; text-align: right;  }
+
+    /* Border, margin, font-size helpers                                       */
+    .border-b { border-bottom: 1px solid var(--border); }
+    .mr-sm    { margin-right: .3rem; }
+    .mr-6     { margin-right: 6px; }
+    .text-xs  { font-size: .55rem; }
 }
 
 /* ── Password reveal toggle ────────────────────────────────────────────────── */

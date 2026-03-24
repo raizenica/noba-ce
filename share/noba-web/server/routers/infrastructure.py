@@ -32,7 +32,7 @@ logger = logging.getLogger("noba")
 router = APIRouter(tags=["infrastructure"])
 
 
-def _k8s_verify(cfg: dict):
+def _k8s_verify(cfg: dict) -> str | bool:
     """Get the TLS verify setting for K8s API calls."""
     v = cfg.get("k8sVerifySsl", True)
     if isinstance(v, str) and os.path.isfile(v):
@@ -40,7 +40,7 @@ def _k8s_verify(cfg: dict):
     return bool(v) if not isinstance(v, str) else v.lower() not in ("", "0", "false", "no")
 
 
-def _pmx_verify(cfg: dict):
+def _pmx_verify(cfg: dict) -> str | bool:
     """Get the TLS verify setting for Proxmox API calls."""
     v = cfg.get("proxmoxVerifySsl", True)
     if isinstance(v, str) and os.path.isfile(v):

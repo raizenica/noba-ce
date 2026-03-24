@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+from ..constants import LEDGER_SUGGESTION_OUTCOME_LIMIT
 from .models import HealOutcome
 
 logger = logging.getLogger("noba")
@@ -45,7 +46,7 @@ def record(outcome: HealOutcome, db) -> int:
 def generate_suggestions(db) -> list[dict]:
     """Analyze ledger data and produce actionable suggestions."""
     suggestions: list[dict] = []
-    outcomes = db.get_heal_outcomes(limit=500)
+    outcomes = db.get_heal_outcomes(limit=LEDGER_SUGGESTION_OUTCOME_LIMIT)
 
     # Group by rule_id + target
     groups: dict[str, list[dict]] = {}

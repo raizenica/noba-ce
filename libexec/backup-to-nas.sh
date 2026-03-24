@@ -29,7 +29,7 @@ VERIFY=false
 NO_EMAIL=false
 REPORT_ONLY=false
 export VERBOSE=false
-LOCK_FILE="/tmp/backup-to-nas.lock"
+LOCK_FILE="${TMPDIR:-/tmp}/backup-to-nas.lock"
 LOCK_FD=""
 LOG_FILE="${LOG_FILE:-$HOME/.local/share/backup-to-nas.log}"
 STATE_FILE="${STATE_FILE:-$HOME/.local/share/backup-to-nas.state}"
@@ -404,7 +404,7 @@ MOUNT_POINT=$(df -P "$DEST" 2>/dev/null | tail -1 | awk '{print $6}')
 # ── Report-only mode ───────────────────────────────────────────────────────────
 if [[ "$REPORT_ONLY" == true ]]; then
     log_info "Report-only: re-sending last run's report."
-    _EMAIL_TMP=$(mktemp -d "/tmp/noba-backup.XXXXXX")
+    _EMAIL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/noba-backup.XXXXXX")
     echo "(report-only mode — see attached log)" > "$_EMAIL_TMP/body.txt"
     send_report "Backup Report (resent) – $(hostname) – $(date '+%Y-%m-%d')" \
                 "$_EMAIL_TMP/body.txt"
@@ -595,7 +595,7 @@ else
     BACKUP_SIZE="N/A (dry run)"
 fi
 
-_EMAIL_TMP=$(mktemp -d "/tmp/noba-backup.XXXXXX")
+_EMAIL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/noba-backup.XXXXXX")
 BODY="$_EMAIL_TMP/report.txt"
 
 if (( ${#FAILED_SOURCES[@]} > 0 )); then

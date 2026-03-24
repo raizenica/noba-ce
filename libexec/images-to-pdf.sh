@@ -136,8 +136,8 @@ detect_convert() {
 check_pdf_policy() {
     local cmd="$1"
     local tmp_png tmp_pdf
-    tmp_png=$(mktemp /tmp/noba-im-test.XXXXXX.png)
-    tmp_pdf=$(mktemp /tmp/noba-im-test.XXXXXX.pdf)
+    tmp_png=$(mktemp "${TMPDIR:-/tmp}/noba-im-test.XXXXXX.png")
+    tmp_pdf=$(mktemp "${TMPDIR:-/tmp}/noba-im-test.XXXXXX.pdf")
     trap 'rm -f "$tmp_png" "$tmp_pdf"' RETURN
 
     # Create a 1×1 white test image

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import { useAuthStore } from './auth'
+import { SSE_HEARTBEAT_TIMEOUT_MS, POLLING_INTERVAL_MS } from '../constants'
 
 export const useDashboardStore = defineStore('dashboard', () => {
   const connStatus = ref('offline')
@@ -81,12 +82,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
       _es = null
       connStatus.value = 'polling'
       _startPolling()
-    }, 15000)
+    }, SSE_HEARTBEAT_TIMEOUT_MS)
   }
 
   function _startPolling() {
     if (_pollInterval) return
-    _pollInterval = setInterval(() => refreshStats(), 5000)
+    _pollInterval = setInterval(() => refreshStats(), POLLING_INTERVAL_MS)
   }
 
   async function refreshStats() {

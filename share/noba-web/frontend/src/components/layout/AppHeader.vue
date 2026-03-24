@@ -113,7 +113,7 @@ function openProfile() {
       <i class="fas fa-bars"></i>
     </button>
 
-    <div class="header-search" style="cursor:pointer" @click="openSearch" title="Search (Ctrl+K)">
+    <div class="header-search" style="cursor:pointer" role="button" tabindex="0" @click="openSearch" @keydown.enter="openSearch" @keydown.space.prevent="openSearch" title="Search (Ctrl+K)">
       <i class="fas fa-search search-icon"></i>
       <input
         type="text"

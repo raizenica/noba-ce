@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/auth'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { TERMINAL_RECONNECT_MS } from '../../constants'
 
 const props = defineProps({
   hostname: { type: String, required: true },
@@ -88,7 +89,7 @@ function connect() {
     connected.value = false
     if (event.code !== 1000) {
       term?.write('\r\n\x1b[31mDisconnected (' + (event.reason || event.code) + ')\x1b[0m\r\n')
-      reconnectTimer = setTimeout(connect, 3000)
+      reconnectTimer = setTimeout(connect, TERMINAL_RECONNECT_MS)
     }
   }
 

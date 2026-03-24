@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useHealingStore } from '../../stores/healing'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
+import { LEDGER_TIMELINE_LIMIT } from '../../constants'
 
 const store = useHealingStore()
 const authStore = useAuthStore()
@@ -94,7 +95,7 @@ async function doRollback(id) {
   try {
     await store.rollbackAction(id)
     notifStore.addToast('Rollback initiated successfully', 'success')
-    await store.fetchLedger({ limit: 100 })
+    await store.fetchLedger({ limit: LEDGER_TIMELINE_LIMIT })
   } catch (e) {
     notifStore.addToast('Rollback failed: ' + (e?.message || 'unknown error'), 'error')
   }

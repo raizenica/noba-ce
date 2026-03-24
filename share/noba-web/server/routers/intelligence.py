@@ -23,7 +23,7 @@ logger = logging.getLogger("noba")
 router = APIRouter(tags=["intelligence"])
 
 
-def _get_llm_client():
+def _get_llm_client() -> object | None:
     """Create an LLMClient from current settings. Returns None if not configured."""
     from ..llm import LLMClient
     cfg = read_yaml_settings()

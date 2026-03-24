@@ -11,6 +11,7 @@ const router = useRouter()
 
 const searchQuery = ref('')
 const searchInput = ref(null)
+const selectedIndex = ref(0)
 
 // ── Pages catalog ─────────────────────────────────────────────────────────────
 const PAGES = [
@@ -63,6 +64,10 @@ const searchResults = computed(() => {
     .slice(0, 15)
 })
 
+watch(searchQuery, () => {
+  selectedIndex.value = 0
+})
+
 function selectResult(item) {
   item.action()
   close()
@@ -71,6 +76,36 @@ function selectResult(item) {
 function close() {
   modals.searchModal = false
   searchQuery.value = ''
+  selectedIndex.value = 0
+}
+
+function handleKeyDown(e) {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    if (selectedIndex.value < searchResults.value.length - 1) {
+      selectedIndex.value++
+      scrollToSelected()
+    }
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    if (selectedIndex.value > 0) {
+      selectedIndex.value--
+      scrollToSelected()
+    }
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    const item = searchResults.value[selectedIndex.value]
+    if (item) selectResult(item)
+  } else if (e.key === 'Escape') {
+    close()
+  }
+}
+
+function scrollToSelected() {
+  nextTick(() => {
+    const el = document.getElementById(`search-result-${selectedIndex.value}`)
+    if (el) el.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 watch(() => modals.searchModal, (val) => {
@@ -101,18 +136,19 @@ watch(() => modals.searchModal, (val) => {
               class="field-input"
               style="flex:1;border:none;background:transparent;padding:.25rem;font-size:1rem;outline:none"
               placeholder="Search commands, pages, agents..."
-              @keydown.escape="close"
+              @keydown="handleKeyDown"
             />
             <kbd style="font-size:.7rem;opacity:.35;padding:.15rem .4rem;border:1px solid var(--border);border-radius:3px">Esc</kbd>
           </div>
 
           <div style="max-height:340px;overflow-y:auto;padding:.25rem 0">
             <div
-              v-for="result in searchResults"
+              v-for="(result, index) in searchResults"
               :key="result.id"
+              :id="`search-result-${index}`"
               style="display:flex;align-items:center;gap:.75rem;padding:.55rem 1rem;cursor:pointer;transition:background .1s"
-              @mouseenter="$event.currentTarget.style.background = 'var(--surface-2)'"
-              @mouseleave="$event.currentTarget.style.background = ''"
+              :style="index === selectedIndex ? 'background: var(--surface-2)' : ''"
+              @mouseenter="selectedIndex = index"
               @click="selectResult(result)"
             >
               <i class="fas nav-icon" :class="result.icon" style="width:16px;text-align:center;opacity:.6"></i>

@@ -28,7 +28,7 @@ _oauth_states: dict[str, dict] = {}
 _oauth_states_lock = threading.Lock()
 
 
-def _prune_oauth_states():
+def _prune_oauth_states() -> None:
     """Remove OAuth state entries older than 10 minutes."""
     now = time.time()
     with _oauth_states_lock:
@@ -220,7 +220,7 @@ def _resolve_provider(cfg: dict, provider_key: str = "") -> dict | None:
 
 
 @router.get("/api/auth/providers")
-def api_auth_providers():
+def api_auth_providers() -> dict:
     """List available authentication providers (for login page buttons)."""
     cfg = read_yaml_settings()
     providers = []

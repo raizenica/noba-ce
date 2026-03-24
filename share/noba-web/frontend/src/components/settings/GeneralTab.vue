@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
 import { useApi } from '../../composables/useApi'
 import { useModalsStore } from '../../stores/modals'
+import { UPDATE_RELOAD_DELAY_MS } from '../../constants'
 
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
@@ -49,7 +50,7 @@ async function applyUpdate() {
     updateResult.value = data
     notify.addToast('Update applied — restarting...', 'success')
     // Reload the page after the service restarts
-    setTimeout(() => { window.location.reload() }, 5000)
+    setTimeout(() => { window.location.reload() }, UPDATE_RELOAD_DELAY_MS)
   } catch (e) {
     notify.addToast('Update failed: ' + e.message, 'danger')
     updateResult.value = { status: 'error', message: e.message }

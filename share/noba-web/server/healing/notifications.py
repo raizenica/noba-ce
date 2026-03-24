@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 
+from ..constants import NOTIFICATION_METRIC_LIMIT
+
 logger = logging.getLogger("noba")
 
 
@@ -151,4 +153,4 @@ def _format_metrics(metrics: dict) -> str:
             parts.append(f"{k}={v:.1f}")
         else:
             parts.append(f"{k}={v}")
-    return ", ".join(parts[:5])  # limit to 5 key metrics
+    return ", ".join(parts[:NOTIFICATION_METRIC_LIMIT])  # limit to N key metrics

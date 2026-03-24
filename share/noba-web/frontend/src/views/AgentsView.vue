@@ -20,6 +20,64 @@ const modals         = useModalsStore()
 // ── Agent list from SSE store ──────────────────────────────────────────────────
 const agents = computed(() => dashboardStore.live.agents || [])
 
+// ── Selection & Bulk Actions ──────────────────────────────────────────────────
+const selectedAgents = ref(new Set())
+
+function toggleSelect(hostname) {
+  if (selectedAgents.value.has(hostname)) {
+    selectedAgents.value.delete(hostname)
+  } else {
+    selectedAgents.value.add(hostname)
+  }
+}
+
+function selectAll() {
+  if (selectedAgents.value.size === agents.value.length) {
+    selectedAgents.value.clear()
+  } else {
+    selectedAgents.value = new Set(agents.value.map(a => a.hostname))
+  }
+}
+
+async function bulkUpdate() {
+  const targets = Array.from(selectedAgents.value)
+  if (!targets.length) return
+  if (!await modals.confirm(`Queue agent update for ${targets.length} hosts?`)) return
+  try {
+    const { post } = useApi()
+    await post('/api/agents/bulk-command', {
+      hostnames: targets,
+      type: 'update_agent',
+      params: {}
+    })
+    notify.addToast(`Update queued for ${targets.length} agents`, 'success')
+    selectedAgents.value.clear()
+  } catch (e) {
+    notify.addToast(`Bulk update failed: ${e.message}`, 'danger')
+  }
+}
+
+async function bulkRemove() {
+  const targets = Array.from(selectedAgents.value)
+  if (!targets.length) return
+  if (!await modals.confirm(`Remove ${targets.length} agents from the dashboard? This does not stop the services on the remote hosts.`)) return
+  
+  let success = 0
+  let fail = 0
+  for (const host of targets) {
+    try {
+      await del(`/api/agents/${host}`)
+      success++
+    } catch {
+      fail++
+    }
+  }
+  
+  if (success) notify.addToast(`Removed ${success} agents`, 'success')
+  if (fail) notify.addToast(`Failed to remove ${fail} agents`, 'danger')
+  selectedAgents.value.clear()
+}
+
 // ── Command history ────────────────────────────────────────────────────────────
 const cmdHistory        = ref([])
 const cmdHistoryLoading = ref(false)
@@ -106,6 +164,23 @@ onMounted(() => {
       </h2>
       <div style="display:flex;gap:.4rem">
         <button
+          v-if="agents.length > 0"
+          class="btn btn-xs"
+          :class="selectedAgents.size === agents.length ? 'btn-primary' : 'btn-secondary'"
+          @click="selectAll"
+        >
+          <i class="fas" :class="selectedAgents.size === agents.length ? 'fa-check-square' : 'fa-square'"></i>
+          {{ selectedAgents.size === agents.length ? 'Deselect All' : 'Select All' }}
+        </button>
+        <div v-if="selectedAgents.size > 0" style="display:flex;gap:.4rem">
+          <button class="btn btn-xs btn-primary" @click="bulkUpdate" title="Update selected agents">
+            <i class="fas fa-sync-alt"></i> Update ({{ selectedAgents.size }})
+          </button>
+          <button v-if="authStore.isAdmin" class="btn btn-xs btn-danger" @click="bulkRemove" title="Remove selected agents">
+            <i class="fas fa-trash"></i> Remove ({{ selectedAgents.size }})
+          </button>
+        </div>
+        <button
           v-if="authStore.isAdmin"
           class="btn btn-xs btn-secondary"
           title="Deploy new agent"
@@ -125,10 +200,23 @@ onMounted(() => {
         v-for="a in agents"
         :key="a.hostname"
         class="agent-card"
-        :class="a.online ? 'agent-online' : 'agent-offline'"
-        style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);cursor:pointer"
+        :class="[a.online ? 'agent-online' : 'agent-offline', { 'selected-card': selectedAgents.has(a.hostname) }]"
+        style="padding:.8rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);cursor:pointer;position:relative"
         @click="openDetail(a)"
       >
+        <!-- Selection Checkbox -->
+        <div
+          style="position:absolute;top:-8px;left:-8px;z-index:10"
+          @click.stop="toggleSelect(a.hostname)"
+        >
+          <div
+            class="bulk-check"
+            :class="{ active: selectedAgents.has(a.hostname) }"
+          >
+            <i class="fas fa-check" v-if="selectedAgents.has(a.hostname)"></i>
+          </div>
+        </div>
+
         <!-- Header row -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
           <div style="display:flex;align-items:center;gap:.4rem;min-width:0">
@@ -311,3 +399,31 @@ onMounted(() => {
     />
   </div>
 </template>
+
+<style scoped>
+.bulk-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content:center;
+  color: #fff;
+  font-size: .7rem;
+  transition: all .15s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.bulk-check.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.selected-card {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.agent-card:hover .bulk-check {
+  border-color: var(--accent);
+}
+</style>

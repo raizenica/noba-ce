@@ -56,26 +56,26 @@ function statusLabel(svc) {
       <table style="width:100%;font-size:.8rem;border-collapse:collapse">
         <thead>
           <tr style="border-bottom:2px solid var(--border)">
-            <th style="padding:.4rem;text-align:left">Service</th>
-            <th style="padding:.4rem;text-align:center">Status</th>
-            <th v-if="authStore.isOperator" style="padding:.4rem;text-align:center">Actions</th>
+            <th class="td-left">Service</th>
+            <th class="td-center">Status</th>
+            <th v-if="authStore.isOperator" class="td-center">Actions</th>
           </tr>
         </thead>
         <tbody>
           <tr
             v-for="svc in services"
             :key="svc.name"
-            style="border-bottom:1px solid var(--border)"
+            class="border-b"
           >
-            <td style="padding:.4rem;font-family:monospace;font-size:.78rem">
+            <td class="td-cell" style="font-family:monospace;font-size:.78rem">
               {{ svc.name.replace('.service', '') }}
             </td>
-            <td style="padding:.4rem;text-align:center">
+            <td class="td-center">
               <span class="badge" :class="statusClass(svc)" style="font-size:.6rem">
                 {{ statusLabel(svc) }}
               </span>
             </td>
-            <td v-if="authStore.isOperator" style="padding:.4rem;text-align:center">
+            <td v-if="authStore.isOperator" class="td-center">
               <div style="display:flex;gap:.3rem;justify-content:center">
                 <button
                   class="btn btn-xs"

@@ -145,12 +145,12 @@ fetchBaselines()
     <table v-if="baselines.length > 0" style="width:100%;font-size:.8rem;border-collapse:collapse">
       <thead>
         <tr style="border-bottom:2px solid var(--border)">
-          <th style="padding:.4rem;text-align:left">File Path</th>
-          <th style="padding:.4rem;text-align:left">Expected Hash</th>
-          <th style="padding:.4rem">Group</th>
-          <th style="padding:.4rem">Agents</th>
-          <th style="padding:.4rem">Status</th>
-          <th v-if="authStore.isOperator" style="padding:.4rem">Actions</th>
+          <th class="td-left">File Path</th>
+          <th class="td-left">Expected Hash</th>
+          <th class="td-cell">Group</th>
+          <th class="td-cell">Agents</th>
+          <th class="td-cell">Status</th>
+          <th v-if="authStore.isOperator" class="td-cell">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -160,21 +160,21 @@ fetchBaselines()
             :style="b.status === 'drift' ? 'background:rgba(239,68,68,0.08)' : ''"
             @click="toggleExpand(b.id)"
           >
-            <td style="padding:.4rem;font-family:monospace;font-size:.75rem">{{ b.path }}</td>
-            <td style="padding:.4rem;font-family:monospace;font-size:.7rem;color:var(--text-dim)">
+            <td class="td-cell" style="font-family:monospace;font-size:.75rem">{{ b.path }}</td>
+            <td class="td-cell" style="font-family:monospace;font-size:.7rem;color:var(--text-dim)">
               {{ b.expected_hash ? b.expected_hash.substring(0, 16) + (b.expected_hash.length > 16 ? '...' : '') : '-' }}
             </td>
-            <td style="padding:.4rem;text-align:center;font-size:.75rem">
+            <td class="td-center" style="font-size:.75rem">
               {{ b.agent_group === '__all__' ? 'All' : b.agent_group }}
             </td>
-            <td style="padding:.4rem;text-align:center">{{ b.agent_count || 0 }}</td>
-            <td style="padding:.4rem;text-align:center">
+            <td class="td-center">{{ b.agent_count || 0 }}</td>
+            <td class="td-center">
               <span class="badge" :class="statusClass(b.status)" style="font-size:.6rem">{{ b.status || 'unknown' }}</span>
               <span v-if="b.drift_count > 0" style="font-size:.65rem;color:var(--danger);margin-left:.2rem">
                 {{ b.drift_count }} drifted
               </span>
             </td>
-            <td v-if="authStore.isOperator" style="padding:.4rem;text-align:center" @click.stop>
+            <td v-if="authStore.isOperator" class="td-center" @click.stop>
               <div style="display:flex;gap:.3rem;justify-content:center;align-items:center">
                 <select
                   v-model="setFromHost"
@@ -207,14 +207,14 @@ fetchBaselines()
             <td :colspan="authStore.isOperator ? 6 : 5" style="padding:0">
               <div style="padding:.6rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);margin:.3rem">
                 <h4 style="margin:0 0 .5rem 0;font-size:.85rem">
-                  <i class="fas fa-search" style="margin-right:.3rem"></i> Per-Agent Results
+                  <i class="fas fa-search mr-sm"></i> Per-Agent Results
                 </h4>
                 <div v-if="driftResults.length === 0" class="empty-msg" style="margin:0">
                   No drift check results yet. Click "Check Now" to run a check.
                 </div>
                 <table v-else style="width:100%;font-size:.78rem;border-collapse:collapse">
                   <thead>
-                    <tr style="border-bottom:1px solid var(--border)">
+                    <tr class="border-b">
                       <th style="padding:.3rem;text-align:left">Hostname</th>
                       <th style="padding:.3rem;text-align:left">Actual Hash</th>
                       <th style="padding:.3rem">Status</th>
@@ -225,7 +225,7 @@ fetchBaselines()
                     <tr
                       v-for="r in driftResults"
                       :key="r.id"
-                      style="border-bottom:1px solid var(--border)"
+                      class="border-b"
                       :style="r.status === 'drift' ? 'background:rgba(239,68,68,0.08)' : ''"
                     >
                       <td style="padding:.3rem;font-weight:600">{{ r.hostname }}</td>

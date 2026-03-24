@@ -4,6 +4,7 @@ import { useApprovalsStore } from '../../stores/approvals'
 import { useHealingStore } from '../../stores/healing'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
+import { APPROVAL_QUEUE_LIMIT } from '../../constants'
 
 const approvalsStore = useApprovalsStore()
 const healingStore = useHealingStore()
@@ -18,7 +19,7 @@ let clockInterval = null
 
 onMounted(async () => {
   await approvalsStore.fetchPending()
-  if (!healingStore.ledger.length) await healingStore.fetchLedger({ limit: 100 })
+  if (!healingStore.ledger.length) await healingStore.fetchLedger({ limit: APPROVAL_QUEUE_LIMIT })
   clockInterval = setInterval(() => { now.value = Date.now() }, 1000)
 })
 
@@ -195,7 +196,7 @@ const visiblePending = computed(() =>
 
     <!-- History section (collapsed) -->
     <div v-if="decidedHistory.length > 0" class="aq-history">
-      <button class="btn btn-xs aq-history-toggle" @click="historyExpanded = !historyExpanded">
+      <button class="btn btn-xs aq-history-toggle" aria-label="Toggle history" @click="historyExpanded = !historyExpanded">
         {{ historyExpanded ? 'Hide' : 'Show' }} Recent History ({{ decidedHistory.length }})
       </button>
       <div v-if="historyExpanded" class="aq-history-list">

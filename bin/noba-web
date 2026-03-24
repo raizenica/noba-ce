@@ -11,7 +11,7 @@ LIB_DIR="$LIBEXEC_DIR/lib"
 WEB_DIR="$LIBEXEC_DIR/web"
 
 # Source shared functions
-source "$LIB_DIR/noba-web-functions.sh"
+source "$LIB_DIR/noba-lib.sh"
 
 # Defaults
 PORT=8080

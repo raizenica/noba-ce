@@ -16,6 +16,7 @@ const inputLine = ref('')
 const terminalEl = ref(null)
 const connected = ref(false)
 const connecting = ref(false)
+const maximized = ref(false)
 
 function connect() {
   if (ws) return
@@ -75,24 +76,45 @@ function scrollBottom() {
   }, 10)
 }
 
+function toggleMaximize() {
+  maximized.value = !maximized.value
+  scrollBottom()
+}
+
+function handleGlobalKey(e) {
+  if (e.altKey && e.key === 'Enter') {
+    e.preventDefault()
+    toggleMaximize()
+  }
+}
+
 function close() {
   disconnect()
   modals.terminalModal = false
+  maximized.value = false
 }
 
 watch(() => modals.terminalModal, (val) => {
-  if (val) connect()
-  else disconnect()
+  if (val) {
+    connect()
+    window.addEventListener('keydown', handleGlobalKey)
+  } else {
+    disconnect()
+    window.removeEventListener('keydown', handleGlobalKey)
+  }
 })
 
-onUnmounted(disconnect)
+onUnmounted(() => {
+  disconnect()
+  window.removeEventListener('keydown', handleGlobalKey)
+})
 </script>
 
 <template>
   <AppModal
     :show="modals.terminalModal"
     title=""
-    width="90vw"
+    :width="maximized ? '98vw' : '90vw'"
     @close="close"
   >
     <!-- Custom header with status -->
@@ -105,6 +127,9 @@ onUnmounted(disconnect)
       </span>
       <button class="btn btn-sm" @click="connect" :disabled="connected || connecting" v-if="!connected && !connecting">
         <i class="fas fa-plug" style="margin-right:4px"></i>Reconnect
+      </button>
+      <button class="icon-btn" @click="toggleMaximize" :title="maximized ? 'Restore' : 'Maximize (Alt+Enter)'">
+        <i class="fas" :class="maximized ? 'fa-compress-alt' : 'fa-expand-alt'"></i>
       </button>
       <button class="modal-close" @click="close" aria-label="Close">&times;</button>
     </div>
@@ -119,11 +144,12 @@ onUnmounted(disconnect)
         font-size: .82rem;
         line-height: 1.5;
         padding: .75rem 1rem;
-        height: 460px;
         overflow-y: auto;
         white-space: pre-wrap;
         word-break: break-all;
+        transition: height 0.2s ease;
       "
+      :style="{ height: maximized ? 'calc(100vh - 180px)' : '460px' }"
     >
       <div
         v-for="(line, i) in lines"

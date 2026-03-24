@@ -5,6 +5,7 @@ import { useHealingStore } from '../stores/healing'
 import { useNotificationsStore } from '../stores/notifications'
 import { useIntervals } from '../composables/useIntervals'
 import HealOverviewBar from '../components/healing/HealOverviewBar.vue'
+import { HEALING_FETCH_ALL_INTERVAL_MS, LEDGER_TIMELINE_LIMIT } from '../constants'
 
 const authStore = useAuthStore()
 const store = useHealingStore()
@@ -40,7 +41,7 @@ const filteredLedger = computed(() => {
 async function refetchLedger() {
   ledgerLoading.value = true
   try {
-    const params = { limit: 100 }
+    const params = { limit: LEDGER_TIMELINE_LIMIT }
     if (ledgerFilterRule.value) params.rule_id = ledgerFilterRule.value
     if (ledgerFilterTarget.value) params.target = ledgerFilterTarget.value
     await store.fetchLedger(params)
@@ -156,7 +157,7 @@ const effectivenessEntries = computed(() => {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 onMounted(() => {
   store.fetchAll()
-  addInterval(() => store.fetchAll(), 30000)
+  addInterval(() => store.fetchAll(), HEALING_FETCH_ALL_INTERVAL_MS)
 })
 
 onUnmounted(() => {
@@ -181,7 +182,7 @@ onUnmounted(() => {
         :class="activeTab === 'overview' ? 'btn-primary' : ''"
         @click="activeTab = 'overview'"
       >
-        <i class="fas fa-chart-line" style="margin-right:6px"></i>Overview
+        <i class="fas fa-chart-line mr-6"></i>Overview
         <span v-if="store.suggestionCount" class="nav-badge" style="margin-left:6px">{{ store.suggestionCount }}</span>
       </button>
       <button
@@ -190,7 +191,7 @@ onUnmounted(() => {
         @click="activeTab = 'ledger'"
         style="margin-left:8px"
       >
-        <i class="fas fa-list-alt" style="margin-right:6px"></i>Ledger
+        <i class="fas fa-list-alt mr-6"></i>Ledger
       </button>
       <button
         class="btn"
@@ -198,7 +199,7 @@ onUnmounted(() => {
         @click="activeTab = 'dependencies'"
         style="margin-left:8px"
       >
-        <i class="fas fa-project-diagram" style="margin-right:6px"></i>Dependencies
+        <i class="fas fa-project-diagram mr-6"></i>Dependencies
       </button>
       <button
         class="btn"
@@ -206,7 +207,7 @@ onUnmounted(() => {
         @click="activeTab = 'trust'"
         style="margin-left:8px"
       >
-        <i class="fas fa-shield-alt" style="margin-right:6px"></i>Trust
+        <i class="fas fa-shield-alt mr-6"></i>Trust
       </button>
       <button
         class="btn"
@@ -214,7 +215,7 @@ onUnmounted(() => {
         @click="activeTab = 'approvals'"
         style="margin-left:8px"
       >
-        <i class="fas fa-check-circle" style="margin-right:6px"></i>Approvals
+        <i class="fas fa-check-circle mr-6"></i>Approvals
         <span v-if="approvalBadge" class="nav-badge" style="margin-left:6px">{{ approvalBadge }}</span>
       </button>
       <button
@@ -223,7 +224,7 @@ onUnmounted(() => {
         @click="activeTab = 'maintenance'"
         style="margin-left:8px"
       >
-        <i class="fas fa-wrench" style="margin-right:6px"></i>Maintenance
+        <i class="fas fa-wrench mr-6"></i>Maintenance
         <span v-if="maintenanceBadge" class="nav-badge" style="margin-left:6px">{{ maintenanceBadge }}</span>
       </button>
     </div>
@@ -233,7 +234,7 @@ onUnmounted(() => {
       <!-- Effectiveness Summary -->
       <div class="card" style="margin-bottom:16px">
         <div class="card-header">
-          <h3 class="card-title"><i class="fas fa-chart-bar" style="margin-right:6px"></i>Effectiveness Summary</h3>
+          <h3 class="card-title"><i class="fas fa-chart-bar mr-6"></i>Effectiveness Summary</h3>
         </div>
         <div class="card-body" style="padding:0;overflow-x:auto">
           <div v-if="store.loading && effectivenessEntries.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
@@ -243,20 +244,20 @@ onUnmounted(() => {
           <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Rule</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Total</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Success</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Failed</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Rate</th>
+                <th class="th-left">Rule</th>
+                <th class="th-center">Total</th>
+                <th class="th-center">Success</th>
+                <th class="th-center">Failed</th>
+                <th class="th-center">Rate</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="entry in effectivenessEntries" :key="entry.rule_id" style="border-bottom:1px solid var(--border)" class="table-row-hover">
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ entry.rule_id || '\u2013' }}</td>
-                <td style="padding:9px 14px;text-align:center">{{ entry.total || entry.count || 0 }}</td>
-                <td style="padding:9px 14px;text-align:center;color:var(--success);font-weight:600">{{ entry.successes || entry.success || 0 }}</td>
-                <td style="padding:9px 14px;text-align:center;color:var(--danger);font-weight:600">{{ entry.failures || entry.failed || 0 }}</td>
-                <td style="padding:9px 14px;text-align:center">
+              <tr v-for="entry in effectivenessEntries" :key="entry.rule_id" class="border-b table-row-hover">
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ entry.rule_id || '\u2013' }}</td>
+                <td class="td-body-center">{{ entry.total || entry.count || 0 }}</td>
+                <td class="td-body-center" style="color:var(--success);font-weight:600">{{ entry.successes || entry.success || 0 }}</td>
+                <td class="td-body-center" style="color:var(--danger);font-weight:600">{{ entry.failures || entry.failed || 0 }}</td>
+                <td class="td-body-center">
                   <span class="badge" :class="(entry.rate || entry.success_rate || 0) >= 0.8 ? 'bs' : (entry.rate || entry.success_rate || 0) >= 0.5 ? 'bw' : 'bd'">
                     {{ ((entry.rate || entry.success_rate || 0) * 100).toFixed(0) }}%
                   </span>
@@ -270,7 +271,7 @@ onUnmounted(() => {
       <!-- Suggestions -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title"><i class="fas fa-lightbulb" style="margin-right:6px"></i>Suggestions</h3>
+          <h3 class="card-title"><i class="fas fa-lightbulb mr-6"></i>Suggestions</h3>
         </div>
         <div class="card-body">
           <div v-if="store.loading && store.suggestions.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
@@ -278,7 +279,7 @@ onUnmounted(() => {
           </div>
           <p v-else-if="store.suggestions.length === 0" class="empty-msg" style="margin:0">No suggestions at this time. The pipeline is running smoothly.</p>
           <div v-else style="display:flex;flex-direction:column;gap:12px">
-            <div v-for="sug in store.suggestions" :key="sug.id" style="display:flex;align-items:flex-start;gap:14px;padding:10px 0;border-bottom:1px solid var(--border)">
+            <div v-for="sug in store.suggestions" :key="sug.id" class="border-b" style="display:flex;align-items:flex-start;gap:14px;padding:10px 0">
               <div style="flex:1">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
                   <span class="badge ba">{{ sug.category || 'general' }}</span>
@@ -325,15 +326,15 @@ onUnmounted(() => {
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Timestamp</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Rule ID</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Target</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Action</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Step</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Trust</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Success</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Verified</th>
-                <th style="padding:10px 14px;text-align:right;border-bottom:1px solid var(--border)">Duration</th>
+                <th class="th-left">Timestamp</th>
+                <th class="th-left">Rule ID</th>
+                <th class="th-left">Target</th>
+                <th class="th-left">Action</th>
+                <th class="th-center">Step</th>
+                <th class="th-left">Trust</th>
+                <th class="th-center">Success</th>
+                <th class="th-center">Verified</th>
+                <th class="th-right">Duration</th>
               </tr>
             </thead>
             <tbody>
@@ -349,29 +350,28 @@ onUnmounted(() => {
                 v-for="row in filteredLedger"
                 :key="row.id || (row.rule_id + row.ts)"
                 :style="ledgerRowStyle(row)"
-                style="border-bottom:1px solid var(--border);transition:background .15s"
-                class="table-row-hover"
+                class="border-b table-row-hover" style="transition:background .15s"
               >
-                <td style="padding:9px 14px;color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.ts) }}</td>
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ row.rule_id || '\u2013' }}</td>
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
-                <td style="padding:9px 14px">
+                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.ts) }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.rule_id || '\u2013' }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
+                <td class="td-body">
                   <span class="badge ba">{{ row.action_type || '\u2013' }}</span>
                 </td>
-                <td style="padding:9px 14px;text-align:center">{{ row.escalation_step ||0 }}</td>
-                <td style="padding:9px 14px">
+                <td class="td-body-center">{{ row.escalation_step ||0 }}</td>
+                <td class="td-body">
                   <span v-if="row.trust_level" class="badge" :class="trustLevelClass(row.trust_level)">{{ row.trust_level }}</span>
                   <span v-else style="color:var(--text-muted)">\u2013</span>
                 </td>
-                <td style="padding:9px 14px;text-align:center;font-weight:600"
+                <td class="td-body-center" style="font-weight:600"
                     :style="{ color: row.action_success === true ? 'var(--success)' : row.action_success === false ? 'var(--danger)' : 'var(--text-muted)' }">
                   {{ fmtBool(row.action_success) }}
                 </td>
-                <td style="padding:9px 14px;text-align:center;font-weight:600"
+                <td class="td-body-center" style="font-weight:600"
                     :style="{ color: row.verified === true ? 'var(--success)' : row.verified === false ? 'var(--warning)' : 'var(--text-muted)' }">
                   {{ fmtBool(row.verified) }}
                 </td>
-                <td style="padding:9px 14px;text-align:right;color:var(--text-muted)">
+                <td class="td-body-right" style="color:var(--text-muted)">
                   {{ row.duration_s != null ? (row.duration_s ||0).toFixed(1) + 's' : '\u2013' }}
                 </td>
               </tr>
@@ -385,7 +385,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'dependencies'">
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title"><i class="fas fa-project-diagram" style="margin-right:6px"></i>Service Dependencies</h3>
+          <h3 class="card-title"><i class="fas fa-project-diagram mr-6"></i>Service Dependencies</h3>
         </div>
         <div class="card-body" style="padding:0;overflow-x:auto">
           <div v-if="store.loading && store.dependencies.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
@@ -395,20 +395,20 @@ onUnmounted(() => {
           <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Service</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Depends On</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Type</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Status</th>
+                <th class="th-left">Service</th>
+                <th class="th-left">Depends On</th>
+                <th class="th-left">Type</th>
+                <th class="th-center">Status</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(dep, idx) in store.dependencies" :key="idx" style="border-bottom:1px solid var(--border)" class="table-row-hover">
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ dep.service || dep.from || '\u2013' }}</td>
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ dep.depends_on || dep.to || '\u2013' }}</td>
-                <td style="padding:9px 14px">
+              <tr v-for="(dep, idx) in store.dependencies" :key="idx" class="border-b table-row-hover">
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ dep.service || dep.from || '\u2013' }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ dep.depends_on || dep.to || '\u2013' }}</td>
+                <td class="td-body">
                   <span class="badge ba">{{ dep.type || dep.dependency_type || 'hard' }}</span>
                 </td>
-                <td style="padding:9px 14px;text-align:center">
+                <td class="td-body-center">
                   <span class="badge" :class="dep.healthy !== false ? 'bs' : 'bd'">
                     {{ dep.healthy !== false ? 'OK' : 'Down' }}
                   </span>
@@ -485,7 +485,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'approvals'">
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title"><i class="fas fa-check-circle" style="margin-right:6px"></i>Pending Approvals</h3>
+          <h3 class="card-title"><i class="fas fa-check-circle mr-6"></i>Pending Approvals</h3>
         </div>
         <div class="card-body" style="padding:0;overflow-x:auto">
           <div v-if="store.loading && store.pendingApprovals.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
@@ -495,29 +495,28 @@ onUnmounted(() => {
           <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Timestamp</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Rule ID</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Target</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Action</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Step</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Trust</th>
+                <th class="th-left">Timestamp</th>
+                <th class="th-left">Rule ID</th>
+                <th class="th-left">Target</th>
+                <th class="th-left">Action</th>
+                <th class="th-center">Step</th>
+                <th class="th-left">Trust</th>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="row in store.pendingApprovals"
                 :key="row.id || (row.rule_id + row.ts)"
-                style="border-bottom:1px solid var(--border);transition:background .15s"
-                class="table-row-hover"
+                class="border-b table-row-hover" style="transition:background .15s"
               >
-                <td style="padding:9px 14px;color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.ts) }}</td>
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ row.rule_id || '\u2013' }}</td>
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
-                <td style="padding:9px 14px">
+                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.ts) }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.rule_id || '\u2013' }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
+                <td class="td-body">
                   <span class="badge ba">{{ row.action_type || '\u2013' }}</span>
                 </td>
-                <td style="padding:9px 14px;text-align:center">{{ row.escalation_step ||0 }}</td>
-                <td style="padding:9px 14px">
+                <td class="td-body-center">{{ row.escalation_step ||0 }}</td>
+                <td class="td-body">
                   <span class="badge bw">{{ row.trust_level }}</span>
                 </td>
               </tr>
@@ -531,7 +530,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'maintenance'">
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title"><i class="fas fa-wrench" style="margin-right:6px"></i>Maintenance Windows</h3>
+          <h3 class="card-title"><i class="fas fa-wrench mr-6"></i>Maintenance Windows</h3>
         </div>
         <div class="card-body" style="padding:0;overflow-x:auto">
           <div v-if="store.loading && store.maintenance.length === 0" style="padding:24px;text-align:center;color:var(--text-muted)">
@@ -541,29 +540,28 @@ onUnmounted(() => {
           <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--surface2);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Target</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Reason</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">Start</th>
-                <th style="padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)">End</th>
-                <th style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Status</th>
-                <th v-if="authStore.isOperator" style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">Actions</th>
+                <th class="th-left">Target</th>
+                <th class="th-left">Reason</th>
+                <th class="th-left">Start</th>
+                <th class="th-left">End</th>
+                <th class="th-center">Status</th>
+                <th v-if="authStore.isOperator" class="th-center">Actions</th>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="mw in store.maintenance"
                 :key="mw.id"
-                style="border-bottom:1px solid var(--border);transition:background .15s"
-                class="table-row-hover"
+                class="border-b table-row-hover" style="transition:background .15s"
               >
-                <td style="padding:9px 14px;font-family:monospace;font-size:12px">{{ mw.target || mw.hostname || '\u2013' }}</td>
-                <td style="padding:9px 14px">{{ mw.reason || '\u2013' }}</td>
-                <td style="padding:9px 14px;color:var(--text-muted);white-space:nowrap">{{ fmtTs(mw.start_ts || mw.created_at) }}</td>
-                <td style="padding:9px 14px;color:var(--text-muted);white-space:nowrap">{{ fmtTs(mw.end_ts) }}</td>
-                <td style="padding:9px 14px;text-align:center">
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ mw.target || mw.hostname || '\u2013' }}</td>
+                <td class="td-body">{{ mw.reason || '\u2013' }}</td>
+                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(mw.start_ts || mw.created_at) }}</td>
+                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(mw.end_ts) }}</td>
+                <td class="td-body-center">
                   <span class="badge" :class="mw.active ? 'bw' : 'bs'">{{ mw.active ? 'Active' : 'Ended' }}</span>
                 </td>
-                <td v-if="authStore.isOperator" style="padding:9px 14px;text-align:center">
+                <td v-if="authStore.isOperator" class="td-body-center">
                   <button
                     v-if="mw.active"
                     class="btn btn-xs"
@@ -581,5 +579,28 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    
+    <!-- ── Inspect Modal ─────────────────────────────────────────────────── -->
+    <AppModal :show="showInspectModal" title="Raw Execution Result" @close="showInspectModal = false" width="600px">
+      <div v-if="inspectedRow" style="padding:1rem">
+        <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap">
+          <div><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">Target</span><br><code style="font-size:13px">{{ inspectedRow.target }}</code></div>
+          <div><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">Rule ID</span><br><code style="font-size:13px">{{ inspectedRow.rule_id }}</code></div>
+          <div><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">Action</span><br><span class="badge ba">{{ inspectedRow.action_type }}</span></div>
+        </div>
+        <div v-if="inspectedRow.error_message" style="margin-bottom:1rem">
+          <span style="font-size:11px;color:var(--danger);text-transform:uppercase;font-weight:600">Error Message</span>
+          <pre style="margin-top:4px;padding:8px;background:var(--surface);border-left:3px solid var(--danger);font-size:12px;white-space:pre-wrap;word-break:break-all;color:var(--danger)">{{ inspectedRow.error_message }}</pre>
+        </div>
+        <div style="margin-bottom:1rem">
+          <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">Action Parameters (JSON)</span>
+          <pre style="margin-top:4px;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;font-size:12px;white-space:pre-wrap;word-break:break-all">{{ inspectedRow.action_params || '{}' }}</pre>
+        </div>
+        <div>
+          <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">Verify Result (JSON)</span>
+          <pre style="margin-top:4px;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;font-size:12px;white-space:pre-wrap;word-break:break-all">{{ inspectedRow.verify_result || '{}' }}</pre>
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>

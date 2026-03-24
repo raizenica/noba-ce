@@ -35,7 +35,7 @@ EXTRA_EXCLUDES=()
 LOG_DIR="${LOG_DIR:-$HOME/.local/share}"
 LOG_FILE="$LOG_DIR/cloud-backup.log"
 STATE_FILE="$LOG_DIR/cloud-backup.state"
-LOCK_FILE="/tmp/cloud-backup.lock"
+LOCK_FILE="${TMPDIR:-/tmp}/cloud-backup.lock"
 
 # Base rclone flags — safe, explicit list (no eval, no string-splitting)
 RCLONE_BASE_FLAGS=(--checksum --fast-list --retries 3)

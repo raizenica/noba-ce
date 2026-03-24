@@ -191,7 +191,7 @@ onMounted(() => fetchEndpoints())
               {{ ep.last_checked ? new Date(ep.last_checked * 1000).toLocaleString() : 'Never' }}
             </td>
             <td style="padding:.4rem .5rem;white-space:nowrap">
-              <button class="btn btn-xs" title="Check Now" @click="checkNow(ep.id)">
+              <button class="btn btn-xs" title="Check Now" aria-label="Check now" @click="checkNow(ep.id)">
                 <i class="fas fa-play"></i>
               </button>
               <button

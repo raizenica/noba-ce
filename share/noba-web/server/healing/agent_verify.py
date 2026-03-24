@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..constants import AGENT_VERIFY_OUTPUT_TRUNCATE
+
 logger = logging.getLogger("noba")
 
 
@@ -71,11 +73,11 @@ def _query_agent(hostname: str, target: str) -> dict | None:
                         output = r.get("output", "")
                         success = r.get("success", False)
                         if success and "running" in str(output).lower():
-                            return {"status": "up", "detail": str(output)[:200]}
+                            return {"status": "up", "detail": str(output)[:AGENT_VERIFY_OUTPUT_TRUNCATE]}
                         elif success:
-                            return {"status": "down", "detail": str(output)[:200]}
+                            return {"status": "down", "detail": str(output)[:AGENT_VERIFY_OUTPUT_TRUNCATE]}
                         else:
-                            return {"status": "unknown", "detail": str(output)[:200]}
+                            return {"status": "unknown", "detail": str(output)[:AGENT_VERIFY_OUTPUT_TRUNCATE]}
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break

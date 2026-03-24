@@ -57,8 +57,7 @@ async function startStream() {
       active.value   = true
       _startPoll()
     }
-  } catch (e) {
-    console.error('stream start error', e)
+  } catch { /* non-fatal — stream start failure handled by UI state */
   } finally {
     loading.value = false
   }

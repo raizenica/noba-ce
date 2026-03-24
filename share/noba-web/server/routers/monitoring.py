@@ -81,13 +81,13 @@ async def api_health_score(auth=Depends(_get_auth)):
 
 # ── Status page endpoints ────────────────────────────────────────────────────
 @router.get("/status")
-def public_status_page():
+def public_status_page() -> FileResponse:
     """Public-facing status page -- no auth required."""
     return FileResponse(_WEB_DIR / "status.html")
 
 
 @router.get("/api/status/public")
-def api_public_status():
+def api_public_status() -> dict:
     """Public status data -- no auth required.
 
     Returns components with live status, active incidents, and 90-day uptime history.
@@ -167,7 +167,7 @@ def api_public_status():
 
 
 @router.get("/api/status/incidents")
-def api_public_status_incidents():
+def api_public_status_incidents() -> dict:
     """Public: list recent status incidents with their updates."""
     incidents = db.list_status_incidents(limit=50, include_resolved=True)
     for inc in incidents:

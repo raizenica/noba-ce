@@ -832,6 +832,14 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_heal_snapshots_ledger
                     ON heal_snapshots(ledger_id);
+                CREATE TABLE IF NOT EXISTS linked_providers (
+                    username TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_email TEXT NOT NULL,
+                    provider_name TEXT DEFAULT '',
+                    linked_at REAL NOT NULL,
+                    PRIMARY KEY (username, provider)
+                );
             """)
             # Migrate existing databases: add assigned_to column if missing
             try:

@@ -1,5 +1,14 @@
 # Dockerfile — NOBA Command Center
+#
+# Multi-stage build is intentionally not used here: the Vue frontend is
+# pre-built and committed to static/dist/, so there is no npm/node step.
 FROM python:3.13-slim
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+LABEL org.opencontainers.image.title="NOBA Command Center"
+LABEL org.opencontainers.image.description="System monitoring and automation dashboard"
+LABEL org.opencontainers.image.source="https://github.com/itsraizen/noba"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,7 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    fastapi 'uvicorn[standard]' psutil pyyaml httpx websocket-client cryptography
+    'fastapi>=0.110.0' 'uvicorn[standard]>=0.27.1' 'psutil>=5.9.8' \
+    'pyyaml>=6.0' 'httpx>=0.27' 'websocket-client>=1.7' 'cryptography>=41.0'
 
 WORKDIR /app
 

@@ -19,6 +19,15 @@ from ..agent_config import (
     RISK_LEVELS, check_role_permission, get_agent_capabilities,
     validate_command_params,
 )
+from ..constants import (
+    COMMAND_HISTORY_LIMIT,
+    DEPLOY_ERROR_TRUNCATE,
+    DEPLOY_OUTPUT_TRUNCATE,
+    SLA_INCIDENT_LIMIT,
+    STREAM_BUFFER_MAX,
+    TERMINAL_QUEUE_MAXSIZE,
+    WS_CLOSE_NORMAL,
+)
 from ..agent_store import (
     _agent_cmd_lock, _agent_cmd_ready, _agent_cmd_results, _agent_commands,
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
@@ -56,92 +65,98 @@ def _validate_agent_key(key: str) -> bool:
     return any(_secrets.compare_digest(key, vk) for vk in valid_keys)
 
 
-# ── Agent endpoints ───────────────────────────────────────────────────────────
-@router.post("/api/agent/report")
-async def api_agent_report(request: Request):
-    """Receive metrics from a NOBA agent.  Auth via X-Agent-Key header."""
-    key = request.headers.get("X-Agent-Key", "")
-    if not key:
-        raise HTTPException(401, "Missing X-Agent-Key")
-    cfg = read_yaml_settings()
-    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
-    if not valid_keys or key not in valid_keys:
-        raise HTTPException(403, "Invalid agent key")
-    body = await _read_body(request)
-    hostname = body.get("hostname", "unknown")[:253]
-    body["_received"] = time.time()
-    body["_ip"] = _client_ip(request)
-    # Extract and store capability manifest if present
-    capabilities = body.pop("_capabilities", None)
-    if capabilities and isinstance(capabilities, dict):
+# ── Report sub-handlers ───────────────────────────────────────────────────────
+
+def _store_capability_manifest(hostname: str, capabilities: dict | None) -> None:
+    """Persist the agent capability manifest if present."""
+    if not capabilities or not isinstance(capabilities, dict):
+        return
+    try:
+        db.upsert_capability_manifest(hostname, json.dumps(capabilities))
+    except Exception as exc:
+        logger.error("Failed to store capability manifest for %s: %s", hostname, exc)
+
+
+def _record_security_scan(hostname: str, cr: dict) -> None:
+    """Record a security scan result from a command result."""
+    if cr.get("type") == "security_scan" and cr.get("status") == "ok":
         try:
-            db.upsert_capability_manifest(hostname, json.dumps(capabilities))
-        except Exception as exc:
-            logger.error("Failed to store capability manifest for %s: %s", hostname, exc)
-    cmd_results = body.pop("_cmd_results", None)
-    if cmd_results:
-        with _agent_cmd_ready:
-            existing = _agent_cmd_results.get(hostname, [])
-            existing.extend(cmd_results)
-            # Keep only last 50 results
-            _agent_cmd_results[hostname] = existing[-50:]
-            _agent_cmd_ready.notify_all()
-        for cr in cmd_results:
-            cr_id = cr.get("id", "")
-            if cr_id:
-                db.complete_command(cr_id, cr)
-            # Auto-record security scan results
-            if cr.get("type") == "security_scan" and cr.get("status") == "ok":
-                try:
-                    db.record_security_scan(
-                        hostname,
-                        int(cr.get("score", 0)),
-                        cr.get("findings", []),
-                    )
-                except Exception:
-                    pass
-            # Persist discovered network devices
-            if cr.get("type") == "network_discover" and cr.get("status") == "ok":
-                for dev in cr.get("devices", []):
-                    try:
-                        db.upsert_network_device(
-                            ip=dev.get("ip", ""),
-                            mac=dev.get("mac"),
-                            hostname=dev.get("hostname"),
-                            open_ports=dev.get("open_ports"),
-                            discovered_by=hostname,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to persist discovered device: %s", e)
-            # Persist backup verification results
-            if cr.get("type") == "verify_backup":
-                try:
-                    details = cr.get("details")
-                    db.record_backup_verification(
-                        backup_path=cr.get("path", ""),
-                        hostname=hostname,
-                        verification_type=cr.get("verification_type", ""),
-                        status=cr.get("status", "error"),
-                        details=json.dumps(details) if details else None,
-                    )
-                except Exception as e:
-                    logger.warning("Failed to persist backup verification: %s", e)
-    # Store stream data if present
-    stream_data = body.pop("_stream_data", None)
-    if stream_data and isinstance(stream_data, dict):
-        with _agent_stream_lines_lock:
-            for stream_id, lines in stream_data.items():
-                if isinstance(lines, list):
-                    buf = _agent_stream_lines.setdefault(stream_id, [])
-                    buf.extend(lines)
-                    # Trim to max size
-                    if len(buf) > _STREAM_LINES_MAX:
-                        _agent_stream_lines[stream_id] = buf[-_STREAM_LINES_MAX:]
-    with _agent_data_lock:
-        stale = [h for h, d in _agent_data.items() if time.time() - d.get("_received", 0) > 86400]
-        for h in stale:
-            del _agent_data[h]
-        _agent_data[hostname] = body
+            db.record_security_scan(
+                hostname,
+                int(cr.get("score", 0)),
+                cr.get("findings", []),
+            )
+        except Exception:
+            pass
+
+
+def _store_device_discovery(hostname: str, cr: dict) -> None:
+    """Persist discovered network devices from a network_discover result."""
+    if cr.get("type") != "network_discover" or cr.get("status") != "ok":
+        return
+    for dev in cr.get("devices", []):
+        try:
+            db.upsert_network_device(
+                ip=dev.get("ip", ""),
+                mac=dev.get("mac"),
+                hostname=dev.get("hostname"),
+                open_ports=dev.get("open_ports"),
+                discovered_by=hostname,
+            )
+        except Exception as e:
+            logger.warning("Failed to persist discovered device: %s", e)
+
+
+def _store_backup_verification(hostname: str, cr: dict) -> None:
+    """Persist backup verification results from a verify_backup result."""
+    if cr.get("type") != "verify_backup":
+        return
+    try:
+        details = cr.get("details")
+        db.record_backup_verification(
+            backup_path=cr.get("path", ""),
+            hostname=hostname,
+            verification_type=cr.get("verification_type", ""),
+            status=cr.get("status", "error"),
+            details=json.dumps(details) if details else None,
+        )
+    except Exception as e:
+        logger.warning("Failed to persist backup verification: %s", e)
+
+
+def _store_cmd_results(hostname: str, cmd_results: list | None) -> None:
+    """Process and persist command results from an agent report."""
+    if not cmd_results:
+        return
+    with _agent_cmd_ready:
+        existing = _agent_cmd_results.get(hostname, [])
+        existing.extend(cmd_results)
+        _agent_cmd_results[hostname] = existing[-50:]
+        _agent_cmd_ready.notify_all()
+    for cr in cmd_results:
+        cr_id = cr.get("id", "")
+        if cr_id:
+            db.complete_command(cr_id, cr)
+        _record_security_scan(hostname, cr)
+        _store_device_discovery(hostname, cr)
+        _store_backup_verification(hostname, cr)
+
+
+def _store_stream_data(stream_data: dict | None) -> None:
+    """Buffer incoming stream lines from agent report payload."""
+    if not stream_data or not isinstance(stream_data, dict):
+        return
+    with _agent_stream_lines_lock:
+        for stream_id, lines in stream_data.items():
+            if isinstance(lines, list):
+                buf = _agent_stream_lines.setdefault(stream_id, [])
+                buf.extend(lines)
+                if len(buf) > _STREAM_LINES_MAX:
+                    _agent_stream_lines[stream_id] = buf[-_STREAM_LINES_MAX:]
+
+
+def _store_agent_metrics(hostname: str, body: dict) -> None:
+    """Upsert agent record and insert CPU/mem/disk metrics."""
     try:
         db.upsert_agent(
             hostname=hostname,
@@ -162,18 +177,10 @@ async def api_agent_report(request: Request):
         db.insert_metrics(agent_metrics)
     except Exception:
         pass
-    pending = []
-    with _agent_cmd_lock:
-        if hostname in _agent_commands:
-            pending = _agent_commands.pop(hostname)
-        stale_cmds = [h for h, cmds in _agent_commands.items()
-                      if cmds and cmds[0].get("queued_at", 0) < time.time() - 600]
-        for h in stale_cmds:
-            del _agent_commands[h]
-    logger.info("Agent report", extra={"hostname": hostname, "ip": body.get("_ip")})
 
-    # Include heal policy if available
-    heal_policy = {}
+
+def _build_heal_policy(hostname: str) -> dict:
+    """Build heal policy for an agent from alert rules config."""
     try:
         from ..healing.agent_runtime import build_agent_policy
         cfg = read_yaml_settings()
@@ -186,49 +193,210 @@ async def api_agent_report(request: Request):
                     "escalation_chain": rule.get("escalation_chain", []),
                     "condition": rule.get("condition", ""),
                 }
-        heal_policy = build_agent_policy(hostname, rules_cfg, db)
+        return build_agent_policy(hostname, rules_cfg, db)
+    except Exception:
+        return {}
+
+
+def _ingest_heal_reports(hostname: str, body: dict) -> None:
+    """Ingest heal reports if present in the agent report body."""
+    heal_reports = body.pop("_heal_reports", None)
+    if not heal_reports or not isinstance(heal_reports, list):
+        return
+    try:
+        from ..healing.agent_runtime import ingest_agent_heal_reports
+        ingest_agent_heal_reports(hostname, heal_reports, db)
+    except Exception as exc:
+        logger.warning("Failed to ingest heal reports from %s: %s", hostname, exc)
+
+
+def _check_auto_update(hostname: str, body: dict, pending: list) -> None:
+    """Queue an auto-update command if the agent version is outdated."""
+    agent_version = body.get("agent_version", "")
+    if not agent_version or pending is None:
+        return
+    try:
+        server_agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
+        if server_agent_path.exists():
+            with open(server_agent_path) as f:
+                for line in f:
+                    if line.startswith("VERSION"):
+                        server_version = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if server_version != agent_version:
+                            if not any(c.get("type") == "update_agent" for c in pending):
+                                pending.append({
+                                    "id": f"auto-update-{int(time.time())}",
+                                    "type": "update_agent",
+                                    "params": {},
+                                    "queued_by": "auto-update",
+                                    "queued_at": int(time.time()),
+                                })
+                                logger.info(
+                                    "Auto-update queued for %s: %s -> %s",
+                                    hostname, agent_version, server_version,
+                                )
+                        break
     except Exception:
         pass
 
-    # Ingest heal reports if present
-    heal_reports = body.pop("_heal_reports", None)
-    if heal_reports and isinstance(heal_reports, list):
-        try:
-            from ..healing.agent_runtime import ingest_agent_heal_reports
-            ingest_agent_heal_reports(hostname, heal_reports, db)
-        except Exception as exc:
-            logger.warning("Failed to ingest heal reports from %s: %s", hostname, exc)
 
-    # Auto-update: compare agent version against server's copy
-    agent_version = body.get("agent_version", "")
-    if agent_version and pending is not None:
-        try:
-            server_agent_path = _WEB_DIR.parent / "noba-agent" / "agent.py"
-            if server_agent_path.exists():
-                # Extract VERSION from first 50 lines
-                with open(server_agent_path) as f:
-                    for line in f:
-                        if line.startswith("VERSION"):
-                            server_version = line.split("=", 1)[1].strip().strip('"').strip("'")
-                            if server_version != agent_version:
-                                # Queue update if not already pending
-                                if not any(c.get("type") == "update_agent" for c in pending):
-                                    pending.append({
-                                        "id": f"auto-update-{int(time.time())}",
-                                        "type": "update_agent",
-                                        "params": {},
-                                        "queued_by": "auto-update",
-                                        "queued_at": int(time.time()),
-                                    })
-                                    logger.info(
-                                        "Auto-update queued for %s: %s -> %s",
-                                        hostname, agent_version, server_version,
-                                    )
-                            break
-        except Exception:
-            pass
+# ── Agent endpoints ───────────────────────────────────────────────────────────
+@router.post("/api/agent/report")
+async def api_agent_report(request: Request):
+    """Receive metrics from a NOBA agent.  Auth via X-Agent-Key header."""
+    key = request.headers.get("X-Agent-Key", "")
+    if not key:
+        raise HTTPException(401, "Missing X-Agent-Key")
+    cfg = read_yaml_settings()
+    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
+    if not valid_keys or key not in valid_keys:
+        raise HTTPException(403, "Invalid agent key")
+    body = await _read_body(request)
+    hostname = body.get("hostname", "unknown")[:253]
+    body["_received"] = time.time()
+    body["_ip"] = _client_ip(request)
+
+    _store_capability_manifest(hostname, body.pop("_capabilities", None))
+    _store_cmd_results(hostname, body.pop("_cmd_results", None))
+    _store_stream_data(body.pop("_stream_data", None))
+
+    with _agent_data_lock:
+        stale = [h for h, d in _agent_data.items() if time.time() - d.get("_received", 0) > 86400]
+        for h in stale:
+            del _agent_data[h]
+        _agent_data[hostname] = body
+
+    _store_agent_metrics(hostname, body)
+
+    pending = []
+    with _agent_cmd_lock:
+        if hostname in _agent_commands:
+            pending = _agent_commands.pop(hostname)
+        stale_cmds = [h for h, cmds in _agent_commands.items()
+                      if cmds and cmds[0].get("queued_at", 0) < time.time() - 600]
+        for h in stale_cmds:
+            del _agent_commands[h]
+    logger.info("Agent report", extra={"hostname": hostname, "ip": body.get("_ip")})
+
+    heal_policy = _build_heal_policy(hostname)
+    _ingest_heal_reports(hostname, body)
+    _check_auto_update(hostname, body, pending)
 
     return {"status": "ok", "commands": pending, "heal_policy": heal_policy}
+
+
+# ── WebSocket sub-handlers ────────────────────────────────────────────────────
+
+def _handle_ws_result(hostname: str, msg: dict) -> None:
+    """Process a command result received via agent WebSocket."""
+    with _agent_cmd_ready:
+        _agent_cmd_results.setdefault(hostname, []).append(msg)
+        if len(_agent_cmd_results[hostname]) > 50:
+            _agent_cmd_results[hostname] = _agent_cmd_results[hostname][-50:]
+        _agent_cmd_ready.notify_all()
+    notify_terminal_subscribers(hostname, msg)
+    cmd_id = msg.get("id", "")
+    if cmd_id:
+        try:
+            db.complete_command(cmd_id, msg)
+        except Exception:
+            pass
+    # Reuse report helpers for security scan / backup verification
+    cmd_name = msg.get("cmd", "")
+    # Translate WS result format to match report format for shared helpers
+    compat = {**msg, "type": cmd_name}
+    _record_security_scan(hostname, compat)
+    _store_backup_verification(hostname, compat)
+
+
+def _handle_ws_stream(hostname: str, msg: dict) -> None:
+    """Buffer a stream message received via agent WebSocket."""
+    cmd_id = msg.get("id", "")
+    with _agent_cmd_lock:
+        stream_key = f"_stream_{hostname}_{cmd_id}"
+        buf = _agent_cmd_results.setdefault(stream_key, [])
+        buf.append(msg)
+        if len(buf) > STREAM_BUFFER_MAX:
+            _agent_cmd_results[stream_key] = buf[-STREAM_BUFFER_MAX:]
+    notify_terminal_subscribers(hostname, msg)
+
+
+async def _forward_pty_to_agent(hostname: str, data: dict, role: str, ws: WebSocket) -> None:
+    """Forward a PTY message from the browser terminal to the agent WebSocket."""
+    if data.get("type") == "pty_open":
+        data["role"] = role
+    with _agent_ws_lock:
+        agent_ws = _agent_websockets.get(hostname)
+    if agent_ws:
+        try:
+            await agent_ws.send_json(data)
+        except Exception:
+            await ws.send_json({"type": "pty_error", "error": "Agent WebSocket disconnected"})
+    else:
+        await ws.send_json({"type": "pty_error", "error": "Agent not connected via WebSocket"})
+
+
+async def _dispatch_terminal_command(
+    hostname: str, ws: WebSocket, data: dict, role: str, username: str,
+) -> None:
+    """Validate and dispatch a command from the browser terminal to the agent."""
+    cmd_type = data.get("type", "exec")
+    params = data.get("params", {})
+    if cmd_type == "exec" and "command" in data:
+        params = {"command": data["command"], "timeout": data.get("timeout", 30)}
+
+    risk = RISK_LEVELS.get(cmd_type)
+    if not risk:
+        await ws.send_json({"type": "error", "error": f"Unknown command: {cmd_type}"})
+        return
+    if not check_role_permission(role, risk):
+        await ws.send_json({"type": "error", "error": f"Insufficient permissions for {cmd_type}"})
+        return
+
+    cmd_id = secrets.token_hex(8)
+    delivered = False
+    with _agent_ws_lock:
+        agent_ws = _agent_websockets.get(hostname)
+    if agent_ws:
+        try:
+            await agent_ws.send_json({
+                "type": "command", "id": cmd_id,
+                "cmd": cmd_type, "params": params,
+            })
+            delivered = True
+        except Exception:
+            with _agent_ws_lock:
+                _agent_websockets.pop(hostname, None)
+
+    if not delivered:
+        cmd = {"id": cmd_id, "type": cmd_type, "params": params,
+               "queued_by": username, "queued_at": int(time.time())}
+        with _agent_cmd_lock:
+            _agent_commands.setdefault(hostname, []).append(cmd)
+
+    db.record_command(cmd_id, hostname, cmd_type, params, username)
+    await ws.send_json({
+        "type": "ack", "id": cmd_id,
+        "delivery": "websocket" if delivered else "queued",
+    })
+
+
+def _store_interface_metrics(hostname: str, result: dict) -> None:
+    """Store per-interface byte counters from a network_stats result."""
+    try:
+        iface_metrics = []
+        for iface in result.get("interfaces", []):
+            iname = iface.get("name", "").replace(".", "_")
+            iface_metrics.append(
+                (f"net_if_{hostname}_{iname}_rx", iface.get("rx_bytes", 0), "")
+            )
+            iface_metrics.append(
+                (f"net_if_{hostname}_{iname}_tx", iface.get("tx_bytes", 0), "")
+            )
+        if iface_metrics:
+            db.insert_metrics(iface_metrics)
+    except Exception:
+        pass
 
 
 # ── Agent WebSocket (Phase 1b) ───────────────────────────────────────────────
@@ -258,7 +426,7 @@ async def agent_websocket(ws: WebSocket):
             _agent_websockets[hostname] = ws
         if old:
             try:
-                await old.close(code=1000, reason="Replaced by new connection")
+                await old.close(code=WS_CLOSE_NORMAL, reason="Replaced by new connection")
             except Exception:
                 pass
 
@@ -288,55 +456,10 @@ async def agent_websocket(ws: WebSocket):
                 msg_type = "result"
 
             if is_result:
-                with _agent_cmd_ready:
-                    _agent_cmd_results.setdefault(hostname, []).append(msg)
-                    if len(_agent_cmd_results[hostname]) > 50:
-                        _agent_cmd_results[hostname] = _agent_cmd_results[hostname][-50:]
-                    _agent_cmd_ready.notify_all()
-                # Forward to browser terminal subscribers
-                notify_terminal_subscribers(hostname, msg)
-                # Complete command in history DB (same as HTTP report path)
-                cmd_id = msg.get("id", "")
-                if cmd_id:
-                    try:
-                        db.complete_command(cmd_id, msg)
-                    except Exception:
-                        pass
-                # Auto-record security scan results via WebSocket
-                cmd_name = msg.get("cmd", "")
-                if cmd_name == "security_scan" and msg.get("status") == "ok":
-                    try:
-                        db.record_security_scan(
-                            hostname,
-                            int(msg.get("score", 0)),
-                            msg.get("findings", []),
-                        )
-                    except Exception:
-                        pass
-                # Auto-record backup verification results via WebSocket
-                if cmd_name == "verify_backup":
-                    try:
-                        details = msg.get("details")
-                        db.record_backup_verification(
-                            backup_path=msg.get("path", ""),
-                            hostname=hostname,
-                            verification_type=msg.get("verification_type", ""),
-                            status=msg.get("status", "error"),
-                            details=json.dumps(details) if details else None,
-                        )
-                    except Exception:
-                        pass
+                _handle_ws_result(hostname, msg)
 
             elif msg_type == "stream":
-                cmd_id = msg.get("id", "")
-                with _agent_cmd_lock:
-                    stream_key = f"_stream_{hostname}_{cmd_id}"
-                    buf = _agent_cmd_results.setdefault(stream_key, [])
-                    buf.append(msg)
-                    if len(buf) > 500:
-                        _agent_cmd_results[stream_key] = buf[-500:]
-                # Forward stream lines to browser terminal
-                notify_terminal_subscribers(hostname, msg)
+                _handle_ws_stream(hostname, msg)
 
             elif msg_type in ("pty_output", "pty_exit", "pty_opened", "pty_error"):
                 # Forward PTY messages to browser terminal subscribers
@@ -379,7 +502,7 @@ async def agent_terminal_ws(hostname: str, ws: WebSocket):
     await ws.accept()
 
     # Subscribe to agent results
-    q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    q: asyncio.Queue = asyncio.Queue(maxsize=TERMINAL_QUEUE_MAXSIZE)
     with _terminal_sub_lock:
         _terminal_subscribers.setdefault(hostname, []).append(q)
 
@@ -404,64 +527,11 @@ async def agent_terminal_ws(hostname: str, ws: WebSocket):
             data = await ws.receive_json()
             msg_type = data.get("type", "exec")
 
-            # PTY messages — forward directly to agent WS
             if msg_type in ("pty_open", "pty_input", "pty_resize", "pty_close"):
-                # Inject server-verified role into pty_open (agent trusts this)
-                if msg_type == "pty_open":
-                    data["role"] = role
-                with _agent_ws_lock:
-                    agent_ws = _agent_websockets.get(hostname)
-                if agent_ws:
-                    try:
-                        await agent_ws.send_json(data)
-                    except Exception:
-                        await ws.send_json({"type": "pty_error", "error": "Agent WebSocket disconnected"})
-                else:
-                    await ws.send_json({"type": "pty_error", "error": "Agent not connected via WebSocket"})
+                await _forward_pty_to_agent(hostname, data, role, ws)
                 continue
 
-            # Regular command execution
-            cmd_type = msg_type
-            params = data.get("params", {})
-            if cmd_type == "exec" and "command" in data:
-                params = {"command": data["command"], "timeout": data.get("timeout", 30)}
-
-            # Validate
-            risk = RISK_LEVELS.get(cmd_type)
-            if not risk:
-                await ws.send_json({"type": "error", "error": f"Unknown command: {cmd_type}"})
-                continue
-            if not check_role_permission(role, risk):
-                await ws.send_json({"type": "error", "error": f"Insufficient permissions for {cmd_type}"})
-                continue
-
-            cmd_id = secrets.token_hex(8)
-            # Try agent WebSocket first
-            delivered = False
-            with _agent_ws_lock:
-                agent_ws = _agent_websockets.get(hostname)
-            if agent_ws:
-                try:
-                    await agent_ws.send_json({
-                        "type": "command", "id": cmd_id,
-                        "cmd": cmd_type, "params": params,
-                    })
-                    delivered = True
-                except Exception:
-                    with _agent_ws_lock:
-                        _agent_websockets.pop(hostname, None)
-
-            if not delivered:
-                cmd = {"id": cmd_id, "type": cmd_type, "params": params,
-                       "queued_by": username, "queued_at": int(time.time())}
-                with _agent_cmd_lock:
-                    _agent_commands.setdefault(hostname, []).append(cmd)
-
-            db.record_command(cmd_id, hostname, cmd_type, params, username)
-            await ws.send_json({
-                "type": "ack", "id": cmd_id,
-                "delivery": "websocket" if delivered else "queued",
-            })
+            await _dispatch_terminal_command(hostname, ws, data, role, username)
 
     except WebSocketDisconnect:
         pass
@@ -537,7 +607,7 @@ def api_agents(auth=Depends(_get_auth)):
 def api_command_history(request: Request, auth=Depends(_get_auth)):
     """Get command execution history, optionally filtered by hostname."""
     hostname = request.query_params.get("hostname", "")
-    limit = min(int(request.query_params.get("limit", "50")), 200)
+    limit = min(int(request.query_params.get("limit", "50")), COMMAND_HISTORY_LIMIT)
     return db.get_command_history(hostname=hostname or None, limit=limit)
 
 
@@ -745,21 +815,7 @@ async def api_agent_network_stats(hostname: str, request: Request, auth=Depends(
                     match = [r for r in results if r.get("id") == cmd_id]
                     if match:
                         result = match[0]
-                        # Store interface metrics for trending
-                        try:
-                            iface_metrics = []
-                            for iface in result.get("interfaces", []):
-                                iname = iface.get("name", "").replace(".", "_")
-                                iface_metrics.append(
-                                    (f"net_if_{hostname}_{iname}_rx", iface.get("rx_bytes", 0), "")
-                                )
-                                iface_metrics.append(
-                                    (f"net_if_{hostname}_{iname}_tx", iface.get("tx_bytes", 0), "")
-                                )
-                            if iface_metrics:
-                                db.insert_metrics(iface_metrics)
-                        except Exception:
-                            pass
+                        _store_interface_metrics(hostname, result)
                         db.audit_log("agent_network_stats", username,
                                      f"host={hostname} id={cmd_id}", ip)
                         return result
@@ -835,7 +891,7 @@ def api_agent_active_streams(hostname: str, auth=Depends(_get_auth)):
 def api_sla_summary(request: Request, auth=Depends(_get_auth)):
     """SLA uptime summary across all agents and key services."""
     hours = min(int(request.query_params.get("hours", "720")), 8760)
-    incidents = db.get_incidents(limit=1000, hours=hours)
+    incidents = db.get_incidents(limit=SLA_INCIDENT_LIMIT, hours=hours)
     total_seconds = hours * 3600
     downtime_by_source: dict[str, int] = {}
     for inc in incidents:
@@ -859,7 +915,7 @@ def api_sla_summary(request: Request, auth=Depends(_get_auth)):
 
 
 @router.get("/api/agent/update")
-def api_agent_update(request: Request):
+def api_agent_update(request: Request) -> FileResponse:
     """Serve the latest agent.py for self-update. Auth via X-Agent-Key."""
     key = request.headers.get("X-Agent-Key", "")
     if not key:
@@ -875,7 +931,7 @@ def api_agent_update(request: Request):
 
 
 @router.get("/api/agent/install-script")
-def api_agent_install_script(request: Request):
+def api_agent_install_script(request: Request) -> Response:
     """Generate a one-liner install script. Auth via X-Agent-Key."""
     key = request.headers.get("X-Agent-Key", "") or request.query_params.get("key", "")
     if not key:
@@ -997,7 +1053,7 @@ async def api_agent_deploy(request: Request, auth=Depends(_require_admin)):
             capture_output=True, text=True, timeout=30, env=env,
         )
         if result.returncode != 0:
-            return {"status": "error", "step": "copy", "error": result.stderr[:500]}
+            return {"status": "error", "step": "copy", "error": result.stderr[:DEPLOY_ERROR_TRUNCATE]}
 
         install_cmds = f"""
 sudo mkdir -p /opt/noba-agent
@@ -1038,8 +1094,8 @@ systemctl is-active noba-agent
         return {
             "status": "ok" if success else "error",
             "host": target_host,
-            "output": result.stdout[:1000],
-            "error": result.stderr[:500] if not success else "",
+            "output": result.stdout[:DEPLOY_OUTPUT_TRUNCATE],
+            "error": result.stderr[:DEPLOY_ERROR_TRUNCATE] if not success else "",
         }
     except subprocess.TimeoutExpired:
         return {"status": "error", "error": "SSH connection timed out"}

@@ -1070,7 +1070,7 @@ const cats = [
 
         <!-- Google -->
         <div class="social-provider-card">
-          <div class="sp-header" @click="expandedProvider = expandedProvider === 'google' ? '' : 'google'">
+          <div class="sp-header" role="button" tabindex="0" @click="expandedProvider = expandedProvider === 'google' ? '' : 'google'" @keydown.enter="expandedProvider = expandedProvider === 'google' ? '' : 'google'" @keydown.space.prevent="expandedProvider = expandedProvider === 'google' ? '' : 'google'">
             <i class="fab fa-google" style="color:#4285f4;font-size:1.2rem"></i>
             <span class="sp-name">Google</span>
             <span v-if="settingsStore.data.socialProviders?.google?.clientId" class="badge bs">Configured</span>
@@ -1113,7 +1113,7 @@ const cats = [
 
         <!-- Facebook -->
         <div class="social-provider-card">
-          <div class="sp-header" @click="expandedProvider = expandedProvider === 'facebook' ? '' : 'facebook'">
+          <div class="sp-header" role="button" tabindex="0" @click="expandedProvider = expandedProvider === 'facebook' ? '' : 'facebook'" @keydown.enter="expandedProvider = expandedProvider === 'facebook' ? '' : 'facebook'" @keydown.space.prevent="expandedProvider = expandedProvider === 'facebook' ? '' : 'facebook'">
             <i class="fab fa-facebook" style="color:#1877f2;font-size:1.2rem"></i>
             <span class="sp-name">Facebook</span>
             <span v-if="settingsStore.data.socialProviders?.facebook?.clientId" class="badge bs">Configured</span>
@@ -1157,7 +1157,7 @@ const cats = [
 
         <!-- GitHub -->
         <div class="social-provider-card">
-          <div class="sp-header" @click="expandedProvider = expandedProvider === 'github' ? '' : 'github'">
+          <div class="sp-header" role="button" tabindex="0" @click="expandedProvider = expandedProvider === 'github' ? '' : 'github'" @keydown.enter="expandedProvider = expandedProvider === 'github' ? '' : 'github'" @keydown.space.prevent="expandedProvider = expandedProvider === 'github' ? '' : 'github'">
             <i class="fab fa-github" style="color:#f0f6fc;font-size:1.2rem"></i>
             <span class="sp-name">GitHub</span>
             <span v-if="settingsStore.data.socialProviders?.github?.clientId" class="badge bs">Configured</span>
@@ -1202,7 +1202,7 @@ const cats = [
 
         <!-- Microsoft -->
         <div class="social-provider-card">
-          <div class="sp-header" @click="expandedProvider = expandedProvider === 'microsoft' ? '' : 'microsoft'">
+          <div class="sp-header" role="button" tabindex="0" @click="expandedProvider = expandedProvider === 'microsoft' ? '' : 'microsoft'" @keydown.enter="expandedProvider = expandedProvider === 'microsoft' ? '' : 'microsoft'" @keydown.space.prevent="expandedProvider = expandedProvider === 'microsoft' ? '' : 'microsoft'">
             <i class="fab fa-microsoft" style="color:#00a4ef;font-size:1.2rem"></i>
             <span class="sp-name">Microsoft</span>
             <span v-if="settingsStore.data.socialProviders?.microsoft?.clientId" class="badge bs">Configured</span>

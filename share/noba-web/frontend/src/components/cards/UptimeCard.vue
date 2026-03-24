@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useApi } from '../../composables/useApi'
 import DashboardCard from './DashboardCard.vue'
+import { UPTIME_FETCH_INTERVAL_MS } from '../../constants'
 
 const { get } = useApi()
 const uptimeItems   = ref([])
@@ -33,7 +34,7 @@ const percentColor = computed(() => {
 
 onMounted(() => {
   fetchUptime()
-  _iv = setInterval(fetchUptime, 30000)
+  _iv = setInterval(fetchUptime, UPTIME_FETCH_INTERVAL_MS)
 })
 
 onUnmounted(() => {

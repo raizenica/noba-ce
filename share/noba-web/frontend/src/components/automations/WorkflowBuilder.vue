@@ -336,7 +336,7 @@ onBeforeUnmount(() => { document.removeEventListener('contextmenu', onGlobalCtx)
     <div class="wb-toolbar-right">
       <div v-if="!showRaw" class="wb-zoom-controls">
         <button class="wb-zoom-btn" @click="zoomOut" title="Zoom out"><i class="fas fa-search-minus"></i></button>
-        <span class="wb-zoom-label" @click="zoomReset" title="Reset zoom">{{ Math.round(zoom * 100) }}%</span>
+        <span class="wb-zoom-label" role="button" tabindex="0" @click="zoomReset" @keydown.enter="zoomReset" @keydown.space.prevent="zoomReset" title="Reset zoom">{{ Math.round(zoom * 100) }}%</span>
         <button class="wb-zoom-btn" @click="zoomIn" title="Zoom in"><i class="fas fa-search-plus"></i></button>
       </div>
       <button v-if="!showRaw" class="wb-toggle-btn" @click="switchToRaw">

@@ -5,6 +5,8 @@ import logging
 import threading
 import time
 
+from ..constants import GOVERNOR_BREAKER_OUTCOME_LIMIT, GOVERNOR_PROMOTION_OUTCOME_LIMIT
+
 logger = logging.getLogger("noba")
 
 _ALL_LEVELS = ["observation", "dry_run", "notify", "approve", "execute"]
@@ -41,7 +43,7 @@ def effective_trust(rule_id: str, source: str, db) -> str:
 def check_circuit_breaker(rule_id: str, db) -> bool:
     """Check if circuit breaker should trip. Returns True if tripped (demoted)."""
     cutoff = int(time.time()) - CIRCUIT_BREAKER_WINDOW_S
-    outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=50)
+    outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=GOVERNOR_BREAKER_OUTCOME_LIMIT)
     recent_failures = [
         o for o in outcomes
         if o["created_at"] >= cutoff
@@ -82,7 +84,7 @@ def evaluate_promotions(db) -> list[dict]:
         if now - last_change < min_age_s:
             continue  # too soon
 
-        outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=200)
+        outcomes = db.get_heal_outcomes(rule_id=rule_id, limit=GOVERNOR_PROMOTION_OUTCOME_LIMIT)
         at_current = [o for o in outcomes if o["trust_level"] == current]
         if len(at_current) < min_executions:
             continue

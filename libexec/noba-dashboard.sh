@@ -4,7 +4,7 @@
 
 set -Eeuo pipefail
 
-trap 'rm -f /tmp/dnf-check.$$' EXIT
+trap 'rm -f "${TMPDIR:-/tmp}/dnf-check.$$"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -288,12 +288,12 @@ updates_status() {
     flatpak_updates=0
 
     if command -v dnf >/dev/null; then
-        if dnf check-update -q >/tmp/dnf-check.$$ 2>&1; then
+        if dnf check-update -q >"${TMPDIR:-/tmp}/dnf-check.$$" 2>&1; then
             dnf_updates=0
         else
-            dnf_updates=$(grep -c '^[[:alnum:]]' /tmp/dnf-check.$$ || true)
+            dnf_updates=$(grep -c '^[[:alnum:]]' "${TMPDIR:-/tmp}/dnf-check.$$" || true)
         fi
-        rm -f /tmp/dnf-check.$$
+        rm -f "${TMPDIR:-/tmp}/dnf-check.$$"
     fi
 
     if command -v flatpak >/dev/null; then

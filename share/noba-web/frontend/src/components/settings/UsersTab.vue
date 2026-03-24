@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
 import { useModalsStore } from '../../stores/modals'
 import AppModal from '../ui/AppModal.vue'
+import { USER_ACTION_MSG_TIMEOUT_MS } from '../../constants'
 
 const authStore = useAuthStore()
 const { post } = useApi()
@@ -56,7 +57,7 @@ async function addUser() {
   } catch (e) {
     actionMsg.value = 'Add failed: ' + e.message
   }
-  setTimeout(() => { actionMsg.value = '' }, 3000)
+  setTimeout(() => { actionMsg.value = '' }, USER_ACTION_MSG_TIMEOUT_MS)
 }
 
 async function confirmRemoveUser(username) {
@@ -68,7 +69,7 @@ async function confirmRemoveUser(username) {
   } catch (e) {
     actionMsg.value = 'Remove failed: ' + e.message
   }
-  setTimeout(() => { actionMsg.value = '' }, 3000)
+  setTimeout(() => { actionMsg.value = '' }, USER_ACTION_MSG_TIMEOUT_MS)
 }
 
 function openPassModal(username) {
@@ -94,7 +95,7 @@ async function changePassword() {
   } catch (e) {
     passModalError.value = 'Failed: ' + e.message
   }
-  setTimeout(() => { actionMsg.value = '' }, 3000)
+  setTimeout(() => { actionMsg.value = '' }, USER_ACTION_MSG_TIMEOUT_MS)
 }
 
 function roleBadgeClass(role) {

@@ -137,11 +137,11 @@ done
 # -------------------------------------------------------------------
 cd "$SCRIPT_DIR" || { log_error "Cannot cd to $SCRIPT_DIR"; exit 1; }
 
-DUMMY_BACKUP="/tmp/test-backups/$(date +%Y%m%d-%H%M%S)"
+DUMMY_BACKUP="${TMPDIR:-/tmp}/test-backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$DUMMY_BACKUP/Documents"
 echo "dummy content" > "$DUMMY_BACKUP/Documents/test.txt"
 
-TEST_IMAGE="/tmp/test.png"
+TEST_IMAGE="${TMPDIR:-/tmp}/test.png"
 if [ ! -f "$TEST_IMAGE" ]; then
     if command -v magick &>/dev/null; then
         magick -size 100x100 xc:red "$TEST_IMAGE" 2>/dev/null || true
@@ -150,17 +150,17 @@ if [ ! -f "$TEST_IMAGE" ]; then
     fi
 fi
 
-TEST_SPECIAL="/tmp/Download/test file with spaces and !@#$.txt"
-mkdir -p /tmp/Download
+TEST_SPECIAL="${TMPDIR:-/tmp}/Download/test file with spaces and !@#$.txt"
+mkdir -p "${TMPDIR:-/tmp}/Download"
 echo "content" > "$TEST_SPECIAL"
 
-LARGE_DIR="/tmp/checksum-large"
+LARGE_DIR="${TMPDIR:-/tmp}/checksum-large"
 mkdir -p "$LARGE_DIR"
 for i in {1..10}; do
     echo "test$i" > "$LARGE_DIR/file$i.txt"
 done
 
-INVALID_YAML="/tmp/invalid_config.yaml"
+INVALID_YAML="${TMPDIR:-/tmp}/invalid_config.yaml"
 cat > "$INVALID_YAML" <<EOF
 backup:
   dest: "/mnt/nas"
@@ -223,24 +223,24 @@ for script in *.sh; do
             fi
             ;;
         organize-downloads.sh)
-            mkdir -p /tmp/noba-test-dl
-            if ! DOWNLOAD_DIR="/tmp/noba-test-dl" run_test "$script" "./$script" --dry-run; then
+            mkdir -p "${TMPDIR:-/tmp}/noba-test-dl"
+            if ! DOWNLOAD_DIR="${TMPDIR:-/tmp}/noba-test-dl" run_test "$script" "./$script" --dry-run; then
                 echo -e "${RED}FAIL (--dry-run)${NC}"
                 FAIL=$((FAIL+1))
-                rm -rf /tmp/noba-test-dl
+                rm -rf "${TMPDIR:-/tmp}/noba-test-dl"
                 continue
             fi
-            rm -rf /tmp/noba-test-dl
+            rm -rf "${TMPDIR:-/tmp}/noba-test-dl"
             ;;
         undo-organizer.sh)
-            mkdir -p /tmp/noba-test-dl
-            if ! DOWNLOAD_DIR="/tmp/noba-test-dl" run_test "$script" "./$script" --dry-run; then
+            mkdir -p "${TMPDIR:-/tmp}/noba-test-dl"
+            if ! DOWNLOAD_DIR="${TMPDIR:-/tmp}/noba-test-dl" run_test "$script" "./$script" --dry-run; then
                 echo -e "${RED}FAIL (--dry-run)${NC}"
                 FAIL=$((FAIL+1))
-                rm -rf /tmp/noba-test-dl
+                rm -rf "${TMPDIR:-/tmp}/noba-test-dl"
                 continue
             fi
-            rm -rf /tmp/noba-test-dl
+            rm -rf "${TMPDIR:-/tmp}/noba-test-dl"
             ;;
         cloud-backup.sh)
             # Requires rclone — skip if not available
@@ -259,7 +259,7 @@ for script in *.sh; do
             ;;
         images-to-pdf.sh)
             if [ -f "$TEST_IMAGE" ]; then
-                if ! run_test "$script" "./$script" -o /tmp/test.pdf "$TEST_IMAGE"; then
+                if ! run_test "$script" "./$script" -o "${TMPDIR:-/tmp}/test.pdf" "$TEST_IMAGE"; then
                     echo -e "${RED}FAIL (conversion)${NC}"
                     FAIL=$((FAIL+1))
                     continue
@@ -301,7 +301,7 @@ for script in *.sh; do
 done
 
 # 2. Missing required arguments (Expect Failure: 1)
-run_edge_test 1 "backup-to-nas.sh (missing --source)" ./backup-to-nas.sh --dest /tmp
+run_edge_test 1 "backup-to-nas.sh (missing --source)" ./backup-to-nas.sh --dest "${TMPDIR:-/tmp}"
 # Note: --source without --dest may hang reading config — skip timeout-prone test
 DOWNLOAD_DIR=/does/not/exist run_edge_test 0 "organize-downloads.sh (non-existent dir)" ./organize-downloads.sh
 
@@ -309,7 +309,7 @@ DOWNLOAD_DIR=/does/not/exist run_edge_test 0 "organize-downloads.sh (non-existen
 run_edge_test 0 "checksum.sh (10 files)" ./checksum.sh "$LARGE_DIR"/*
 
 # 4. organize-downloads.sh with special characters (Expect Success: 0)
-TEST_DOWNLOAD_DIR="/tmp/test-downloads"
+TEST_DOWNLOAD_DIR="${TMPDIR:-/tmp}/test-downloads"
 mkdir -p "$TEST_DOWNLOAD_DIR"
 echo "special content" > "$TEST_DOWNLOAD_DIR/test file with spaces.txt"
 DOWNLOAD_DIR="$TEST_DOWNLOAD_DIR" run_edge_test 0 "organize-downloads.sh (special chars)" ./organize-downloads.sh --dry-run
@@ -329,14 +329,14 @@ if [ -x "./noba" ]; then
 fi
 
 # 7. dry-run on non-existent destination (Expect Success: 0, it skips checks)
-run_edge_test 0 "backup-to-nas.sh (dry-run with missing dest)" ./backup-to-nas.sh --source /tmp --dest /does/not/exist --dry-run
+run_edge_test 0 "backup-to-nas.sh (dry-run with missing dest)" ./backup-to-nas.sh --source "${TMPDIR:-/tmp}" --dest /does/not/exist --dry-run
 
 # -------------------------------------------------------------------
 # Cleanup
 # -------------------------------------------------------------------
-rm -rf "/tmp/test-backups"
-rm -f "/tmp/test.png" "/tmp/test.pdf"
-rm -rf "/tmp/Download"
+rm -rf "${TMPDIR:-/tmp}/test-backups"
+rm -f "${TMPDIR:-/tmp}/test.png" "${TMPDIR:-/tmp}/test.pdf"
+rm -rf "${TMPDIR:-/tmp}/Download"
 rm -rf "$LARGE_DIR"
 rm -f "$INVALID_YAML"
 

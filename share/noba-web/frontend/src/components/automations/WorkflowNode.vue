@@ -105,7 +105,7 @@ function onContextMenu(e) {
     </span>
 
     <!-- Delete button -->
-    <button class="wn-delete" title="Delete node" @click="onDelete">
+    <button class="wn-delete" title="Delete node" aria-label="Delete node" @click="onDelete">
       <i class="fas fa-times"></i>
     </button>
 

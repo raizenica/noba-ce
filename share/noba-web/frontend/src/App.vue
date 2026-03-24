@@ -40,6 +40,10 @@ function onKeyDown(e) {
   if (e.key === 'Escape') {
     modals.searchModal = false
   }
+  if (e.key === 'Enter' && modals.confirmDialog.show) {
+    e.preventDefault()
+    modals.confirmYes()
+  }
 }
 
 onMounted(async () => {
@@ -70,6 +74,9 @@ onMounted(async () => {
     if (auth.authenticated) {
       await settings.fetchSettings()
       await settings.fetchPreferences()
+      if (!isMobile() && settings.preferences.sidebarCollapsed !== undefined) {
+        sidebarCollapsed.value = settings.preferences.sidebarCollapsed
+      }
       dashboard.connectSse()
     }
   }
@@ -89,6 +96,14 @@ watch(() => auth.authenticated, (val) => {
 // Auto-collapse sidebar on navigation (mobile)
 watch(() => router.currentRoute.value.path, () => {
   if (isMobile()) sidebarCollapsed.value = true
+})
+
+// Save sidebar state to preferences
+watch(sidebarCollapsed, (val) => {
+  if (!isMobile() && auth.authenticated && settings.preferences.sidebarCollapsed !== val) {
+    settings.preferences.sidebarCollapsed = val
+    settings.savePreferences().catch(() => {})
+  }
 })
 </script>
 

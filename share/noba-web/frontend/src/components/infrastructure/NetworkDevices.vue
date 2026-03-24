@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
 import { useDashboardStore } from '../../stores/dashboard'
 import { useModalsStore } from '../../stores/modals'
+import { NETWORK_DISCOVER_FETCH_DELAY_MS } from '../../constants'
 
 const { get, post, del } = useApi()
 const authStore      = useAuthStore()
@@ -34,7 +35,7 @@ async function triggerDiscover() {
   try {
     await post(`/api/network/discover/${encodeURIComponent(discoverHost.value)}`)
     notif.addToast(`Discovery started on ${discoverHost.value}`, 'success')
-    setTimeout(fetchDevices, 3000)
+    setTimeout(fetchDevices, NETWORK_DISCOVER_FETCH_DELAY_MS)
   } catch (e) {
     notif.addToast('Discovery failed: ' + e.message, 'error')
   }

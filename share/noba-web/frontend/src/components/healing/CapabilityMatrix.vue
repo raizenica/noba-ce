@@ -83,7 +83,7 @@ onMounted(async () => {
   <div class="capability-matrix">
     <div v-if="!agents.length" class="empty-msg">No agents connected.</div>
     <div v-for="agent in agents" :key="agent.hostname" class="cap-agent">
-      <div class="cap-header" @click="toggleAgent(agent.hostname)">
+      <div class="cap-header" role="button" tabindex="0" @click="toggleAgent(agent.hostname)" @keydown.enter="toggleAgent(agent.hostname)" @keydown.space.prevent="toggleAgent(agent.hostname)">
         <span class="cap-hostname">{{ agent.hostname }}</span>
         <span v-if="agent.manifest" class="badge ba">
           {{ agent.manifest.os }} · {{ agent.manifest.distro }}

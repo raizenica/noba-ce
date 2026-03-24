@@ -30,7 +30,7 @@ def _get_server_start_time() -> float:
 
 # ── /api/health ───────────────────────────────────────────────────────────────
 @router.get("/api/health")
-def api_health():
+def api_health() -> dict:
     from ..config import VERSION  # noqa: PLC0415
     return {"status": "ok", "version": VERSION, "uptime_s": round(time.time() - _get_server_start_time())}
 

@@ -3,6 +3,7 @@ import { ref, onMounted, nextTick } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
+import { INCIDENT_LIST_LIMIT } from '../../constants'
 
 const { get, post, put } = useApi()
 const authStore   = useAuthStore()
@@ -15,7 +16,7 @@ const incidentLoading  = ref(false)
 async function fetchIncidents() {
   incidentLoading.value = true
   try {
-    const data = await get('/api/incidents?limit=100')
+    const data = await get(`/api/incidents?limit=${INCIDENT_LIST_LIMIT}`)
     incidents.value = Array.isArray(data) ? data : []
   } catch { /* silent */ }
   finally { incidentLoading.value = false }

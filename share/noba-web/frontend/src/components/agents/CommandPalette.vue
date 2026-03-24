@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useApi } from '../../composables/useApi'
+import { CMD_POLL_FIRST_MS, CMD_POLL_SECOND_MS, CMD_POLL_THIRD_MS } from '../../constants'
 
 const props = defineProps({
   agents: { type: Array, default: () => [] },
@@ -108,13 +109,12 @@ async function run() {
         params: cleanParams,
       })
       // Poll for result
-      setTimeout(() => pollResult(host), 4000)
-      setTimeout(() => pollResult(host), 12000)
-      setTimeout(() => pollResult(host), 30000)
+      setTimeout(() => pollResult(host), CMD_POLL_FIRST_MS)
+      setTimeout(() => pollResult(host), CMD_POLL_SECOND_MS)
+      setTimeout(() => pollResult(host), CMD_POLL_THIRD_MS)
     }
     emit('result', { targets, type: selectedType.value })
-  } catch (e) {
-    console.error('command error', e)
+  } catch { /* non-fatal — command dispatch failure handled by UI state */
   } finally {
     sending.value = false
   }
