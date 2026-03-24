@@ -799,10 +799,12 @@ async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_
         else:
             logger.info("Approval %s: no resume node for decision=%s — workflow ends",
                         approval_id, decision)
-    elif decision == "approved":
+    elif decision == "approved" and ok:
         # Legacy non-graph approval: execute remediation action in background
         # thread to avoid blocking the event loop (remote agent dispatch uses
         # queue_agent_command_and_wait which blocks with threading.Condition).
+        # Gate on `ok` to prevent double execution if two concurrent approvals
+        # race — only the one that successfully transitioned status executes.
         import json as _json
         import threading
         from ..remediation import execute_action

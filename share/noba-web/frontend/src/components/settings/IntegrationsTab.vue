@@ -298,6 +298,19 @@ const cats = [
             </div>
           </div>
         </div>
+        <div class="field-2" style="margin-top:.5rem">
+          <div>
+            <label class="field-label">Username (if no token)</label>
+            <input class="field-input" v-model="settingsStore.data.graylogUser" placeholder="admin" autocomplete="off">
+          </div>
+          <div>
+            <label class="field-label">Password</label>
+            <div class="reveal-wrap">
+              <input class="field-input" type="password" v-model="settingsStore.data.graylogPassword" autocomplete="off">
+              <button type="button" class="reveal-btn" @click="toggleReveal"><i class="fas fa-eye"></i></button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="s-section">

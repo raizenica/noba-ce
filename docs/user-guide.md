@@ -21,8 +21,9 @@
 17. [Themes & Customization](#17-themes--customization)
 18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
 19. [Multi-Site Operations](#19-multi-site-operations)
-20. [Updating](#20-updating)
-21. [Uninstalling](#21-uninstalling)
+20. [Infrastructure Export](#20-infrastructure-export)
+21. [Updating](#21-updating)
+22. [Uninstalling](#22-uninstalling)
 
 ---
 
@@ -226,6 +227,10 @@ Media, Infrastructure, Network, IoT & Home, DevOps, Auth, Monitoring — coverin
 
 See the [main README](https://github.com/raizenica/noba#-40-integrations) for the full integration table.
 
+### Graylog
+
+Set `graylogUrl` to the Graylog API endpoint (e.g., `http://graylog:9000`). Authentication uses either an API token (`graylogToken`) or username/password (`graylogUser` + `graylogPassword`). Graylog v7+ requires the `X-Requested-By` header, which NOBA adds automatically.
+
 ---
 
 ## 9. Automations & Workflows
@@ -290,6 +295,10 @@ Admins can promote/demote manually. Circuit breaker demotes on repeated failures
 - **State snapshots** — pre-heal state captured for rollback
 - **Site isolation** — ISP outage detection prevents false restarts
 - **Chaos testing** — 12 scenarios for controlled fault injection
+
+### Remote Agent Healing
+
+To heal services on remote agents, set the `target` field in the alert rule action to the agent hostname (e.g., `pve`). NOBA dispatches the heal command via WebSocket. If the target agent is offline, execution falls back to local.
 
 ---
 
@@ -540,7 +549,17 @@ Both instances receive metrics and can issue commands. In a split-brain scenario
 
 ---
 
-## 20. Updating
+## 20. Infrastructure Export
+
+NOBA can export your infrastructure as Ansible playbooks, Docker Compose files, or shell scripts via **Operations → Export** or the `/api/export/*` endpoints.
+
+### IaC Auto-Discovery
+
+Add `?discover=true` to export requests to auto-discover containers and services from agents before generating output. The UI includes a "Discover" checkbox for this.
+
+---
+
+## 21. Updating
 
 ### From the UI (recommended)
 
@@ -563,7 +582,7 @@ bash install.sh --auto-approve
 
 ---
 
-## 21. Uninstalling
+## 22. Uninstalling
 
 ### Docker
 

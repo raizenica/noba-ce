@@ -141,17 +141,30 @@ async function fetchSyncStatus() {
 // ── Export tab ─────────────────────────────────────────────────────────────────
 const iacFormat   = ref('ansible')
 const iacHostname = ref('')
+const iacDiscover = ref(false)
 const iacLoading  = ref(false)
 const iacOutput   = ref('')
+const iacWarning  = ref('')
 
 async function generateIaC() {
   iacLoading.value = true
   iacOutput.value  = ''
+  iacWarning.value = ''
   try {
-    const qs = new URLSearchParams({ format: iacFormat.value })
+    const fmt = iacFormat.value
+    const ep = fmt === 'docker-compose' ? '/api/export/docker-compose'
+             : fmt === 'shell' ? '/api/export/shell'
+             : '/api/export/ansible'
+    const qs = new URLSearchParams()
     if (iacHostname.value) qs.set('hostname', iacHostname.value)
-    const text = await get(`/api/iac/export?${qs}`)
-    iacOutput.value = typeof text === 'string' ? text : JSON.stringify(text, null, 2)
+    if (iacDiscover.value) qs.set('discover', 'true')
+    const qstr = qs.toString()
+    const resp = await fetch(ep + (qstr ? `?${qstr}` : ''), {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('noba_token')}` },
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    iacWarning.value = resp.headers.get('X-Noba-Discovery-Warning') || ''
+    iacOutput.value = await resp.text()
   } catch (e) {
     notif.addToast('Export failed: ' + e.message, 'error')
   }
@@ -792,6 +805,9 @@ onMounted(() => {
             <option v-for="a in agents" :key="a.hostname" :value="a.hostname">{{ a.hostname }}</option>
           </select>
         </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.75rem;color:var(--text-dim);cursor:pointer" title="Auto-discover containers and services from agent before export">
+          <input type="checkbox" v-model="iacDiscover"> Discover
+        </label>
         <button class="btn btn-sm btn-primary" @click="generateIaC" :disabled="iacLoading">
           <i class="fas fa-file-code" :class="iacLoading ? 'fa-spin' : ''"></i> Generate
         </button>
@@ -801,6 +817,9 @@ onMounted(() => {
         <button class="btn btn-sm" @click="copyIaC" :disabled="!iacOutput" title="Copy to clipboard">
           <i class="fas fa-copy"></i> Copy
         </button>
+      </div>
+      <div v-if="iacWarning" style="background:var(--warning-bg,#332b00);color:var(--warning,#ffcc00);padding:.5rem .8rem;border-radius:4px;font-size:.75rem;margin-bottom:.5rem">
+        <i class="fas fa-exclamation-triangle" style="margin-right:.4rem"></i>{{ iacWarning }}
       </div>
       <div v-if="iacLoading" class="empty-msg">Generating...</div>
       <div v-else-if="!iacOutput" class="empty-msg">

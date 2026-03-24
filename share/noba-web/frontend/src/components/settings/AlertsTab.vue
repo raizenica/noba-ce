@@ -34,8 +34,8 @@ async function saveRules() {
     await put('/api/alert-rules', { rules: alertRules.value })
     saveMsg.value = 'Saved.'
     setTimeout(() => { saveMsg.value = '' }, 2500)
-  } catch {
-    saveMsg.value = 'Save failed.'
+  } catch (err) {
+    saveMsg.value = err?.message || 'Save failed.'
   }
 }
 
@@ -43,7 +43,8 @@ function startEdit(idx) {
   editIdx.value = idx
   Object.assign(draft, JSON.parse(JSON.stringify(alertRules.value[idx])))
   draft._actionType = draft.action?.type || ''
-  draft._actionTarget = draft.action?.target || ''
+  draft._actionTarget = draft.action?.params?.container || draft.action?.params?.service || ''
+  draft._actionAgent = draft.action?.target || ''
 }
 
 function cancelEdit() {
@@ -53,12 +54,14 @@ function cancelEdit() {
 function applyEdit(idx) {
   const r = { ...draft }
   if (r._actionType) {
-    r.action = { type: r._actionType, target: r._actionTarget || '' }
+    const paramKey = r._actionType === 'restart_service' ? 'service' : 'container'
+    r.action = { type: r._actionType, target: r._actionAgent || '', params: { [paramKey]: r._actionTarget || '' } }
   } else {
     delete r.action
   }
   delete r._actionType
   delete r._actionTarget
+  delete r._actionAgent
   alertRules.value[idx] = r
   editIdx.value = -1
 }
@@ -136,7 +139,7 @@ function copyMetric(m) {
           <div v-if="rule.message" style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">{{ rule.message }}</div>
           <div v-if="rule.action && rule.action.type" style="font-size:.7rem;color:var(--accent);margin-top:.3rem">
             <i class="fas fa-wrench" style="margin-right:.3rem"></i>
-            {{ rule.action.type }}: {{ rule.action.target }}
+            {{ rule.action.type }}<template v-if="rule.action.target"> on <strong>{{ rule.action.target }}</strong></template>: {{ rule.action.params?.container || rule.action.params?.service || '' }}
           </div>
         </template>
 
@@ -209,13 +212,17 @@ function copyMetric(m) {
                 </select>
               </div>
               <div v-if="draft._actionType">
-                <label class="field-label">Target</label>
+                <label class="field-label">{{ draft._actionType === 'restart_service' ? 'Service Name' : draft._actionType === 'restart_container' ? 'Container Name' : 'Target' }}</label>
                 <input class="field-input" v-model="draft._actionTarget"
                   :placeholder="draft._actionType === 'restart_service' ? 'nginx.service' :
-                    draft._actionType === 'restart_container' ? 'docker:myapp' :
+                    draft._actionType === 'restart_container' ? 'noba-test-nginx' :
                     draft._actionType === 'run' ? '/usr/local/bin/fix.sh' :
                     draft._actionType === 'webhook' ? 'webhook-id' : 'automation-id'">
               </div>
+            </div>
+            <div v-if="draft._actionType && (draft._actionType === 'restart_container' || draft._actionType === 'restart_service')" style="margin-top:.5rem">
+              <label class="field-label">Remote Agent (optional — leave empty for local)</label>
+              <input class="field-input" v-model="draft._actionAgent" placeholder="e.g. pve, pve-siteb">
             </div>
             <div v-if="draft._actionType" class="field-2" style="margin-top:.5rem">
               <div>

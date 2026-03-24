@@ -51,6 +51,9 @@ Health, metrics, history, alerts, notifications, and dashboard layout.
 | PUT | `/api/alert-rules/{rule_id}` | Admin | Update an existing alert rule |
 | DELETE | `/api/alert-rules/{rule_id}` | Admin | Delete an alert rule |
 | GET | `/api/alert-rules/test/{rule_id}` | Admin | Test rule against current stats |
+
+Conditions are validated at creation/update time. Invalid conditions return HTTP 400 with a descriptive error (e.g., `"Invalid condition fragment: '>' — expected 'metric operator number'"`).
+
 | GET | `/api/sla/{rule_id}` | Read | SLA uptime for an alert rule |
 | GET | `/api/alert-history` | Read | Historical alert firings |
 | GET | `/api/notifications` | Read | User notifications with unread count |
@@ -406,6 +409,7 @@ Heal ledger, effectiveness, trust, maintenance, chaos, dry-run, rollback.
 | GET | `/api/healing/trust` | Read | List trust states per rule |
 | POST | `/api/healing/trust/{rule_id}/promote` | Admin | Promote trust level |
 | POST | `/api/healing/trust/{rule_id}/demote` | Admin | Demote trust level |
+| PUT | `/api/healing/trust/{rule_id}` | Admin | Set or create trust state |
 | GET | `/api/healing/capabilities/{hostname}` | Read | Agent capability manifest |
 | GET | `/api/healing/dependencies` | Read | Dependency graph nodes |
 | POST | `/api/healing/dependencies/validate` | Read | Validate dependency config |
@@ -418,6 +422,10 @@ Heal ledger, effectiveness, trust, maintenance, chaos, dry-run, rollback.
 | GET | `/api/healing/chaos/scenarios` | Read | List chaos test scenarios |
 | POST | `/api/healing/chaos/run` | Admin | Run a chaos test scenario |
 | GET | `/api/healing/health` | Read | Healing pipeline health summary |
+
+When an alert rule's action includes a `target` hostname matching an online agent, the healing executor dispatches the action as an agent command via WebSocket instead of executing locally. Supported remote actions: `restart_container` → `container_control`, `restart_service` → agent `restart_service`.
+
+The `PUT /api/healing/trust/{rule_id}` endpoint accepts a JSON body with `level` and optional `ceiling` fields. Valid levels: `observation`, `dry_run`, `notify`, `approve`, `execute`. Example: `{"level": "approve", "ceiling": "execute"}`.
 
 ---
 
@@ -455,6 +463,8 @@ System info, recovery, journal, SMART, processes, exports, backups, updates.
 | GET | `/api/export/ansible` | Operator | Generate Ansible playbook |
 | GET | `/api/export/docker-compose` | Operator | Generate docker-compose.yml |
 | GET | `/api/export/shell` | Operator | Generate bash setup script |
+
+All export endpoints accept an optional `?discover=true` query parameter that dispatches `discover_services` and `container_list` commands to the target agent via WebSocket before generating output. Warnings are returned via the `X-Noba-Discovery-Warning` response header.
 | GET | `/api/backup/verifications` | Read | Backup verification history |
 | POST | `/api/backup/verify` | Operator | Trigger backup verification |
 | GET | `/api/backup/321-status` | Read | 3-2-1 backup compliance status |

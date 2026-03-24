@@ -479,6 +479,8 @@ All integrations are configured under the `web:` key. The table below groups eve
 |---------|-------------|
 | `influxdbUrl` / `influxdbToken` / `influxdbOrg` | InfluxDB |
 | `graylogUrl` / `graylogToken` | Graylog |
+| `graylogUser` | Graylog username (alternative to API token) |
+| `graylogPassword` | Graylog password (used with graylogUser for Basic auth) |
 | `cloudflareToken` / `cloudflareZoneId` | Cloudflare DNS/analytics |
 
 #### Weather & Energy
