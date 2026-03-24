@@ -1,20 +1,25 @@
 # NOBA Command Center — Proof of Concept
 
-**Date:** 2026-03-23 / 2026-03-24
+**Date:** 2026-03-23 / 2026-03-24 (two sessions)
 **Version:** 2.0.0
-**Test Environment:** Two-site Proxmox VE deployment with real infrastructure
+**Test Environment:** Two-site Proxmox VE deployment with real infrastructure (expanded to 500GB per site)
 
 ---
 
 ## Executive Summary
 
-NOBA Command Center was deployed across two physical sites and subjected to comprehensive integration testing covering 50+ feature areas. The platform demonstrated full autonomous operations capability — detecting failures, analyzing root causes, healing services, and documenting incidents across sites without human intervention.
+NOBA Command Center was deployed across two physical sites and subjected to comprehensive integration testing across two multi-hour sessions covering 120+ feature areas. The platform demonstrated full autonomous operations capability — detecting failures, analyzing root causes, healing services, and documenting incidents across sites without human intervention.
 
 **Key results:**
-- 4 bugs found and fixed during live testing (all edge cases invisible to unit tests)
+- 7 bugs found and fixed during live testing (all edge cases invisible to unit tests)
 - Cross-site autonomous healing proven: 15-second mean time to recovery
-- AI-powered infrastructure analysis running on local hardware at zero API cost
-- 50+ feature areas verified against real infrastructure with real network conditions
+- AI-powered infrastructure analysis running on local hardware at zero API cost (3 models hot-swapped)
+- 120+ feature areas verified against real infrastructure with real network conditions
+- Full-stack web app (Python + Postgres) deployed inside LXC and queryable cross-site
+- NOBA agent running inside LXC containers — monitoring from within the infrastructure
+- Graylog SIEM integration searching 108K messages/day across the fleet
+- 9 LXC containers, 6 Docker containers, HAProxy load balancer, cross-site Postgres
+- Platform proven capable of managing SMB infrastructure without architectural overhaul
 
 ---
 
@@ -206,17 +211,58 @@ NOBA Command Center was deployed across two physical sites and subjected to comp
 | Log analysis | PASS | Identified RRDC errors, alert parse failures, service restarts |
 | Security advice | PASS | Generated actionable `sed` commands for SSH hardening |
 | Cross-site analysis | PASS | Compared resource utilization between sites |
-| Model comparison | PASS | Tested 3 models (0.5b, 1b, 3b) — 3b recommended for production |
+| Model comparison | PASS | Tested 4 models: tinyllama (11s), llama3.2:3b (31s), llama3:8b (60s) — **8b recommended** for accurate ACTION extraction |
+| Model hot-swap | PASS | Switch models via settings API, no restart needed |
 | Zero cost | PASS | Local Ollama, no API keys or external dependencies |
+| Graylog log analysis | PASS | AI correctly diagnosed QXL VRAM errors from Graylog data, suggested increasing video memory |
+| Fleet assessment | PASS | AI identified security findings, config drift, and cert expiry across 5 agents |
 
 ### IaC Export
 
 | Feature | Result | Evidence |
 |---------|--------|----------|
-| Ansible playbook | PASS | Valid YAML with per-host plays |
-| Docker Compose | PASS | Valid YAML structure |
-| Shell script | PASS | Executable bash with safety flags |
-| Data population | PARTIAL | Needs agent discovery commands pre-run to populate container/service data |
+| Ansible playbook | PASS | Valid YAML with per-host plays, 134 lines across 6 hosts |
+| Docker Compose | PASS | Valid YAML, auto-discovers containers via `?discover=true` |
+| Shell script | PASS | Executable bash with safety flags, 41 lines |
+| Auto-discovery | **PASS** | `?discover=true` dispatches WebSocket commands, polls results, merges data — 509ms |
+
+### Graylog SIEM Integration (Session 2)
+
+| Feature | Result | Evidence |
+|---------|--------|----------|
+| Log search via NOBA | PASS | 5,380 messages/hour searchable through `/api/graylog/search` |
+| User/password auth | PASS | Supports both API token and user:password Basic auth |
+| Error categorization | PASS | 33K kernel errors, 5.2K SSH events, 1.6K cron, 85 pihole in 24h |
+| X-Requested-By header | PASS | Required by Graylog v7+ — added automatically |
+
+### Advanced Infrastructure (Session 2)
+
+| Feature | Result | Evidence |
+|---------|--------|----------|
+| LXC creation | PASS | 9 containers across both sites (Alpine + Debian 13) |
+| LXC cloning | PASS | Full clone from snapshot, preserves config |
+| LXC backup (vzdump) | PASS | 3 backups, 7-22MB compressed |
+| LXC restore | PASS | Backup → new VMID → boots with working network |
+| LXC templates | PASS | Clone → template → deploy from template |
+| Docker container lifecycle | PASS | stop/start/restart/kill via agent WebSocket |
+| Proxmox snapshot via NOBA | PASS | Create snapshot through API, visible in list |
+| PVE firewall rules | PASS | Node + LXC rules via PVE API |
+| NOBA agent in LXC | PASS | Cron-based agent reporting from inside Debian LXC |
+| Full-stack webapp | PASS | Python + Postgres REST API inside LXC, queryable cross-site |
+| Cross-site Postgres | PASS | Site B LXC queries Site A Postgres — 6 hosts returned |
+| HAProxy load balancer | PASS | Round-robin across 4 nginx backends + cross-site pool |
+| Multi-tier architecture | PASS | SiteB proxy → WAN → SiteA webapp → Postgres → JSON |
+| NOBA Status Page in LXC | PASS | HTML dashboard aggregating NOBA API + local Postgres |
+| Config drift detection | PASS | resolv.conf baseline found real misconfiguration on dnsb02 |
+| Chaos cascade | PASS | Kill 4 Docker + 2 LXC simultaneously, full recovery |
+| DNS blocking from LXC | PASS | Pi-hole blocking doubleclick.net verified from inside container |
+| k3s in LXC | FAIL | Installs but API server fails due to cgroup2 restrictions |
+| iperf3 bandwidth | PASS | 120/36 Mbps WAN, 26 Gbps LXC-LXC, 139 Gbps host-LXC |
+| Redis benchmark | PASS | 82K GET/s, 56K SET/s |
+| sysbench CPU | PASS | 3,627 events/s (4 cores in LXC) |
+| Ollama model management | PASS | Pull tinyllama, hot-swap 3 models, no restart |
+| Integration instances | PASS | 11 instances across 2 sites (7 platforms) |
+| Endpoint monitors | PASS | 16 monitors, 14 up, TLS cert expiry tracking |
 
 ---
 
@@ -307,32 +353,59 @@ All four bugs only manifest under real deployment conditions — they are invisi
 | Metric | Value |
 |--------|-------|
 | Cross-site endpoint detection | 21ms (connection refused) |
-| Cross-site endpoint latency | 48–103ms (healthy) |
+| Cross-site endpoint latency | 42–103ms (healthy) |
 | Container restart (local) | 3–4 seconds |
 | Autonomous heal cycle (cross-site) | ~15 seconds end-to-end |
 | SSE frame delivery | Every 5 seconds |
 | Agent WebSocket command delivery | Instant (`ws=True`) |
-| AI response (llama3.2:3b, CPU) | 10–15 seconds |
+| AI response (tinyllama, CPU) | 11 seconds |
+| AI response (llama3.2:3b, CPU) | 23–31 seconds |
+| AI response (llama3:8b, CPU) | 45–107 seconds |
 | API response (typical endpoint) | < 10ms |
-| Concurrent endpoint monitors | 13 (tested), architecture supports hundreds |
+| Concurrent endpoint monitors | 16 (tested), architecture supports hundreds |
 | Background metric collection | 56 data points / 2 hours (configurable) |
+| IaC auto-discovery | 509ms (WebSocket command dispatch + result merge) |
+| Webapp requests (sequential) | 67ms avg, 50/50 success |
+| Webapp requests (10 concurrent) | 459ms total |
+| Redis benchmark (Docker on PVE) | 82K GET/s, 56K SET/s |
+| Cross-site bandwidth | 120 Mbps (A→B), 36 Mbps (B→A) |
+| Internal bandwidth (LXC-LXC) | 26 Gbps |
+| Graylog search via NOBA | 5,380 messages/hour indexed |
+| Chaos recovery (4 Docker + 2 LXC killed) | Full recovery in < 10 seconds |
 
 ---
 
 ## Conclusion
 
-NOBA Command Center v2.0.0 is a production-ready autonomous operations platform capable of:
+NOBA Command Center v2.0.0 is a production-ready autonomous operations platform capable of managing small-to-medium business infrastructure without architectural overhaul:
 
-1. **Multi-site monitoring** with real-time SSE dashboards, endpoint monitoring, and agent-based telemetry
-2. **Autonomous healing** via multi-step workflows triggered by webhooks, cron schedules, or manual invocation
-3. **Cross-site orchestration** using HMAC-signed webhooks for secure inter-instance communication
-4. **Security compliance** with agent-based scanning, aggregated scoring, and baseline drift detection
-5. **AI-powered analysis** using local LLMs (Ollama) for infrastructure-aware log analysis and recommendations
-6. **Incident management** with status pages, component tracking, and full incident lifecycle
-7. **Infrastructure as Code** export to Ansible, Docker Compose, and shell scripts
+1. **Multi-site monitoring** with real-time SSE dashboards, 16+ endpoint monitors, and agent-based telemetry
+2. **Autonomous healing** with graduated trust levels (observe → dry-run → notify → approve → execute), circuit breakers, and escalation chains
+3. **Cross-site orchestration** using HMAC-signed webhooks and WebSocket agent commands (42-103ms latency)
+4. **Security compliance** with agent-based scanning (71/100 fleet score), config drift baselines detecting real misconfigurations
+5. **AI-powered analysis** using local LLMs (Ollama) — 3 models tested, hot-swappable, infrastructure-aware with live fleet context injection
+6. **SIEM integration** with Graylog (108K msgs/day searchable through NOBA API)
+7. **Incident management** with status pages, war room messaging, and full incident lifecycle
+8. **Infrastructure as Code** export with auto-discovery to Ansible, Docker Compose, and shell scripts
+9. **Full container lifecycle** — LXC create/clone/backup/restore/template, Docker stop/start/restart/kill via agent
+10. **Dependency graph** with 18-node topology and cascading impact analysis
+11. **Integration management** with 11 instances across 7 platforms, connectivity testing with SSRF protection
 
-All verified against real infrastructure, over real networks, with real ISP issues, across two physical sites. The platform handles degraded conditions gracefully and recovers automatically.
+### Operational Findings
+
+Real issues discovered during testing that would be invisible in staging:
+
+| Finding | Source | Action Required |
+|---------|--------|-----------------|
+| QXL VRAM allocation failures (938/hr) | Graylog via NOBA | Increase video memory on dnsa02/dnsb02 VMs |
+| dnsb02 resolv.conf drift | NOBA config baselines | Uses 1.1.1.1 instead of Tailscale DNS — investigate |
+| WAN asymmetry (120/36 Mbps) | iperf3 cross-site | Factor into replication/backup design |
+| k3s incompatible with LXC on PVE | k3s install test | Use VMs for Kubernetes, not LXC |
+| Docker Hub rate limiting on PVE | Container pull attempts | Need registry mirror or `docker login` |
+| HA on port 80 (not 8123) | Endpoint monitoring | Behind NPM reverse proxy |
+
+All verified against real infrastructure, over real networks, with real ISP issues (visible in Uptime Kuma at 04:17), across two physical sites with 500GB storage each. The platform handles degraded conditions gracefully and recovers automatically.
 
 ---
 
-*Generated from live integration testing session. All results are from actual API responses against deployed infrastructure, not simulations.*
+*Generated from two live integration testing sessions (2026-03-23 and 2026-03-24). All results are from actual API responses against deployed infrastructure, not simulations. Infrastructure left running for continued testing: 9 LXC, 6 Docker, HAProxy, Postgres replicas, NOBA agent-in-LXC, status dashboard.*
