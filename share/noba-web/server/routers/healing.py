@@ -84,6 +84,22 @@ def api_healing_trust(auth=Depends(_get_auth)):
     return db.list_trust_states()
 
 
+@router.put("/api/healing/trust/{rule_id}")
+async def api_set_trust(rule_id: str, request: Request, auth=Depends(_require_admin)):
+    """Set (or create) trust state for a rule."""
+    from ..deps import _read_body
+    body = await _read_body(request)
+    level = body.get("level", "notify")
+    ceiling = body.get("ceiling", "execute")
+    valid = ("observation", "dry_run", "notify", "approve", "execute")
+    if level not in valid or ceiling not in valid:
+        raise HTTPException(400, f"level and ceiling must be one of: {', '.join(valid)}")
+    db.upsert_trust_state(rule_id, level, ceiling)
+    username, _ = auth
+    db.audit_log("trust_set", username, f"{rule_id}: level={level}, ceiling={ceiling}")
+    return {"success": True, "rule_id": rule_id, "level": level, "ceiling": ceiling}
+
+
 @router.post("/api/healing/trust/{rule_id}/promote")
 async def api_promote_trust(rule_id: str, request: Request, auth=Depends(_require_admin)):
     from ..deps import _read_body

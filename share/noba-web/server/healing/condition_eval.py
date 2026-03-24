@@ -22,10 +22,31 @@ _OPS: dict = {
 }
 
 
+_SINGLE_RE = re.compile(
+    r"^\s*([a-zA-Z0-9_\[\]\.]+)\s*(>|<|>=|<=|==|!=)\s*([0-9\.-]+)\s*$"
+)
+
+
+def validate_condition(condition_str: str) -> str | None:
+    """Return *None* if *condition_str* is syntactically valid, else an error message."""
+    if not condition_str or not condition_str.strip():
+        return "Condition is required"
+    if " AND " in condition_str:
+        parts = [p.strip() for p in condition_str.split(" AND ")]
+    elif " OR " in condition_str:
+        parts = [p.strip() for p in condition_str.split(" OR ")]
+    else:
+        parts = [condition_str.strip()]
+    for part in parts:
+        if not _SINGLE_RE.match(part):
+            return f"Invalid condition fragment: {part!r} — expected 'metric operator number' (e.g. cpuPercent > 90)"
+    return None
+
+
 def safe_eval_single(condition_str: str, flat: dict) -> bool:
     """Evaluate a single metric comparison (e.g. 'cpu_percent > 90')."""
     s = condition_str.replace("flat['", "").replace('flat["', "").replace("']", "").replace('"]', "")
-    m = re.match(r"^\s*([a-zA-Z0-9_\[\]\.]+)\s*(>|<|>=|<=|==|!=)\s*([0-9\.-]+)\s*$", s)
+    m = _SINGLE_RE.match(s)
     if not m:
         logger.warning("Malformed alert condition (parse failed): %s", condition_str)
         return False

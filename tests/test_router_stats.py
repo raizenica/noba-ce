@@ -169,6 +169,31 @@ class TestAlertRulesCreate:
         assert resp.status_code == 200
         assert resp.json()["id"] == "my-custom-id"
 
+    def test_malformed_condition_rejected(self, client, admin_headers):
+        resp = client.post(
+            "/api/alert-rules",
+            json={"condition": ">"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+        assert "Invalid condition" in resp.json()["detail"]
+
+    def test_garbage_condition_rejected(self, client, admin_headers):
+        resp = client.post(
+            "/api/alert-rules",
+            json={"condition": "hello world"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_composite_with_bad_part_rejected(self, client, admin_headers):
+        resp = client.post(
+            "/api/alert-rules",
+            json={"condition": "cpuPercent > 80 AND badcondition"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 400
+
 
 class TestAlertRulesUpdate:
     """Update alert rule — admin only."""

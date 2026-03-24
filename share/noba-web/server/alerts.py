@@ -537,7 +537,7 @@ def evaluate_alert_rules(stats: dict, read_settings_fn) -> None:
                     chain = get_chain_for_rule_id(rule_id) or []
                 if not chain and action_cfg:
                     # Legacy: single action, wrap as chain
-                    chain = [{"action": action_cfg.get("type", ""), "params": {k: v for k, v in action_cfg.items() if k != "type"}}]
+                    chain = [{"action": action_cfg.get("type", ""), "params": action_cfg.get("params", {})}]
 
                 pipeline = get_pipeline()  # module-level singleton
                 pipeline.update_rule_config(rule_id, {"escalation_chain": chain})

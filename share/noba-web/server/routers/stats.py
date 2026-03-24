@@ -228,6 +228,13 @@ async def api_alert_rules_batch(request: Request, auth=Depends(_require_admin)):
     rules = body.get("rules")
     if not isinstance(rules, list):
         raise HTTPException(400, "Expected {rules: [...]}")
+    from ..healing.condition_eval import validate_condition
+
+    for i, r in enumerate(rules):
+        cond = r.get("condition", "") if isinstance(r, dict) else ""
+        err = validate_condition(cond)
+        if err:
+            raise HTTPException(400, f"Rule #{i + 1}: {err}")
     cfg = read_yaml_settings()
     cfg["alertRules"] = rules
     write_yaml_settings(cfg)
@@ -243,9 +250,12 @@ async def api_alert_rules_create(request: Request, auth=Depends(_require_admin))
     username, _ = auth
     body = await _read_body(request)
     rule_id = body.get("id") or uuid.uuid4().hex[:8]
+    from ..healing.condition_eval import validate_condition
+
     condition = body.get("condition", "")
-    if not condition:
-        raise HTTPException(400, "Condition is required")
+    err = validate_condition(condition)
+    if err:
+        raise HTTPException(400, err)
     rule = {
         "id": rule_id,
         "condition": condition,
@@ -277,6 +287,12 @@ async def api_alert_rules_update(rule_id: str, request: Request, auth=Depends(_r
     idx = next((i for i, r in enumerate(rules) if r.get("id") == rule_id), None)
     if idx is None:
         raise HTTPException(404, "Rule not found")
+    if "condition" in body:
+        from ..healing.condition_eval import validate_condition
+
+        err = validate_condition(body["condition"])
+        if err:
+            raise HTTPException(400, err)
     for key in ("condition", "severity", "message", "channels", "cooldown", "action",
                 "max_retries", "group", "escalation"):
         if key in body:

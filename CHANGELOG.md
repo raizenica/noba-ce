@@ -4,6 +4,14 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Alert condition validation** — Malformed conditions (bare operators, missing thresholds, garbage strings) are now rejected at creation time with clear error messages. Validation applied to create, update, and batch save endpoints.
+- **Heal action params double-nesting** — Legacy single-action alert rules were wrapping params inside an extra `params` key, causing heal execution to fail after approval. Fixed chain wrapper to extract params correctly.
+
+### Added
+- **Trust state initialization** — `PUT /api/healing/trust/{rule_id}` endpoint to seed trust states directly. Previously only promote/demote existed, requiring a pre-existing state.
+- **IaC export auto-discovery** — `?discover=true` query parameter on all 3 export endpoints (Ansible, Docker Compose, shell script). Dispatches `discover_services` + `container_list` to the target agent, waits for WebSocket results, and merges into agent data before generating output. Warnings returned via `X-Noba-Discovery-Warning` header.
+
 ### Improved
 - **SQLite read/write lock separation** — Read operations now use a separate connection with its own lock, allowing concurrent reads under WAL mode without blocking writers. Write operations keep the existing exclusive lock. ~60 read-only methods switched to the read path. `PRAGMA query_only=ON` on the read connection prevents accidental writes.
 - **Linked providers persisted to DB** — Social login account links (Google, GitHub, etc.) are now stored in a `linked_providers` table instead of an in-memory dict. Links survive service restarts.

@@ -2,7 +2,72 @@
 from __future__ import annotations
 
 
-from server.healing.condition_eval import flatten_metrics, safe_eval, safe_eval_single
+from server.healing.condition_eval import (
+    flatten_metrics,
+    safe_eval,
+    safe_eval_single,
+    validate_condition,
+)
+
+
+class TestValidateCondition:
+    def test_valid_simple(self):
+        assert validate_condition("cpuPercent > 90") is None
+
+    def test_valid_composite_and(self):
+        assert validate_condition("cpuPercent > 80 AND memPercent > 70") is None
+
+    def test_valid_composite_or(self):
+        assert validate_condition("cpuPercent > 80 OR memPercent > 70") is None
+
+    def test_valid_all_operators(self):
+        for op in (">", "<", ">=", "<=", "==", "!="):
+            assert validate_condition(f"metric {op} 42") is None
+
+    def test_valid_array_metric(self):
+        assert validate_condition("disks[0].percent >= 85") is None
+
+    def test_valid_negative_threshold(self):
+        assert validate_condition("temp > -10") is None
+
+    def test_valid_decimal_threshold(self):
+        assert validate_condition("load > 1.5") is None
+
+    def test_empty_string(self):
+        assert validate_condition("") is not None
+
+    def test_whitespace_only(self):
+        assert validate_condition("   ") is not None
+
+    def test_bare_operator(self):
+        err = validate_condition(">")
+        assert err is not None
+        assert "Invalid condition" in err
+
+    def test_missing_threshold(self):
+        err = validate_condition("cpuPercent >")
+        assert err is not None
+
+    def test_missing_operator(self):
+        err = validate_condition("cpuPercent 90")
+        assert err is not None
+
+    def test_garbage_string(self):
+        err = validate_condition("hello world foo bar")
+        assert err is not None
+
+    def test_injection_attempt(self):
+        err = validate_condition("__import__('os').system('id') > 0")
+        assert err is not None
+
+    def test_composite_with_one_bad_part(self):
+        err = validate_condition("cpuPercent > 80 AND badcondition")
+        assert err is not None
+        assert "Invalid condition" in err
+
+    def test_string_threshold_rejected(self):
+        err = validate_condition("cpu > abc")
+        assert err is not None
 
 
 class TestSafeEvalSingle:

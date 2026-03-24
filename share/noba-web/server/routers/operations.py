@@ -354,16 +354,104 @@ def api_processes_current(auth=Depends(_get_auth)):
 
 # ── IaC Export endpoints ─────────────────────────────────────────────────────
 
+
+async def _ensure_agent_discovery(hostname: str, timeout: float = 15.0) -> str | None:
+    """Dispatch discover_services + container_list and merge results into agent data.
+
+    Returns None on success, or a warning string if discovery timed out.
+    Skips silently if agent is offline or already has data.
+    """
+    from ..agent_store import _agent_cmd_results, _agent_cmd_lock
+
+    with _agent_data_lock:
+        agent = _agent_data.get(hostname)
+    if not agent:
+        return None  # agent offline
+
+    has_services = bool(agent.get("services"))
+    has_containers = bool(agent.get("containers"))
+    if has_services and has_containers:
+        return None  # already have data
+
+    with _agent_ws_lock:
+        ws = _agent_websockets.get(hostname)
+    if not ws:
+        return "Agent has no WebSocket connection - discovery skipped, export may be incomplete"
+
+    # Send commands and track IDs
+    cmd_ids = {}
+    for cmd_type in ("discover_services", "container_list"):
+        try:
+            cmd_id = secrets.token_hex(8)
+            await ws.send_json({"type": "command", "id": cmd_id,
+                                "cmd": cmd_type, "params": {}})
+            cmd_ids[cmd_id] = cmd_type
+        except Exception:
+            pass
+
+    if not cmd_ids:
+        return "Failed to send discovery commands"
+
+    # Poll _agent_cmd_results for responses (same pattern as network_stats)
+    deadline = time.time() + timeout
+    found: dict[str, dict] = {}
+    while time.time() < deadline and len(found) < len(cmd_ids):
+        await asyncio.sleep(0.5)
+        with _agent_cmd_lock:
+            results = _agent_cmd_results.get(hostname, [])
+            for r in results:
+                rid = r.get("id", "")
+                if rid in cmd_ids and rid not in found:
+                    found[rid] = r
+
+    # Merge discovered data into _agent_data
+    for cmd_id, result in found.items():
+        cmd_type = cmd_ids[cmd_id]
+        if result.get("status") != "ok":
+            continue
+        with _agent_data_lock:
+            agent = _agent_data.get(hostname)
+            if not agent:
+                continue
+            if cmd_type == "container_list":
+                agent["containers"] = result.get("containers", [])
+            elif cmd_type == "discover_services":
+                agent["services"] = result.get("services", [])
+
+    missing = [cmd_ids[cid] for cid in cmd_ids if cid not in found]
+    if missing:
+        return f"Discovery partial - missing: {', '.join(missing)}"
+    return None
+
+
 @router.get("/api/export/ansible")
 async def api_export_ansible(request: Request, auth=Depends(_require_operator)):
     """Generate an Ansible playbook from live agent data."""
     from ..iac_export import generate_ansible
 
     hostname = request.query_params.get("hostname") or None
+    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
+    warning = None
+    if discover and hostname:
+        warning = await _ensure_agent_discovery(hostname)
+    elif discover and not hostname:
+        # Discover for all online agents
+        with _agent_data_lock:
+            hosts = list(_agent_data.keys())
+        warnings = []
+        for h in hosts:
+            w = await _ensure_agent_discovery(h, timeout=10.0)
+            if w:
+                warnings.append(f"{h}: {w}")
+        warning = "; ".join(warnings) if warnings else None
+
     output = generate_ansible(
         db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
     )
-    return PlainTextResponse(output, media_type="text/yaml")
+    resp = PlainTextResponse(output, media_type="text/yaml")
+    if warning:
+        resp.headers["X-Noba-Discovery-Warning"] = warning
+    return resp
 
 
 @router.get("/api/export/docker-compose")
@@ -374,10 +462,18 @@ async def api_export_docker_compose(request: Request, auth=Depends(_require_oper
     hostname = request.query_params.get("hostname") or None
     if not hostname:
         raise HTTPException(400, "hostname parameter is required")
+    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
+    if discover:
+        warning = await _ensure_agent_discovery(hostname)
+    else:
+        warning = None
     output = generate_docker_compose(
         db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
     )
-    return PlainTextResponse(output, media_type="text/yaml")
+    resp = PlainTextResponse(output, media_type="text/yaml")
+    if warning:
+        resp.headers["X-Noba-Discovery-Warning"] = warning
+    return resp
 
 
 @router.get("/api/export/shell")
@@ -388,10 +484,18 @@ async def api_export_shell(request: Request, auth=Depends(_require_operator)):
     hostname = request.query_params.get("hostname") or None
     if not hostname:
         raise HTTPException(400, "hostname parameter is required")
+    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
+    if discover:
+        warning = await _ensure_agent_discovery(hostname)
+    else:
+        warning = None
     output = generate_shell_script(
         db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
     )
-    return PlainTextResponse(output, media_type="text/x-shellscript")
+    resp = PlainTextResponse(output, media_type="text/x-shellscript")
+    if warning:
+        resp.headers["X-Noba-Discovery-Warning"] = warning
+    return resp
 
 
 # ── Backup Verification (Feature 4) ───────────────────────────────────────
