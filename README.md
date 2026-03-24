@@ -51,9 +51,8 @@ Open `http://localhost:8080` and you're in. 🎉
 
 | Mount | Purpose |
 |-------|---------|
-| `./data/config:/app/config` | Settings, users, agent keys |
+| `./data/config:/app/config` | Settings, users, agent keys (persists across restarts) |
 | `./data/db:/app/data` | SQLite database (metrics, history, agent registry) |
-| `./data/certs:/app/certs:ro` | TLS certificates (optional) |
 | `/var/run/docker.sock:/var/run/docker.sock:ro` | Container monitoring (optional) |
 
 **Custom port or timezone:**
@@ -211,7 +210,7 @@ Fully autonomous infrastructure repair with safety controls and graduated trust.
 - 🔔 **Notification center** — bell icon with unread count + PWA push
 - 💻 **Embedded terminal** — WebSocket PTY via xterm.js (admin-only)
 - 🔄 **Self-update** — check for updates and apply them from the UI (Settings → General)
-- 📚 **API docs** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc`, OpenAPI schema at `/api/openapi.json`
+- 📚 **API docs** — Swagger UI at `/api/docs`, ReDoc at `/api/redoc` (enable with `NOBA_DEV=1`)
 
 ---
 
@@ -234,13 +233,13 @@ curl -sf "http://noba-server:8080/api/agent/install-script?key=YOUR_KEY" | sudo 
 ## 🗂️ Project Layout
 
 ```
-share/noba-web/server/       → Python backend (FastAPI, 13 routers, 235+ API routes)
+share/noba-web/server/       → Python backend (FastAPI, 16 routers, 300+ API routes)
 share/noba-web/frontend/src/ → Vue 3 frontend (80+ components, Pinia stores)
 share/noba-web/static/dist/  → Built Vue app (committed, no Node.js needed at runtime)
 share/noba-agent/            → Remote agent + installers (Linux, Windows)
 libexec/                     → Shell scripts (backup, disk check, cloud sync)
 dev/                         → Developer toolkit (8 tools)
-tests/                       → pytest test suite (2187 tests)
+tests/                       → pytest test suite (2604 tests)
 ```
 
 ## 🧪 Developer Toolkit
