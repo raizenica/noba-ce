@@ -8,6 +8,7 @@ import logging
 import os
 import pty
 import select
+import signal
 import struct
 import subprocess
 import termios
@@ -59,7 +60,7 @@ async def terminal_handler(ws: WebSocket, username: str, role: str = "admin") ->
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
-        preexec_fn=os.setsid,
+        start_new_session=True,
         env=env,
         close_fds=True,
     )
@@ -136,13 +137,15 @@ async def terminal_handler(ws: WebSocket, username: str, role: str = "admin") ->
     finally:
         shutdown.set()
         try:
-            proc.terminate()
-            proc.wait(timeout=3)
-        except Exception:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
             try:
-                proc.kill()
-            except Exception:
-                pass
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(pgid, signal.SIGKILL)
+                proc.wait(timeout=2)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
         try:
             os.close(master_fd)
         except OSError:

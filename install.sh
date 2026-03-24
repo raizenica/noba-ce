@@ -646,17 +646,6 @@ if [[ -f "$_agent_src" ]]; then
     fi
 fi
 
-src="$SCRIPT_DIR/lib/noba-web-functions.sh"
-dst="$LIBEXEC_DIR/lib/noba-web-functions.sh"
-if [[ -f "$src" ]]; then
-    if [[ "$DRY_RUN" == true ]]; then
-        dry "install $src → $dst"
-    else
-        install_file "$src" "$dst" 644
-        say_ok "noba-web-functions.sh"
-    fi
-fi
-
 src="$SCRIPT_DIR/bin/noba-web"
 dst="$BIN_DIR/noba-web"
 if [[ -f "$src" ]]; then

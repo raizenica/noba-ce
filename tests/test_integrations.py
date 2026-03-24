@@ -376,10 +376,12 @@ class TestKuma:
         assert result[2] == {"name": "DB", "status": "Pending"}
 
     @patch("server.integrations.simple._client")
-    def test_returns_empty_on_error(self, mock_client):
+    def test_returns_error_on_error(self, mock_client):
         from server.integrations.simple import get_kuma
         mock_client.get.side_effect = httpx.HTTPError("fail")
-        assert get_kuma("http://kuma:3001") == []
+        result = get_kuma("http://kuma:3001")
+        assert result["status"] == "offline"
+        assert "error" in result
 
 
 class TestTruenasRest:
@@ -486,7 +488,8 @@ class TestSpeedtest:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_speedtest
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_speedtest("http://speedtest:8080") is None
+        result = get_speedtest("http://speedtest:8080")
+        assert result["status"] == "offline"
 
 
 class TestAdguard:
@@ -515,7 +518,8 @@ class TestAdguard:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_adguard
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_adguard("http://adguard:3000", "", "") is None
+        result = get_adguard("http://adguard:3000", "", "")
+        assert result["status"] == "offline"
 
 
 class TestJellyfin:
@@ -637,7 +641,8 @@ class TestScrutiny:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_scrutiny
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_scrutiny("http://scrutiny:8080") is None
+        result = get_scrutiny("http://scrutiny:8080")
+        assert result["status"] == "offline"
 
 
 class TestFrigate:
@@ -673,7 +678,8 @@ class TestFrigate:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_frigate
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_frigate("http://frigate:5000") is None
+        result = get_frigate("http://frigate:5000")
+        assert result["status"] == "offline"
 
 
 class TestGraylog:
@@ -705,7 +711,8 @@ class TestGraylog:
     def test_returns_none_on_error(self, mock_client):
         from server.integrations.simple import get_graylog
         mock_client.get.side_effect = httpx.HTTPError("fail")
-        assert get_graylog("http://graylog:9000", "token") is None
+        result = get_graylog("http://graylog:9000", "token")
+        assert result["status"] == "offline"
 
 
 class TestInfluxdb:
@@ -733,7 +740,8 @@ class TestInfluxdb:
     def test_returns_none_on_error(self, mock_client):
         from server.integrations.simple import query_influxdb
         mock_client.post.side_effect = httpx.HTTPError("fail")
-        assert query_influxdb("http://influx:8086", "token", "org", "query") is None
+        result = query_influxdb("http://influx:8086", "token", "org", "query")
+        assert result["status"] == "offline"
 
 
 # ===========================================================================
@@ -775,7 +783,8 @@ class TestTautulli:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_tautulli
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_tautulli("http://tautulli:8181", "key") is None
+        result = get_tautulli("http://tautulli:8181", "key")
+        assert result["status"] == "offline"
 
 
 class TestOverseerr:
@@ -800,7 +809,8 @@ class TestOverseerr:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_overseerr
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_overseerr("http://overseerr:5055", "apikey") is None
+        result = get_overseerr("http://overseerr:5055", "apikey")
+        assert result["status"] == "offline"
 
 
 class TestProwlarr:
@@ -819,7 +829,8 @@ class TestProwlarr:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_prowlarr
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_prowlarr("http://prowlarr:9696", "key") is None
+        result = get_prowlarr("http://prowlarr:9696", "key")
+        assert result["status"] == "offline"
 
 
 class TestServarrExtended:
@@ -1142,7 +1153,8 @@ class TestScrutinyIntelligence:
     def test_returns_none_on_error(self, mock_get):
         from server.integrations.simple import get_scrutiny_intelligence
         mock_get.side_effect = httpx.HTTPError("fail")
-        assert get_scrutiny_intelligence("http://scrutiny:8080") is None
+        result = get_scrutiny_intelligence("http://scrutiny:8080")
+        assert result["status"] == "offline"
 
 
 # ===========================================================================
@@ -1845,8 +1857,9 @@ class TestEdgeCases:
         """Malformed data block should not crash."""
         from server.integrations.simple import get_speedtest
         mock_get.return_value = {"data": {"download": None, "upload": None, "ping": None}}
-        # TypeError from None arithmetic => returns None
-        assert get_speedtest("http://st:8080") is None
+        # TypeError from None arithmetic => returns error dict
+        result = get_speedtest("http://st:8080")
+        assert result["status"] == "offline"
 
     @patch("server.integrations.simple._http_get")
     def test_jellyfin_null_sessions(self, mock_get):
@@ -1940,5 +1953,6 @@ class TestEdgeCases:
         with patch("server.integrations.base._client") as mock_client:
             resp = _mock_response(status_code=500)
             mock_client.get.return_value = resp
-            with pytest.raises(httpx.HTTPStatusError):
+            from server.integrations.base import TransientError
+            with pytest.raises(TransientError):
                 _http_get("http://example.com/api")

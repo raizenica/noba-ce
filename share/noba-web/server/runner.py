@@ -58,7 +58,10 @@ class JobRunner:
             run_id = db.insert_job_run(automation_id, trigger, triggered_by)
             if run_id is None:
                 raise RuntimeError("Failed to create job_run record")
-            entry: dict = {"thread": None, "process": None, "cancelled": False}
+            entry: dict = {
+                "thread": None, "process": None, "cancelled": False,
+                "automation_id": automation_id,
+            }
             self._active[run_id] = entry
 
         t = threading.Thread(
@@ -82,11 +85,31 @@ class JobRunner:
             proc: subprocess.Popen | None = entry.get("process")
 
         if proc and proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
+            self._kill_process(proc)
         return True
+
+    def cancel_group(self, automation_id: str) -> int:
+        """Cancel all active or queued jobs matching the automation_id. Returns count."""
+        if not automation_id:
+            return 0
+        count = 0
+        with self._lock:
+            # Create a list of matching entries to avoid mutating dict while iterating
+            to_cancel = [
+                (rid, entry) for rid, entry in self._active.items()
+                if entry.get("automation_id") == automation_id
+            ]
+
+        for rid, entry in to_cancel:
+            entry["cancelled"] = True
+            proc: subprocess.Popen | None = entry.get("process")
+            if proc and proc.poll() is None:
+                self._kill_process(proc)
+            count += 1
+
+        if count > 0:
+            logger.info("Cancelled group %s (%d jobs)", automation_id, count)
+        return count
 
     # ── Query ──────────────────────────────────────────────────────────────────
     def get_active_ids(self) -> list[int]:

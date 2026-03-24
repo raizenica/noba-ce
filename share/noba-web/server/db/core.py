@@ -243,6 +243,7 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.execute("PRAGMA busy_timeout=5000;")
+            self._conn.execute("PRAGMA foreign_keys=ON;")
             # Use incremental auto-vacuum instead of manual VACUUM to avoid
             # stop-the-world locks on the 24/7 time-series database.
             cur_av = self._conn.execute("PRAGMA auto_vacuum;").fetchone()[0]
@@ -270,6 +271,7 @@ class Database:
             self._read_conn.execute("PRAGMA journal_mode=WAL;")
             self._read_conn.execute("PRAGMA synchronous=NORMAL;")
             self._read_conn.execute("PRAGMA busy_timeout=5000;")
+            self._read_conn.execute("PRAGMA foreign_keys=ON;")
             self._read_conn.execute("PRAGMA query_only=ON;")  # safety: prevent writes
         return self._read_conn
 

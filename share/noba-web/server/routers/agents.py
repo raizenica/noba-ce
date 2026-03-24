@@ -40,7 +40,7 @@ from ..agent_store import (
     _transfer_lock, _transfers,
 )
 from ..deps import (
-    _client_ip, _get_auth, _read_body,
+    _client_ip, _get_auth, _int_param, _read_body,
     _require_admin, _require_operator, _safe_int, db,
 )
 from ..yaml_config import read_yaml_settings
@@ -607,7 +607,7 @@ def api_agents(auth=Depends(_get_auth)):
 def api_command_history(request: Request, auth=Depends(_get_auth)):
     """Get command execution history, optionally filtered by hostname."""
     hostname = request.query_params.get("hostname", "")
-    limit = min(int(request.query_params.get("limit", "50")), COMMAND_HISTORY_LIMIT)
+    limit = _int_param(request, "limit", 50, 1, COMMAND_HISTORY_LIMIT)
     return db.get_command_history(hostname=hostname or None, limit=limit)
 
 
@@ -760,7 +760,7 @@ def api_agent_results(hostname: str, auth=Depends(_get_auth)):
 @router.get("/api/agents/{hostname}/history")
 def api_agent_history(hostname: str, request: Request, auth=Depends(_get_auth)):
     """Get historical metrics for an agent (CPU, RAM, disk)."""
-    hours = min(int(request.query_params.get("hours", "24")), 168)
+    hours = _int_param(request, "hours", 24, 1, 168)
     metric = request.query_params.get("metric", "cpu")
     metric_key = f"agent_{hostname}_{metric}"
     return db.get_history(metric_key, range_hours=hours, resolution=120)
@@ -890,7 +890,7 @@ def api_agent_active_streams(hostname: str, auth=Depends(_get_auth)):
 @router.get("/api/sla/summary")
 def api_sla_summary(request: Request, auth=Depends(_get_auth)):
     """SLA uptime summary across all agents and key services."""
-    hours = min(int(request.query_params.get("hours", "720")), 8760)
+    hours = _int_param(request, "hours", 720, 1, 8760)
     incidents = db.get_incidents(limit=SLA_INCIDENT_LIMIT, hours=hours)
     total_seconds = hours * 3600
     downtime_by_source: dict[str, int] = {}

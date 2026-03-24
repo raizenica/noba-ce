@@ -294,79 +294,92 @@ def collect_stats(qs: dict) -> dict:
             pass
 
     # ── Integration results ───────────────────────────────────────────────────
-    def _get(fut, default=None):
-        if fut is None or fut not in _done:
-            return default
-        try:
-            return fut.result(timeout=0)
-        except Exception:
-            return default
+    from .integrations.base import ConfigError, TransientError
 
-    def _cached_get(fut, cache_key, default=None, ttl=30):
+    def _get(fut, name=None, default=None):
+        if fut is None:
+            return default
+        if fut not in _done:
+            return {"status": "timeout", "error": "Request timed out"}
+        try:
+            res = fut.result(timeout=0)
+            if res is None:
+                return default
+            return res
+        except ConfigError as e:
+            logger.error("Config error in %s: %s", name or "integration", e)
+            return {"status": "unauthorized", "error": str(e)}
+        except (TransientError, Exception) as e:
+            logger.warning("Transient error in %s: %s", name or "integration", e)
+            return {"status": "offline", "error": str(e)}
+
+    def _cached_get(fut, cache_key, name=None, default=None, ttl=30):
         """Get a future result with optional cache layer."""
         if _cache.is_redis and cache_key:
             cached = _cache.get(cache_key)
             if cached is not None:
                 return cached
-        result = _get(fut, default)
+        result = _get(fut, name=name, default=default)
+        # Cache successful or offline results, but not ConfigErrors (which require user action)
         if _cache.is_redis and cache_key and result is not None:
-            _cache.set(cache_key, result, ttl=ttl)
+            if isinstance(result, dict) and result.get("status") != "unauthorized":
+                _cache.set(cache_key, result, ttl=ttl)
         return result
 
-    stats["kuma"]       = _get(kuma_fut, default=[])
-    stats["pihole"]     = _get(ph_fut)
-    stats["plex"]       = _get(plex_fut)
-    stats["containers"] = _get(ct_fut, default=[])
-    stats["truenas"]    = _cached_get(tn_fut, "noba:int:truenas", ttl=15)
-    stats["radarr"]     = _get(rad_fut)
-    stats["sonarr"]     = _get(son_fut)
-    stats["qbit"]       = _get(qbit_fut)
-    stats["proxmox"]    = _cached_get(pmx_fut, "noba:int:proxmox", ttl=15)
-    stats["adguard"]    = _get(ag_fut)
-    stats["jellyfin"]   = _get(jf_fut)
-    stats["hass"]       = _get(hass_fut)
-    stats["unifi"]      = _cached_get(unifi_fut, "noba:int:unifi", ttl=15)
-    stats["speedtest"]  = _get(spd_fut)
+    stats["kuma"]       = _get(kuma_fut, name="Uptime Kuma", default=[])
+    stats["pihole"]     = _get(ph_fut, name="Pi-hole")
+    stats["plex"]       = _get(plex_fut, name="Plex")
+    stats["containers"] = _get(ct_fut, name="Containers", default=[])
+    stats["truenas"]    = _cached_get(tn_fut, "noba:int:truenas", name="TrueNAS", ttl=15)
+    stats["radarr"]     = _get(rad_fut, name="Radarr")
+    stats["sonarr"]     = _get(son_fut, name="Sonarr")
+    stats["qbit"]       = _get(qbit_fut, name="qBittorrent")
+    stats["proxmox"]    = _cached_get(pmx_fut, "noba:int:proxmox", name="Proxmox", ttl=15)
+    stats["adguard"]    = _get(ag_fut, name="AdGuard")
+    stats["jellyfin"]   = _get(jf_fut, name="Jellyfin")
+    stats["hass"]       = _get(hass_fut, name="Home Assistant")
+    stats["unifi"]      = _cached_get(unifi_fut, "noba:int:unifi", name="UniFi", ttl=15)
+    stats["speedtest"]  = _get(spd_fut, name="Speedtest")
 
     # New integration results
-    stats["tautulli"]       = _get(tau_fut)
-    stats["overseerr"]      = _get(ovs_fut)
-    stats["prowlarr"]       = _get(prowl_fut)
-    stats["lidarr"]         = _get(lidarr_fut)
-    stats["readarr"]        = _get(readarr_fut)
-    stats["bazarr"]         = _get(bazarr_fut)
-    stats["radarrExtended"] = _get(rad_ext_fut)
-    stats["sonarrExtended"] = _get(son_ext_fut)
-    stats["radarrCalendar"] = _get(rad_cal_fut, default=[])
-    stats["sonarrCalendar"] = _get(son_cal_fut, default=[])
-    stats["nextcloud"]      = _cached_get(nc_fut, "noba:int:nextcloud", ttl=30)
-    stats["traefik"]        = _get(traefik_fut)
-    stats["npm"]            = _get(npm_fut)
-    stats["authentik"]      = _get(ak_fut)
-    stats["cloudflare"]     = _cached_get(cf_fut, "noba:int:cloudflare", ttl=60)
-    stats["omv"]            = _get(omv_fut)
-    stats["xcpng"]          = _cached_get(xcp_fut, "noba:int:xcpng", ttl=15)
-    stats["homebridge"]     = _get(hb_fut)
-    stats["z2m"]            = _get(z2m_fut)
-    stats["esphome"]        = _get(esp_fut)
-    stats["unifiProtect"]   = _get(protect_fut)
-    stats["pikvm"]          = _get(pikvm_fut)
-    stats["k8s"]            = _cached_get(k8s_fut, "noba:int:k8s", ttl=15)
-    stats["gitea"]          = _get(gitea_fut)
-    stats["gitlab"]         = _get(gitlab_fut)
-    stats["github"]         = _get(github_fut)
-    stats["paperless"]      = _get(paperless_fut)
-    stats["vaultwarden"]    = _get(vw_fut)
-    stats["weather"]        = _get(weather_fut)
-    stats["certExpiry"]     = _get(cert_fut, default=[])
-    stats["domainExpiry"]   = _get(domain_fut, default=[])
-    stats["vpn"]            = _get(vpn_fut)
-    stats["dockerUpdates"]  = _get(docker_upd_fut, default=[])
-    stats["devicePresence"] = _get(presence_fut, default=[])
-    stats["scrutiny"]       = _get(scrutiny_fut)
-    stats["energy"]         = _get(energy_fut, default=[])
-    stats["frigate"]        = _get(frigate_fut)
-    stats["tailscale"]      = _get(tailscale_fut)
+    stats["tautulli"]       = _get(tau_fut, name="Tautulli")
+    stats["overseerr"]      = _get(ovs_fut, name="Overseerr")
+    stats["prowlarr"]       = _get(prowl_fut, name="Prowlarr")
+    stats["lidarr"]         = _get(lidarr_fut, name="Lidarr")
+    stats["readarr"]        = _get(readarr_fut, name="Readarr")
+    stats["bazarr"]         = _get(bazarr_fut, name="Bazarr")
+    stats["radarrExtended"] = _get(rad_ext_fut, name="Radarr Extended")
+    stats["sonarrExtended"] = _get(son_ext_fut, name="Sonarr Extended")
+    stats["radarrCalendar"] = _get(rad_cal_fut, name="Radarr Calendar", default=[])
+    stats["sonarrCalendar"] = _get(son_cal_fut, name="Sonarr Calendar", default=[])
+    stats["nextcloud"]      = _cached_get(nc_fut, "noba:int:nextcloud", name="Nextcloud", ttl=30)
+    stats["traefik"]        = _get(traefik_fut, name="Traefik")
+    stats["npm"]            = _get(npm_fut, name="NPM")
+    stats["authentik"]      = _get(ak_fut, name="Authentik")
+    stats["cloudflare"]     = _cached_get(cf_fut, "noba:int:cloudflare", name="Cloudflare", ttl=60)
+    stats["omv"]            = _get(omv_fut, name="OpenMediaVault")
+    stats["xcpng"]          = _cached_get(xcp_fut, "noba:int:xcpng", name="XCP-ng", ttl=15)
+    stats["homebridge"]     = _get(hb_fut, name="Homebridge")
+    stats["z2m"]            = _get(z2m_fut, name="Zigbee2MQTT")
+    stats["esphome"]        = _get(esp_fut, name="ESPHome")
+    stats["unifiProtect"]   = _get(protect_fut, name="UniFi Protect")
+    stats["pikvm"]          = _get(pikvm_fut, name="PiKVM")
+    stats["k8s"]            = _cached_get(k8s_fut, "noba:int:k8s", name="K8s", ttl=15)
+    stats["gitea"]          = _get(gitea_fut, name="Gitea")
+    stats["gitlab"]         = _get(gitlab_fut, name="GitLab")
+    stats["github"]         = _get(github_fut, name="GitHub")
+    stats["paperless"]      = _get(paperless_fut, name="Paperless")
+    stats["vaultwarden"]    = _get(vw_fut, name="Vaultwarden")
+    stats["weather"]        = _get(weather_fut, name="Weather")
+    stats["certExpiry"]     = _get(cert_fut, name="Cert Expiry", default=[])
+    stats["domainExpiry"]   = _get(domain_fut, name="Domain Expiry", default=[])
+    stats["vpn"]            = _get(vpn_fut, name="VPN")
+    stats["dockerUpdates"]  = _get(docker_upd_fut, name="Docker Updates", default=[])
+    stats["devicePresence"] = _get(presence_fut, name="Device Presence", default=[])
+    stats["scrutiny"]       = _get(scrutiny_fut, name="Scrutiny")
+    stats["energy"]         = _get(energy_fut, name="Energy", default=[])
+    stats["frigate"]        = _get(frigate_fut, name="Frigate")
+    stats["tailscale"]      = _get(tailscale_fut, name="Tailscale")
 
     stats.update(collect_disk_io())
     stats.update(collect_per_interface_net())
@@ -465,6 +478,7 @@ class BackgroundCollector:
         self._qs:       dict = {}
         self._lock      = threading.Lock()
         self._interval  = interval
+        self._last_tick = 0.0
 
     def update_qs(self, qs: dict) -> None:
         with self._lock:
@@ -473,6 +487,13 @@ class BackgroundCollector:
     def get(self) -> dict:
         with self._lock:
             return self._latest
+
+    def get_pulse(self) -> float:
+        """Return the time in seconds since the last collection tick."""
+        with self._lock:
+            if self._last_tick == 0:
+                return 0
+            return time.time() - self._last_tick
 
     def start(self) -> None:
         threading.Thread(target=self._loop, daemon=True, name="stats-collector").start()
@@ -485,6 +506,7 @@ class BackgroundCollector:
                 result = collect_stats(qs)
                 with self._lock:
                     self._latest = result
+                    self._last_tick = time.time()
             except Exception as e:
                 logger.warning("Collector error: %s", e)
             _shutdown_flag.wait(self._interval)

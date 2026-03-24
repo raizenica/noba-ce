@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive } from 'vue'
+import { ref, shallowRef, shallowReactive } from 'vue'
 import { useAuthStore } from './auth'
 import { SSE_HEARTBEAT_TIMEOUT_MS, POLLING_INTERVAL_MS } from '../constants'
 
@@ -7,7 +7,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const connStatus = ref('offline')
   const offlineMode = ref(false)
 
-  const live = reactive({
+  const live = shallowReactive({
     timestamp: 0, uptime: '', loadavg: [], memory: {},
     cpuPercent: 0, cpuTemp: null, gpuTemp: null,
     disks: [], services: [], zfs: {},

@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from .base import _client, _http_get
+from .base import ConfigError, TransientError, _client, _http_get
 
 logger = logging.getLogger("noba")
 
@@ -24,8 +24,10 @@ def get_plex(url: str, token: str) -> dict | None:
         data2      = _http_get(f"{base}/activities", hdrs, timeout=3)
         activities = data2.get("MediaContainer", {}).get("size", 0)
         return {"sessions": sessions, "activities": activities, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return {"sessions": 0, "activities": 0, "status": "offline"}
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"sessions": 0, "activities": 0, "status": "offline", "error": str(e)}
 
 
 # ── Uptime Kuma ───────────────────────────────────────────────────────────────
@@ -47,8 +49,10 @@ def get_kuma(url: str) -> list:
                         "status": "Up" if val == 1 else ("Pending" if val == 2 else "Down"),
                     })
         return monitors
-    except (httpx.HTTPError, ValueError):
-        return []
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── TrueNAS ───────────────────────────────────────────────────────────────────
@@ -74,11 +78,13 @@ def get_truenas(url: str, key: str) -> dict | None:
                     "name":  vm.get("name", "?"),
                     "state": vm.get("status", {}).get("state", "UNKNOWN"),
                 })
-        except (httpx.HTTPError, KeyError, ValueError) as e:
+        except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
             logger.warning("TrueNAS VM fetch: %s", e)
         result["status"] = "online"
-    except (httpx.HTTPError, KeyError, ValueError):
-        pass
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        result["error"] = str(e)
     return result
 
 
@@ -90,8 +96,10 @@ def get_servarr(url: str, key: str) -> dict | None:
     try:
         data = _http_get(f"{url.rstrip('/')}/api/v3/queue", hdrs, timeout=3)
         return {"queue_count": data.get("totalRecords", 0), "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return {"queue_count": 0, "status": "offline"}
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"queue_count": 0, "status": "offline", "error": str(e)}
 
 
 # ── Speedtest Tracker ────────────────────────────────────────────────────────
@@ -111,8 +119,10 @@ def get_speedtest(url: str):
             "server": r.get("server_name", ""),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError, TypeError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── AdGuard Home ─────────────────────────────────────────────────────────────
@@ -133,8 +143,10 @@ def get_adguard(url: str, user: str, password: str):
         blocked = data.get("num_blocked_filtering", 0)
         pct = round(blocked / queries * 100, 1) if queries else 0
         return {"queries": queries, "blocked": blocked, "percent": pct, "status": "enabled"}
-    except (httpx.HTTPError, KeyError, ValueError, ZeroDivisionError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, ZeroDivisionError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Jellyfin ─────────────────────────────────────────────────────────────────
@@ -154,8 +166,10 @@ def get_jellyfin(url: str, key: str):
             "episodes": (counts or {}).get("EpisodeCount", 0),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return {"streams": 0, "status": "offline"}
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"streams": 0, "status": "offline", "error": str(e)}
 
 
 # ── Tautulli ─────────────────────────────────────────────────────────────────
@@ -202,8 +216,10 @@ def get_tautulli(url: str, key: str) -> dict | None:
             "top_users": top_users,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Overseerr ────────────────────────────────────────────────────────────────
@@ -221,8 +237,10 @@ def get_overseerr(url: str, key: str) -> dict | None:
             "total": data.get("total", 0),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Prowlarr ─────────────────────────────────────────────────────────────────
@@ -237,8 +255,10 @@ def get_prowlarr(url: str, key: str) -> dict | None:
             "indexer_count": len(data) if isinstance(data, list) else 0,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Servarr Extended (Radarr / Sonarr — missing + disk) ──────────────────────
@@ -272,8 +292,10 @@ def get_servarr_extended(url: str, key: str, service: str = "radarr") -> dict | 
             "status": "online",
             "service": service,
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Servarr Calendar (Radarr / Sonarr) ───────────────────────────────────────
@@ -299,8 +321,10 @@ def get_servarr_calendar(url: str, key: str, days: int = 7) -> list | None:
                 air_date = entry.get("inCinemas", entry.get("digitalRelease", entry.get("physicalRelease", "")))
             items.append({"title": title, "date": air_date, "type": item_type})
         return items
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Nextcloud ────────────────────────────────────────────────────────────────
@@ -331,8 +355,10 @@ def get_nextcloud(url: str, user: str, password: str) -> dict | None:
             "version": system.get("version", ""),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Traefik ──────────────────────────────────────────────────────────────────
@@ -356,8 +382,10 @@ def get_traefik(url: str) -> dict | None:
             "errors": errors,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Nginx Proxy Manager ─────────────────────────────────────────────────────
@@ -372,8 +400,10 @@ def get_npm(url: str, token: str) -> dict | None:
             "proxy_hosts": len(data) if isinstance(data, list) else 0,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Authentik ────────────────────────────────────────────────────────────────
@@ -395,8 +425,10 @@ def get_authentik(url: str, token: str) -> dict | None:
             "failed_logins": failed_logins,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Cloudflare ───────────────────────────────────────────────────────────────
@@ -422,8 +454,10 @@ def get_cloudflare(token: str, zone_id: str) -> dict | None:
             "cache_hit_ratio": cache_ratio,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── OpenMediaVault ───────────────────────────────────────────────────────────
@@ -466,8 +500,10 @@ def get_omv(url: str, user: str, password: str) -> dict | None:
                     "percent": float(fs.get("percentage", 0)),
                 })
         return {"filesystems": filesystems, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── XCP-ng ───────────────────────────────────────────────────────────────────
@@ -504,8 +540,10 @@ def get_xcpng(url: str, user: str, password: str) -> dict | None:
             if v.get("power_state") == "Running"
         )
         return {"vms": len(real_vms), "running_vms": running, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Homebridge ───────────────────────────────────────────────────────────────
@@ -544,8 +582,10 @@ def get_homebridge(url: str, user: str, password: str) -> dict | None:
             "battery_devices": battery_devices,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Zigbee2MQTT ──────────────────────────────────────────────────────────────
@@ -575,8 +615,10 @@ def get_z2m(url: str) -> dict | None:
             "low_battery": low_battery,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── ESPHome ──────────────────────────────────────────────────────────────────
@@ -596,8 +638,10 @@ def get_esphome(url: str) -> dict | None:
             "online": online,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── PiKVM ────────────────────────────────────────────────────────────────────
@@ -611,8 +655,10 @@ def get_pikvm(url: str, user: str, password: str) -> dict | None:
         hdrs = {"Authorization": f"Basic {cred}"}
         _http_get(f"{base}/api/info", hdrs)
         return {"online": True, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Kubernetes ───────────────────────────────────────────────────────────────
@@ -639,8 +685,10 @@ def get_k8s(url: str, token: str, *, verify_ssl=True) -> dict | None:
             "namespaces": namespaces,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Gitea ────────────────────────────────────────────────────────────────────
@@ -664,8 +712,10 @@ def get_gitea(url: str, token: str) -> dict | None:
                 total = len(body)
 
         return {"repos": total, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
@@ -681,8 +731,10 @@ def get_gitlab(url: str, token: str) -> dict | None:
         r.raise_for_status()
         total = int(r.headers.get("x-total", 0))
         return {"projects": total, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── GitHub ───────────────────────────────────────────────────────────────────
@@ -699,8 +751,10 @@ def get_github(token: str) -> dict | None:
         repos = r.json()
         total = len(repos) if isinstance(repos, list) else 0
         return {"repos": total, "status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Paperless-ngx ────────────────────────────────────────────────────────────
@@ -715,8 +769,10 @@ def get_paperless(url: str, token: str) -> dict | None:
             "documents": data.get("count", 0),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Vaultwarden ──────────────────────────────────────────────────────────────
@@ -732,8 +788,10 @@ def get_vaultwarden(url: str, admin_token: str) -> dict | None:
         )
         r.raise_for_status()
         return {"status": "online"}
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Energy Monitoring (Shelly) ───────────────────────────────────────────
@@ -799,8 +857,10 @@ def get_weather(api_key: str, city: str) -> dict | None:
             "city": data.get("name", city),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Scrutiny ────────────────────────────────────────────────────────────────
@@ -857,8 +917,10 @@ def get_scrutiny(url: str) -> dict | None:
             "maxTemp": max_temp,
             "device_list": device_list,
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Frigate NVR ─────────────────────────────────────────────────────────────
@@ -890,8 +952,10 @@ def get_frigate(url: str) -> dict | None:
             "uptime": svc.get("uptime", 0),
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Scrutiny Intelligence ───────────────────────────────────────────────────
@@ -960,8 +1024,10 @@ def get_scrutiny_intelligence(url: str) -> list[dict] | None:
             })
         predictions.sort(key=lambda d: d["riskScore"], reverse=True)
         return predictions
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── Graylog ──────────────────────────────────────────────────────────────────
@@ -1004,8 +1070,10 @@ def get_graylog(url: str, token: str, query: str = "*", hours: int = 1) -> dict 
             "query": query,
             "status": "online",
         }
-    except (httpx.HTTPError, KeyError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}
 
 
 # ── InfluxDB v2 ─────────────────────────────────────────────────────────────
@@ -1044,5 +1112,7 @@ def query_influxdb(url: str, token: str, org: str, query: str) -> list[dict] | N
             if row:
                 results.append(row)
         return results[:1000]  # Limit to 1000 rows
-    except (httpx.HTTPError, ValueError):
-        return None
+    except ConfigError:
+        raise
+    except (TransientError, httpx.HTTPError, ValueError, TypeError) as e:
+        return {"status": "offline", "error": str(e)}

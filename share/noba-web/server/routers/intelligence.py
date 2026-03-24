@@ -13,7 +13,7 @@ from ..agent_store import (
     _agent_websockets, _agent_ws_lock,
 )
 from ..deps import (
-    _client_ip, _get_auth, _read_body,
+    _client_ip, _get_auth, _int_param, _read_body,
     _require_admin, _require_operator, _safe_int, db,
 )
 from ..yaml_config import read_yaml_settings
@@ -43,8 +43,8 @@ def _build_ai_context() -> str:
 # ── Incident endpoints ───────────────────────────────────────────────────────
 @router.get("/api/incidents")
 def api_incidents(request: Request, auth=Depends(_get_auth)):
-    hours = _safe_int(request.query_params.get("hours", "24"), 24)
-    return db.get_incidents(limit=200, hours=min(hours, 168))
+    hours = _int_param(request, "hours", 24, 1, 168)
+    return db.get_incidents(limit=200, hours=hours)
 
 
 @router.post("/api/incidents/{incident_id}/resolve")
@@ -520,8 +520,8 @@ def api_predict_capacity(request: Request, auth=Depends(_get_auth)):
     """Multi-metric capacity prediction with confidence intervals."""
     from ..prediction import predict_capacity
     metrics = request.query_params.get("metrics", "disk_percent").split(",")
-    range_h = min(int(request.query_params.get("range", "168")), 720)
-    proj_h = min(int(request.query_params.get("projection", "720")), 2160)
+    range_h = _int_param(request, "range", 168, 1, 720)
+    proj_h = _int_param(request, "projection", 720, 1, 2160)
     return predict_capacity(metrics, range_hours=range_h, projection_hours=proj_h)
 
 

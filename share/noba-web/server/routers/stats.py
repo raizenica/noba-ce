@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from .. import deps as _deps  # noqa: F401 – runtime access to bg_collector
 from ..collector import collect_stats, get_shutdown_flag
@@ -19,6 +20,7 @@ from ..deps import (
 from ..plugins import plugin_manager
 from ..yaml_config import read_yaml_settings, write_yaml_settings
 
+logger = logging.getLogger("noba")  # noqa: E402
 router = APIRouter()
 
 
@@ -63,7 +65,20 @@ def api_stats(request: Request, auth=Depends(_get_auth)):
     qs_lists = {k: [v] for k, v in qs.items()}
     _deps.bg_collector.update_qs(qs_lists)
     data = _deps.bg_collector.get() or collect_stats(qs_lists)
-    return JSONResponse(data)
+
+    # Check collector health: if pulse is > 2.5x interval, it's likely hung
+    from ..collector import STATS_INTERVAL
+    pulse = _deps.bg_collector.get_pulse()
+    collector_status = "healthy"
+    if pulse > STATS_INTERVAL * 2.5:
+        collector_status = "stalled"
+        logger.warning("Collector heartbeat lost: last tick %.1fs ago", pulse)
+
+    return {
+        **data,
+        "collector_pulse": round(pulse, 1),
+        "collector_status": collector_status,
+    }
 
 
 # ── /api/stream (SSE) ────────────────────────────────────────────────────────
@@ -73,10 +88,21 @@ async def api_stream(request: Request, auth=Depends(_get_auth_sse)):
     _deps.bg_collector.update_qs(qs)
     shutdown = get_shutdown_flag()
 
+    from ..collector import STATS_INTERVAL
+
     async def generate():
         loop = asyncio.get_running_loop()
         first = await loop.run_in_executor(None, lambda: _deps.bg_collector.get() or collect_stats(qs))
-        yield f"data: {json.dumps(first)}\n\n"
+        
+        # Enrich with pulse info
+        pulse = _deps.bg_collector.get_pulse()
+        collector_status = "healthy"
+        if pulse > STATS_INTERVAL * 2.5:
+            collector_status = "stalled"
+        
+        first_enriched = {**first, "collector_pulse": round(pulse, 1), "collector_status": collector_status}
+        yield f"data: {json.dumps(first_enriched)}\n\n"
+        
         last_hb = time.time()
         while not shutdown.is_set():
             if await request.is_disconnected():
@@ -86,7 +112,13 @@ async def api_stream(request: Request, auth=Depends(_get_auth_sse)):
                 break
             data = _deps.bg_collector.get()
             if data:
-                yield f"data: {json.dumps(data)}\n\n"
+                pulse = _deps.bg_collector.get_pulse()
+                collector_status = "healthy"
+                if pulse > STATS_INTERVAL * 2.5:
+                    collector_status = "stalled"
+                
+                data_enriched = {**data, "collector_pulse": round(pulse, 1), "collector_status": collector_status}
+                yield f"data: {json.dumps(data_enriched)}\n\n"
             if time.time() - last_hb >= 15:
                 yield ": ping\n\n"
                 last_hb = time.time()
@@ -350,8 +382,8 @@ def api_sla(rule_id: str, request: Request, auth=Depends(_get_auth)):
 def api_alert_history(request: Request, auth=Depends(_get_auth)):
     limit = _int_param(request, "limit", 100, 1, 1000)
     rule_id = request.query_params.get("rule_id", "")
-    from_ts = int(request.query_params.get("from", "0") or 0)
-    to_ts = int(request.query_params.get("to", "0") or 0)
+    from_ts = _safe_int(request.query_params.get("from", 0), 0)
+    to_ts = _safe_int(request.query_params.get("to", 0), 0)
     return db.get_alert_history(limit=limit, rule_id=rule_id, from_ts=from_ts, to_ts=to_ts)
 
 

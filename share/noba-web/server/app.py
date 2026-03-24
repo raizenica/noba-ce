@@ -34,7 +34,9 @@ def _safe_remove(path: str, allowed_dir: str) -> bool:
     """Remove a file only if it lives inside allowed_dir. Returns True on success."""
     try:
         real = os.path.realpath(path)
-        if not real.startswith(os.path.realpath(allowed_dir)):
+        # Ensure allowed_dir is terminated with a separator to prevent sibling dir bypass
+        real_allowed = os.path.join(os.path.realpath(allowed_dir), "")
+        if not real.startswith(real_allowed):
             logger.warning("Blocked path-traversal delete: %s (outside %s)", real, allowed_dir)
             return False
         if os.path.exists(real):
@@ -98,30 +100,33 @@ async def _cleanup_transfers() -> None:
     try:
         while True:
             await _asyncio.sleep(900)
-            now = int(time.time())
-            async with _transfer_lock:
-                expired = [tid for tid, t in _transfers.items()
-                           if now - t.get("created_at", 0) > _TRANSFER_MAX_AGE]
-                for tid in expired:
-                    transfer = _transfers.pop(tid)
-                    # Clean up final file
-                    final = transfer.get("final_path", "")
-                    if final:
-                        _safe_remove(final, _TRANSFER_DIR)
-            # Clean up orphaned chunks outside the lock — single listdir
-            if expired:
-                try:
-                    all_files = os.listdir(_TRANSFER_DIR)
-                except OSError as e:
-                    logger.debug("transfer chunk cleanup listdir: %s", e)
-                    all_files = []
-                for fname in all_files:
+            try:
+                now = int(time.time())
+                async with _transfer_lock:
+                    expired = [tid for tid, t in _transfers.items()
+                               if now - t.get("created_at", 0) > _TRANSFER_MAX_AGE]
                     for tid in expired:
-                        if fname.startswith(tid):
-                            _safe_remove(os.path.join(_TRANSFER_DIR, fname), _TRANSFER_DIR)
-                            break
-            if expired:
-                logger.info("[cleanup] Removed %d expired transfer(s)", len(expired))
+                        transfer = _transfers.pop(tid)
+                        # Clean up final file
+                        final = transfer.get("final_path", "")
+                        if final:
+                            _safe_remove(final, _TRANSFER_DIR)
+                # Clean up orphaned chunks outside the lock — single listdir
+                if expired:
+                    try:
+                        all_files = os.listdir(_TRANSFER_DIR)
+                    except OSError as e:
+                        logger.debug("transfer chunk cleanup listdir: %s", e)
+                        all_files = []
+                    for fname in all_files:
+                        for tid in expired:
+                            if fname.startswith(tid):
+                                _safe_remove(os.path.join(_TRANSFER_DIR, fname), _TRANSFER_DIR)
+                                break
+                if expired:
+                    logger.info("[cleanup] Removed %d expired transfer(s)", len(expired))
+            except Exception as e:
+                logger.debug("Transfer cleanup cycle failed: %s", e)
     except _asyncio.CancelledError:
         logger.info("Transfer cleanup task stopped.")
         raise
@@ -147,15 +152,19 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Plugin system failed to start")
     from .scheduler import scheduler, fs_watcher, rss_watcher, endpoint_checker, drift_checker
+    loop = _asyncio.get_running_loop()
     for name, component in [
         ("scheduler", scheduler), ("fs_watcher", fs_watcher),
         ("rss_watcher", rss_watcher), ("endpoint_checker", endpoint_checker),
-        ("drift_checker", drift_checker),
     ]:
         try:
             component.start()
         except Exception:
             logger.exception("Failed to start %s", name)
+    try:
+        drift_checker.start(loop=loop)
+    except Exception:
+        logger.exception("Failed to start drift_checker")
     db.catchup_rollups()
     # Load persisted agents (show as offline until they report)
     from .agent_store import _agent_data, _agent_data_lock

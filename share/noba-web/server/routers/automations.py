@@ -836,7 +836,7 @@ async def api_decide_approval(approval_id: int, request: Request, auth=Depends(_
 @router.get("/api/action-audit")
 def api_action_audit(request: Request, auth=Depends(_get_auth)):
     """Query the action audit trail."""
-    limit = min(int(request.query_params.get("limit", "100")), 500)
+    limit = _int_param(request, "limit", 100, 1, 500)
     trigger_type = request.query_params.get("trigger_type")
     outcome = request.query_params.get("outcome")
     return db.get_action_audit(limit=limit, trigger_type=trigger_type, outcome=outcome)

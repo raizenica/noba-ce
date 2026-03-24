@@ -46,7 +46,8 @@ _api() {
 
 _json_val() {
     # Simple JSON value extractor (no jq dependency)
-    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$1',''))" 2>/dev/null
+    # Uses sys.argv[1] to avoid single-quote injection in the python script string
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get(sys.argv[1],''))" "$1" 2>/dev/null
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -59,8 +60,12 @@ cmd_login() {
         read -rsp "Password: " pass
         echo
     fi
+    # Use python to safely encode the login JSON payload (prevents double-quote injection)
+    local payload
+    payload=$(python3 -c "import json,sys; print(json.dumps({'username':sys.argv[1], 'password':sys.argv[2]}))" "$user" "$pass")
+    
     local resp
-    resp=$(_api POST "/api/login" -d "{\"username\":\"$user\",\"password\":\"$pass\"}")
+    resp=$(_api POST "/api/login" -d "$payload")
     local token
     token=$(echo "$resp" | _json_val token)
     if [[ -n "$token" ]]; then

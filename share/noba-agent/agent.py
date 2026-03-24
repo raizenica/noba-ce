@@ -3043,7 +3043,7 @@ def _pty_open(session_id: str, ws_send, cols: int = 80, rows: int = 24,
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                preexec_fn=os.setsid,
+                start_new_session=True,
                 env=env,
                 close_fds=True,
             )

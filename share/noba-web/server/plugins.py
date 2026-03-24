@@ -54,8 +54,8 @@ class PluginContext:
 
     def query(self, sql: str, params=None) -> list[dict]:
         """Execute a read-only DB query. Returns list of row dicts."""
-        with self._db._lock:
-            conn = self._db._get_conn()
+        with self._db._read_lock:
+            conn = self._db._get_read_conn()
             cur = conn.execute(sql, params or ())
             return [dict(r) for r in cur.fetchall()]
 
@@ -200,10 +200,27 @@ class Plugin:
         if not self.enabled:
             return
         try:
-            if hasattr(self.mod, "collect"):
-                self.data = self.mod.collect() or {}
-            if hasattr(self.mod, "render"):
-                self.html = self.mod.render(self.data)
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError
+            # Use a single-thread executor to run collect() with a timeout.
+            # Timeout is clamped between 5s and the plugin's interval.
+            timeout = max(5, self.interval)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                if hasattr(self.mod, "collect"):
+                    future = executor.submit(self.mod.collect)
+                    try:
+                        self.data = future.result(timeout=timeout) or {}
+                    except TimeoutError:
+                        logger.error("Plugin %s collect timed out after %ds", self.id, timeout)
+                        self.error = f"collect timed out after {timeout}s"
+                        return
+                if hasattr(self.mod, "render"):
+                    future = executor.submit(self.mod.render, self.data)
+                    try:
+                        self.html = future.result(timeout=timeout)
+                    except TimeoutError:
+                        logger.error("Plugin %s render timed out after %ds", self.id, timeout)
+                        self.error = f"render timed out after {timeout}s"
+                        return
             self.error = ""
         except Exception as e:
             logger.error("Plugin %s collect error: %s", self.id, e)

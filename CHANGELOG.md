@@ -5,6 +5,8 @@ All notable changes to NOBA Command Center are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Workflow group cancellation** — `JobRunner` now supports `cancel_group(automation_id)`, allowing the UI to terminate all active subprocesses associated with a parallel or sequential workflow run.
+- **Collector health watchdog** — `BackgroundCollector` now tracks heartbeat pulses. The `/api/stats` and `/api/stream` endpoints report `collector_status: "stalled"` if background updates hang, enabling UI-level alerts.
 - **556 new backend tests** — Auth router (136), automations router (137), integration drivers (178), healing modules (115), db/core (65). Total test count: 3,143.
 - **21 new Vue sub-components** — Split 5 oversized views (AutomationsView, InfrastructureView, MonitoringView, LogsView, DashboardView) into focused tab components.
 - **Backend constants module** (`server/constants.py`) — Centralized 16 magic numbers from routers and healing modules.
@@ -13,6 +15,12 @@ All notable changes to NOBA Command Center are documented in this file.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
 
 ### Improved
+- **Plugin execution watchdog** — Implemented strict timeouts for plugin `collect()` and `render()` calls using `ThreadPoolExecutor`. Prevents misbehaving plugins from hanging background threads.
+- **`_cleanup_transfers` resilience** — Added inner exception guards to the file transfer cleanup loop to prevent silent task death on transient I/O errors.
+- **Unified integration error handling** — Standardized 40+ service integrations to differentiate between `ConfigError` (auth/URL) and `TransientError` (network/5xx). Detailed failure reasons are now propagated to the collector and UI.
+- **`DriftChecker` async dispatch** — Fixed event loop anti-pattern by using `asyncio.run_coroutine_threadsafe` for WebSocket command delivery from background threads.
+- **Frontend reactivity optimization** — Switched high-volume Pinia stores (`dashboard`, `healing`) to use `shallowRef` and `shallowReactive`, reducing CPU/memory overhead for large metric and log datasets.
+- **`ChartWrapper` performance** — Refactored to use incremental updates via `chart.update()` instead of full instance recreation on every data change.
 - **`api_agent_report()` refactored** — 173-line blob handler decomposed into 10 focused helpers; WebSocket handlers also split. Shared helpers between HTTP and WS paths.
 - **Dockerfile hardened** — Added `SHELL` directive for `bash -euo pipefail`, OCI metadata labels, pinned pip versions from pyproject.toml.
 - **Shell script portability** — Hardcoded `/tmp` paths replaced with `${TMPDIR:-/tmp}` across 6 scripts (24 replacements). Log libraries consolidated into `noba-lib.sh` with portable `printf` (no `echo -e`).
@@ -63,6 +71,12 @@ All notable changes to NOBA Command Center are documented in this file.
 - Agent reports now trigger persistence on every report cycle (not just on command completion)
 
 ### Security
+- **Database foreign key enforcement** — Enabled `PRAGMA foreign_keys = ON` for all database connections. Ensures relational integrity and prevents orphaned records in the audit and healing trails.
+- **API input validation hardened** — Eliminated 18 bare `int()` casts on query parameters across the backend routers. Standardized on `_safe_int` and `_int_param` helpers to prevent unhandled 500 errors on invalid user input.
+- **Plugin read-only enforcement** — Refactored `PluginContext.query()` to use the dedicated read-only database connection and lock. Strictly prevents write operations (DELETE/DROP) via the plugin API.
+- **Thread-safe process creation** — Replaced unsafe `preexec_fn=os.setsid` with `start_new_session=True` in terminal and agent PTY handlers to prevent deadlocks in multi-threaded environments.
+- **Shell CLI injection fix** — Hardened `noba-cli.sh` against Python code injection in `_json_val` and JSON breakage in `cmd_login`. Switched to `sys.argv` and native JSON encoding for payloads.
+- **`_safe_remove` path traversal hardening** — Added directory separator termination to prefix checks to prevent sibling directory bypass in file deletion helpers.
 - **SSRF via redirect** — Shared httpx client now uses `follow_redirects=False` to prevent integration endpoints from being redirected to internal/cloud metadata IPs.
 - **Webhook DNS rebinding** — `_is_safe_webhook_url()` now resolves hostnames via `socket.getaddrinfo()` and checks all resulting IPs against private/loopback/link-local ranges. Previously only checked string-based IP parsing.
 - **Run command argument validation** — `_handle_run` now validates all arguments after the allowed prefix against `[a-zA-Z0-9@._/:-]` to prevent abuse of the allowlisted command prefixes.

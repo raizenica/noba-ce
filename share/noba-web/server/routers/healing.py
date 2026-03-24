@@ -10,7 +10,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..agent_store import _agent_cmd_lock, _agent_commands, _agent_data, _agent_data_lock
-from ..deps import _get_auth, _require_admin, _require_operator, db
+from ..deps import _get_auth, _int_param, _require_admin, _require_operator, db
 
 logger = logging.getLogger("noba")
 
@@ -33,7 +33,7 @@ router = APIRouter()
 
 @router.get("/api/healing/ledger")
 def api_healing_ledger(request: Request, auth=Depends(_get_auth)):
-    limit = int(request.query_params.get("limit", 50))
+    limit = _int_param(request, "limit", 50, 1, 1000)
     rule_id = request.query_params.get("rule_id")
     target = request.query_params.get("target")
     return db.get_heal_outcomes(limit=limit, rule_id=rule_id, target=target)

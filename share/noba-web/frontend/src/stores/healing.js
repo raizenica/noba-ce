@@ -1,16 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, shallowRef, computed } from 'vue'
 import { useHealing } from '../composables/useHealing'
 
 export const useHealingStore = defineStore('healing', () => {
   const api = useHealing()
 
-  // State
-  const ledger = ref([])
-  const trust = ref([])
-  const suggestions = ref([])
-  const dependencies = ref([])
-  const maintenance = ref([])
+  // State (using shallowRef for large arrays)
+  const ledger = shallowRef([])
+  const trust = shallowRef([])
+  const suggestions = shallowRef([])
+  const dependencies = shallowRef([])
+  const maintenance = shallowRef([])
   const effectiveness = ref({})
   const loading = ref(false)
   const lastFetch = ref(0)

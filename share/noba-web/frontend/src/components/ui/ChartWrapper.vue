@@ -12,9 +12,20 @@ const canvas = ref(null)
 let chart = null
 
 function render() {
-  if (chart) chart.destroy()
   if (!canvas.value) return
-  chart = new Chart(canvas.value.getContext('2d'), JSON.parse(JSON.stringify(props.config)))
+  const config = props.config
+  if (chart) {
+    chart.data = config.data
+    chart.options = config.options
+    chart.update('none') // update without animation for performance
+  } else {
+    chart = new Chart(canvas.value.getContext('2d'), {
+      type: config.type,
+      data: config.data,
+      options: config.options,
+      plugins: config.plugins,
+    })
+  }
 }
 
 onMounted(render)

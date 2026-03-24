@@ -115,14 +115,8 @@ def api_audit(request: Request, auth=Depends(_require_admin)):
     limit = _int_param(request, "limit", 100, 1, 1000)
     user_filter = request.query_params.get("user", "")
     action_filter = request.query_params.get("action", "")
-    try:
-        from_ts = int(request.query_params.get("from", 0))
-    except (ValueError, TypeError):
-        from_ts = 0
-    try:
-        to_ts = int(request.query_params.get("to", 0))
-    except (ValueError, TypeError):
-        to_ts = 0
+    from_ts = _safe_int(request.query_params.get("from", 0), 0)
+    to_ts = _safe_int(request.query_params.get("to", 0), 0)
     return db.get_audit(limit=limit, username_filter=user_filter, action_filter=action_filter,
                         from_ts=from_ts, to_ts=to_ts)
 
@@ -929,7 +923,7 @@ def api_graylog_search(request: Request, auth=Depends(_require_operator)):
         if user and password:
             token = f"{user}:{password}"
     query = request.query_params.get("q", "*")
-    hours = min(_safe_int(request.query_params.get("hours", "1"), 1), 168)
+    hours = _int_param(request, "hours", 1, 1, 168)
     if not url:
         raise HTTPException(404, "Graylog not configured")
     from ..integrations import get_graylog

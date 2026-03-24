@@ -41,9 +41,26 @@ def ssl_verify(setting: bool | str = True):
 
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = 4) -> dict | list:
-    r = _client.get(url, headers=headers or {}, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    """Execute GET request with classified error propagation.
+
+    Raises:
+        ConfigError: 4xx (Auth/URL) errors that require user attention.
+        TransientError: 5xx or network errors that may resolve on retry.
+    """
+    try:
+        r = _client.get(url, headers=headers or {}, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        # 4xx (except 408 Timeout / 429 Rate Limit) are ConfigErrors
+        if 400 <= code < 500 and code not in (408, 429):
+            raise ConfigError(f"HTTP {code}: {exc.response.text[:100]}") from exc
+        raise TransientError(f"HTTP {code}") from exc
+    except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        raise TransientError(str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise TransientError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

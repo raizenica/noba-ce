@@ -1,6 +1,7 @@
 """Noba – Cron-like scheduler for automations."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -746,10 +747,12 @@ class DriftChecker:
     def __init__(self) -> None:
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
+        self._main_loop: asyncio.AbstractEventLoop | None = None
 
-    def start(self) -> None:
+    def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         if self._thread and self._thread.is_alive():
             return
+        self._main_loop = loop
         self._shutdown.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="drift-checker")
         self._thread.start()
@@ -820,14 +823,18 @@ class DriftChecker:
                 ws = ws_registry.get(hostname)
             if ws:
                 try:
-                    import asyncio
-                    loop = asyncio.new_event_loop()
-                    loop.run_until_complete(ws.send_json({
-                        "type": "command", "id": cmd_id,
-                        "cmd": "file_checksum", "params": cmd["params"],
-                    }))
-                    loop.close()
-                    delivered = True
+                    # Use the main loop for thread-safe asyncio dispatch
+                    if self._main_loop:
+                        future = asyncio.run_coroutine_threadsafe(
+                            ws.send_json({
+                                "type": "command", "id": cmd_id,
+                                "cmd": "file_checksum", "params": cmd["params"],
+                            }),
+                            self._main_loop
+                        )
+                        # Wait up to 5s for delivery
+                        future.result(timeout=5)
+                        delivered = True
                 except Exception:
                     pass
             if not delivered:
