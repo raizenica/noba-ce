@@ -18,7 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install fastapi 'uvicorn[standard]' psutil pyyaml httpx ruff
+          pip install fastapi 'uvicorn[standard]' psutil pyyaml httpx websocket-client cryptography ruff
           pip install pytest pytest-asyncio starlette httpx
 
       - name: Lint

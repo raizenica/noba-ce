@@ -1673,24 +1673,18 @@ class TestTruenasWsDriver:
         from server.integrations.truenas_ws import get_truenas
         assert get_truenas("https://truenas:443", "") is None
 
-    @patch("server.integrations.truenas_ws._connect")
-    def test_returns_data_on_success(self, mock_connect):
+    def test_returns_data_on_success(self):
         from server.integrations.truenas_ws import get_truenas
-        mock_ws = MagicMock()
-
-        # Setup the context manager
         from contextlib import contextmanager
 
         @contextmanager
-        def fake_connect(url, key):
-            yield mock_ws
+        def _fake_connect(url, key):
+            yield MagicMock()
 
-        mock_connect.side_effect = fake_connect
-
-        # Mock _jsonrpc_call responses
-        with patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
+        with patch("server.integrations.truenas_ws._connect", _fake_connect), \
+             patch("server.integrations.truenas_ws._get_truenas_rest", return_value={"status": "rest_fallback"}), \
+             patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
             mock_rpc.side_effect = [
-                # auth is done in _connect, so these are the data calls:
                 [{"name": "plex", "state": "RUNNING"}],         # app.query
                 [{"level": "WARNING", "formatted": "Disk hot", "dismissed": False}],  # alert.list
                 [{"id": 1, "name": "testvm", "status": {"state": "RUNNING"}}],  # vm.query
@@ -1699,7 +1693,9 @@ class TestTruenasWsDriver:
 
             result = get_truenas("https://truenas:443", "apikey")
 
-        assert result["status"] == "online"
+        # If WS path works, status is "online"; if REST fallback was hit, it's "rest_fallback"
+        assert result is not None
+        assert result["status"] == "online", f"Got REST fallback instead of WS path: {result}"
         assert len(result["apps"]) == 1
         assert result["apps"][0]["name"] == "plex"
         assert len(result["alerts"]) == 1
@@ -1707,20 +1703,17 @@ class TestTruenasWsDriver:
         assert len(result["pools"]) == 1
         assert result["pools"][0]["healthy"] is True
 
-    @patch("server.integrations.truenas_ws._connect")
-    def test_dismissed_alerts_excluded(self, mock_connect):
+    def test_dismissed_alerts_excluded(self):
         from server.integrations.truenas_ws import get_truenas
-        mock_ws = MagicMock()
-
         from contextlib import contextmanager
 
         @contextmanager
-        def fake_connect(url, key):
-            yield mock_ws
+        def _fake_connect(url, key):
+            yield MagicMock()
 
-        mock_connect.side_effect = fake_connect
-
-        with patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
+        with patch("server.integrations.truenas_ws._connect", _fake_connect), \
+             patch("server.integrations.truenas_ws._get_truenas_rest", return_value={"status": "rest_fallback", "alerts": []}), \
+             patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
             mock_rpc.side_effect = [
                 [],
                 [{"level": "WARNING", "formatted": "Old", "dismissed": True}],
@@ -1762,21 +1755,18 @@ class TestTruenasWsDriver:
 
             assert result["status"] == "online"
 
-    @patch("server.integrations.truenas_ws._connect")
-    def test_tolerates_individual_rpc_failures(self, mock_connect):
+    def test_tolerates_individual_rpc_failures(self):
         """If one RPC call fails, others should still succeed."""
         from server.integrations.truenas_ws import get_truenas
-        mock_ws = MagicMock()
-
         from contextlib import contextmanager
 
         @contextmanager
-        def fake_connect(url, key):
-            yield mock_ws
+        def _fake_connect(url, key):
+            yield MagicMock()
 
-        mock_connect.side_effect = fake_connect
-
-        with patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
+        with patch("server.integrations.truenas_ws._connect", _fake_connect), \
+             patch("server.integrations.truenas_ws._get_truenas_rest", return_value={"status": "rest_fallback"}), \
+             patch("server.integrations.truenas_ws._jsonrpc_call") as mock_rpc:
             mock_rpc.side_effect = [
                 [{"name": "app1", "state": "RUNNING"}],  # app.query succeeds
                 RuntimeError("alert.list failed"),         # alert.list fails
