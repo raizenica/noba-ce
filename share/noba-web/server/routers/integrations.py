@@ -57,15 +57,27 @@ def api_tailscale_status(auth=Depends(_get_auth)):
 
 
 # ── /api/disks/intelligence ──────────────────────────────────────────────────
+_scrutiny_cache: dict = {"data": None, "ts": 0.0}
+_SCRUTINY_TTL = 300  # 5 min — SMART data doesn't change often
+
+
 @router.get("/api/disks/intelligence")
 def api_disk_intelligence(auth=Depends(_get_auth)):
+    import time as _time
+
     cfg = read_yaml_settings()
     url = cfg.get("scrutinyUrl", "")
     if not url:
         raise HTTPException(404, "Scrutiny not configured")
+    now = _time.time()
+    if _scrutiny_cache["data"] is not None and now - _scrutiny_cache["ts"] < _SCRUTINY_TTL:
+        return _scrutiny_cache["data"]
     from ..integrations import get_scrutiny_intelligence  # noqa: PLC0415
-    result = get_scrutiny_intelligence(url)
-    return result or []
+
+    result = get_scrutiny_intelligence(url) or []
+    _scrutiny_cache["data"] = result
+    _scrutiny_cache["ts"] = now
+    return result
 
 
 # ── /api/services/dependencies/blast-radius ──────────────────────────────────
