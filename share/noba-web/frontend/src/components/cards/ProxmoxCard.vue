@@ -84,11 +84,12 @@ async function openPmxConsole(node, vmid, type) {
       </div>
 
       <!-- VMs / LXC -->
-      <div style="margin-top:.5rem;max-height:260px;overflow-y:auto">
+      <div style="margin-top:.5rem;max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
         <div
           v-for="vm in (proxmox.vms || [])"
           :key="vm.vmid + '-' + vm.node"
           class="ct-row"
+          style="flex-shrink:0"
         >
           <div
             class="status-dot"
