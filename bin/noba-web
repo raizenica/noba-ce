@@ -159,7 +159,7 @@ if [[ "$CHANGE_PASS" == true ]]; then
     exit 0
 fi
 
-# Handle special commands (non‑server)
+# Handle special commands (non-server)
 if [[ "$SHOW_STATUS" == true ]]; then
     show_status "$SERVER_PID_FILE" "$SERVER_URL_FILE" "$LOG_FILE"
     exit 0
