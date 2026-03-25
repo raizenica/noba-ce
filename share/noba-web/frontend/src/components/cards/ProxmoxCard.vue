@@ -3,26 +3,51 @@ import { computed } from 'vue'
 import { useDashboardStore } from '../../stores/dashboard'
 import { useAuthStore } from '../../stores/auth'
 import { useApi } from '../../composables/useApi'
+import { useNotificationsStore } from '../../stores/notifications'
 import DashboardCard from './DashboardCard.vue'
 
 const dashboard = useDashboardStore()
 const auth = useAuthStore()
-const { post } = useApi()
+const notifications = useNotificationsStore()
+const { post, get } = useApi()
 
 const proxmox = computed(() => dashboard.live.proxmox)
 const isOperator = computed(() => auth.isOperator)
+const isAdmin = computed(() => auth.isAdmin)
 
 async function fetchPmxSnapshots(node, vmid, type) {
   try {
-    await post('/api/proxmox/snapshots', { node, vmid, type })
-  } catch { /* silent */ }
+    if (!isAdmin.value) {
+      notifications.addToast('Admin access required for snapshots', 'warning')
+      return
+    }
+    const snapname = `snapshot-${Date.now()}`
+    await post(`/api/proxmox/nodes/${node}/vms/${vmid}/snapshot`, {
+      name: snapname,
+      description: `Auto snapshot by NOBA`,
+      type: type || 'qemu'
+    })
+    notifications.addToast(`Snapshot created: ${snapname}`, 'success')
+  } catch (e) {
+    notifications.addToast('Snapshot failed: ' + (e.message || 'Unknown error'), 'danger')
+  }
 }
 
 async function openPmxConsole(node, vmid, type) {
   try {
-    const res = await post('/api/proxmox/console', { node, vmid, type })
-    if (res && res.url) window.open(res.url, '_blank')
-  } catch { /* silent */ }
+    if (!isOperator.value) {
+      notifications.addToast('Operator access required for console', 'warning')
+      return
+    }
+    const res = await get(`/api/proxmox/nodes/${node}/vms/${vmid}/console?type=${type || 'qemu'}`)
+    if (res && res.url) {
+      window.open(res.url, '_blank')
+    } else {
+      notifications.addToast('Console URL not returned', 'danger')
+    }
+  } catch (e) {
+    notifications.addToast('Console failed: ' + (e.message || 'Unknown error'), 'danger')
+  }
 }
 </script>
 

@@ -22,6 +22,7 @@ All notable changes to NOBA Command Center are documented in this file.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
 
 ### Fixed
+- **Proxmox snapshot and console buttons unresponsive** — Dashboard Proxmox card buttons now call correct API endpoints (`/api/proxmox/nodes/{node}/vms/{vmid}/snapshot` and `/api/proxmox/nodes/{node}/vms/{vmid}/console`). Added toast notifications for feedback and permission checks (admin for snapshots, operator for console).
 - **Token persistence failures invisible** — Token DB operations (insert, delete, load, cleanup) now logged as `warning` instead of `debug`. Critical authentication failures now visible in production logs.
 - **Health score computation failures silent** — Health category computations (monitoring, certificates, updates, uptime, capacity, backup) now logged as `warning` instead of `debug`. Operators can now detect degraded monitoring.
 - **Integration fetch failures not logged** — Service status, ping checks, WAN/LAN health, and BMC sentinel checks now log failures with context instead of silently swallowing exceptions.
