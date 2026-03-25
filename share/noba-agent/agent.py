@@ -84,22 +84,34 @@ def _safe_run(cmd, timeout=30):
 
 
 # ── Path safety ───────────────────────────────────────────────────────────────
-_PATH_DENYLIST = frozenset({"/etc/shadow", "/etc/gshadow", "/proc/kcore"})
-_PATH_DENY_PATTERNS = ("/.ssh/id_",)
 _BACKUP_DIR = os.path.expanduser("~/.noba-agent/backups")
+_SAFE_WRITE_DIRS = (
+    "/opt/noba-agent/",
+    "/tmp/noba-",
+    os.path.expanduser("~/.noba-agent/"),
+    _BACKUP_DIR,
+)
+_SAFE_READ_DENYLIST = frozenset({"/etc/shadow", "/etc/gshadow", "/proc/kcore"})
+_SAFE_READ_DENY_PATTERNS = ("/.ssh/id_", "/private/key")
 
 
-def _safe_path(path):
-    """Validate a path against deny lists. Returns error string or None if OK."""
+def _safe_path(path, *, write=False):
+    """Validate path safety. Write ops use allowlist; read ops use denylist."""
     if "\0" in path:
         return "Null byte in path"
     real = os.path.realpath(path)
-    for denied in _PATH_DENYLIST:
-        if real == denied or real.startswith(denied + "/"):
-            return f"Denied path: {real}"
-    for pat in _PATH_DENY_PATTERNS:
-        if pat in real:
-            return f"Denied pattern: {pat}"
+    if write:
+        # Strict allowlist for write operations
+        if not any(real.startswith(d) for d in _SAFE_WRITE_DIRS):
+            return f"Write denied: path must be under {', '.join(_SAFE_WRITE_DIRS)}"
+    else:
+        # Denylist for read operations (less restrictive)
+        for denied in _SAFE_READ_DENYLIST:
+            if real == denied or real.startswith(denied + "/"):
+                return f"Denied path: {real}"
+        for pat in _SAFE_READ_DENY_PATTERNS:
+            if pat in real:
+                return f"Denied pattern: {pat}"
     return None
 
 
@@ -638,17 +650,21 @@ def _cmd_exec(params: dict, ctx: dict) -> dict:
     cmd_id = ctx.get("_current_cmd_id", "")
     ws_send = ctx.get("_ws_send")  # Optional: WebSocket send callback
 
-    # On Windows, wrap in powershell for richer output
+    # Use list-based execution to prevent shell injection
+    import shlex
     if _PLATFORM == "windows":
         shell_cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd]
     else:
-        shell_cmd = cmd  # shell=True on Linux/macOS
+        try:
+            shell_cmd = shlex.split(cmd)
+        except ValueError:
+            return {"status": "error", "error": "Invalid command syntax"}
 
     if ws_send and cmd_id:
         # Streaming mode: read output line-by-line and send via WebSocket
         try:
             proc = subprocess.Popen(
-                shell_cmd, shell=(_PLATFORM != "windows"),
+                shell_cmd, shell=False,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
@@ -681,7 +697,7 @@ def _cmd_exec(params: dict, ctx: dict) -> dict:
     # Batch mode: run and capture
     try:
         result = subprocess.run(
-            shell_cmd, shell=(_PLATFORM != "windows"),
+            shell_cmd, shell=False,
             capture_output=True, text=True, timeout=timeout,
         )
         return {
@@ -700,7 +716,7 @@ def _cmd_restart_service(params: dict, ctx: dict) -> dict:
     """Restart a service (systemd on Linux, sc on Windows)."""
     import re
     service = params.get("service", "")
-    if not service or not re.match(r'^[a-zA-Z0-9@._\- ]+$', service) or len(service) > 128:
+    if not service or not re.match(r'^[a-zA-Z0-9@._\-]+$', service) or len(service) > 128:
         return {"status": "error", "error": "Invalid service name"}
     try:
         if _PLATFORM == "windows":
@@ -1359,7 +1375,7 @@ def _cmd_file_write(params: dict, _ctx: dict) -> dict:
     content = params.get("content", "")
     if not path:
         return {"status": "error", "error": "No path provided"}
-    err = _safe_path(path)
+    err = _safe_path(path, write=True)
     if err:
         return {"status": "error", "error": err}
     if len(content) > 1048576:
@@ -1390,7 +1406,7 @@ def _cmd_file_delete(params: dict, _ctx: dict) -> dict:
     path = params.get("path", "")
     if not path:
         return {"status": "error", "error": "No path provided"}
-    err = _safe_path(path)
+    err = _safe_path(path, write=True)
     if err:
         return {"status": "error", "error": err}
     if not os.path.exists(path):
@@ -1737,7 +1753,7 @@ def _cmd_file_push(params: dict, ctx: dict) -> dict:
         return {"status": "error", "error": "No destination path provided"}
     if not transfer_id:
         return {"status": "error", "error": "No transfer_id provided"}
-    err = _safe_path(dest_path)
+    err = _safe_path(dest_path, write=True)
     if err:
         return {"status": "error", "error": err}
 

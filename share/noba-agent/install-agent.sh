@@ -78,7 +78,8 @@ interval: 30
 hostname: $HOSTNAME
 tags: $TAGS
 EOF
-_ok "Config: $CONFIG"
+sudo chmod 600 "$CONFIG"
+_ok "Config: $CONFIG (mode 600)"
 
 # Test
 echo ""
