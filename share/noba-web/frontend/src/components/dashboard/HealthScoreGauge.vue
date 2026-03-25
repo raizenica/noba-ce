@@ -1,11 +1,49 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useApi } from '../../composables/useApi'
+import { useDashboardStore } from '../../stores/dashboard'
 
 const { get } = useApi()
+const dashboardStore = useDashboardStore()
 
 const healthScore         = ref(null)
 const healthScoreExpanded = ref(false)
+
+// --- Last updated ticker ---
+const relativeTime = ref('')
+let tickInterval = null
+let lastSeenEpoch = 0
+let lastSeenTimestamp = ''
+
+function tickRelative() {
+  const ts = dashboardStore.live?.timestamp
+  if (ts && ts !== lastSeenTimestamp) {
+    lastSeenTimestamp = ts
+    lastSeenEpoch = Date.now()
+  }
+  if (!lastSeenEpoch) { relativeTime.value = ''; return }
+  const diffSec = Math.floor((Date.now() - lastSeenEpoch) / 1000)
+  if (diffSec < 5) relativeTime.value = 'just now'
+  else if (diffSec < 60) relativeTime.value = `${diffSec}s ago`
+  else if (diffSec < 3600) relativeTime.value = `${Math.floor(diffSec / 60)}m ago`
+  else relativeTime.value = `${Math.floor(diffSec / 3600)}h ago`
+}
+
+// --- Endpoint count ---
+const endpointCount = ref(null)
+
+onMounted(async () => {
+  tickRelative()
+  tickInterval = setInterval(tickRelative, 1000)
+  try {
+    const eps = await get('/api/endpoints')
+    endpointCount.value = Array.isArray(eps) ? eps.length : null
+  } catch { /* silent */ }
+})
+
+onUnmounted(() => {
+  clearInterval(tickInterval)
+})
 
 async function fetchHealthScore() {
   try {
@@ -71,6 +109,13 @@ defineExpose({ fetchHealthScore })
           Grade: {{ healthScore.grade }}
           &mdash;
           {{ Object.keys(healthScore.categories || {}).length }} categories
+        </div>
+        <div style="font-size:.7rem;color:var(--text-muted);text-align:center;margin-top:.15rem">
+          <span v-if="relativeTime">Last updated: {{ relativeTime }}</span>
+        </div>
+        <div style="font-size:.7rem;color:var(--text-muted);text-align:center">
+          {{ (dashboardStore.live?.agents || []).length }} agents
+          <span v-if="endpointCount !== null">&middot; {{ endpointCount }} endpoints</span>
         </div>
       </div>
 

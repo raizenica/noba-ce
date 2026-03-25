@@ -5,7 +5,7 @@ import { useDashboardStore } from '../../stores/dashboard'
 const dashboardStore = useDashboardStore()
 
 // ── Alert dismissal ──────────────────────────────────────────────────────────
-const dismissedAlerts = ref(new Set())
+const dismissedAlerts = ref(new Set(JSON.parse(sessionStorage.getItem('noba:dismissed-alerts') || '[]')))
 
 const visibleAlerts = computed(() =>
   (dashboardStore.live.alerts || []).filter(
@@ -13,8 +13,10 @@ const visibleAlerts = computed(() =>
   )
 )
 
-function dismissAlert(msg) {
-  dismissedAlerts.value = new Set([...dismissedAlerts.value, msg])
+function dismissAlert(key) {
+  dismissedAlerts.value.add(key)
+  sessionStorage.setItem('noba:dismissed-alerts', JSON.stringify([...dismissedAlerts.value]))
+  dismissedAlerts.value = new Set(dismissedAlerts.value)
 }
 
 // ── Health pips ──────────────────────────────────────────────────────────────

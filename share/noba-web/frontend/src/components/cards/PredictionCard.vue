@@ -68,6 +68,20 @@ const confidenceBadgeClass = computed(() => {
   return 'bd'
 })
 
+const confidenceReason = computed(() => {
+  const c = combined.value
+  if (!c) return ''
+  const r2 = c.r_squared ?? 0
+  const slope = c.slope_per_day ?? 0
+  if (r2 < 0.5) {
+    return `Low correlation (R²=${r2.toFixed(2)}) — usage pattern is irregular`
+  }
+  if (Math.abs(slope) < 0.001) {
+    return 'Minimal growth detected — projection may not be meaningful'
+  }
+  return 'Sufficient data for projection'
+})
+
 const slopePerDay = computed(() => {
   const s = combined.value?.slope_per_day
   if (s == null) return null
@@ -207,6 +221,7 @@ onUnmounted(() => {
             class="badge"
             :class="confidenceBadgeClass"
             style="text-transform:capitalize"
+            :title="confidenceReason"
           >{{ combined?.confidence || 'n/a' }}</span>
         </span>
       </div>
