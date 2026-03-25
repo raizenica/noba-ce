@@ -5,6 +5,8 @@ All notable changes to NOBA Command Center are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Database migration framework** (`server/db/migrations.py`) — Schema version tracking with up/down migrations, rollback capability, and auto-migration on startup. Ready for future schema evolution.
+- **SSE stream testing** (`dev/smoke.py`) — SSE endpoints (`/api/stream/*`) now tested with timeout-based connection validation instead of being skipped.
 - **Workflow group cancellation** — `JobRunner` now supports `cancel_group(automation_id)`, allowing the UI to terminate all active subprocesses associated with a parallel or sequential workflow run.
 - **Collector health watchdog** — `BackgroundCollector` now tracks heartbeat pulses. The `/api/stats` and `/api/stream` endpoints report `collector_status: "stalled"` if background updates hang, enabling UI-level alerts.
 - **556 new backend tests** — Auth router (136), automations router (137), integration drivers (178), healing modules (115), db/core (65). Total test count: 3,143.
@@ -13,7 +15,12 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Frontend constants module** (`constants.js`) — Centralized 15 timing/limit values from stores and components.
 - **14 CSS utility classes** — Table cell, border, spacing, and typography utilities replacing 208 inline style attributes.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
+
 ### Fixed
+- **Token persistence failures invisible** — Token DB operations (insert, delete, load, cleanup) now logged as `warning` instead of `debug`. Critical authentication failures now visible in production logs.
+- **Health score computation failures silent** — Health category computations (monitoring, certificates, updates, uptime, capacity, backup) now logged as `warning` instead of `debug`. Operators can now detect degraded monitoring.
+- **Integration fetch failures not logged** — Service status, ping checks, WAN/LAN health, and BMC sentinel checks now log failures with context instead of silently swallowing exceptions.
+- **Agent path traversal vulnerability** — `_safe_path()` hardened with `realpath()` resolution, `normpath()` normalization, and explicit `..` detection. Defense-in-depth against symlink and traversal attacks.
 - **Memory progress bar** — Core System card now correctly displays memory percentage by falling back to the `memPercent` SSE field when the `memory` object is a pre-formatted string.
 - **Hardware card empty** — CPU and GPU model names were missing because `hwCpu`/`hwGpu` keys weren't declared in the dashboard store's reactive object, causing SSE data to be silently dropped.
 - **Agent "Last seen: --"** — SSE agent list now includes `last_seen_s` field, matching the REST API. Online agents now show "7s ago" instead of "--".
@@ -27,6 +34,9 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Blocking docker commands** — Wrapped remaining sync subprocess calls in `routers/containers.py` with `asyncio.to_thread()` to avoid blocking the FastAPI event loop.
 
 ### Improved
+- **Type safety** — Replaced `Any` types with proper `Database` and `threading.Lock` types in `iac_export.py` for better IDE support and type checking.
+- **Version consistency** — `pyproject.toml` version synced to `2.0.0` (matches `config.py`).
+- **Test code quality** — Fixed 20+ unused variable warnings across test files, updated lock type tests for `RLock`, fixed import order in `conftest.py`.
 - **Dashboard integration cards** — Empty "No data available" integration cards are now collapsed into a single "N unconfigured integrations" button, drastically reducing scroll depth.
 - **Log severity coloring** — System log viewer now color-codes lines: errors in red, warnings in yellow, debug dimmed — making critical issues immediately visible.
 - **Healing table labels** — Effectiveness Summary table now shows human-friendly names (Total, Verified, Failed, Pending, Success Rate) instead of raw database column names.
