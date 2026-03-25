@@ -97,6 +97,7 @@ def take_screenshot(
     wait_ms: int = 2000,
     open_modal: str | None = None,
     click_selector: str | None = None,
+    no_login: bool = False,
 ) -> Path:
     """Take a screenshot and return the file path."""
     from playwright.sync_api import sync_playwright
@@ -109,17 +110,28 @@ def take_screenshot(
         context = browser.new_context(viewport={"width": width, "height": height})
         page = context.new_page()
 
-        # Navigate to the target
-        page.goto(f"{base_url}{path}", wait_until="load", timeout=15000)
+        # If using direct token, inject it before the Vue app boots
+        if not no_login and not path.startswith("/api/") and username == "__token__" and password:
+            # Navigate to a non-app endpoint to get same-origin localStorage access
+            page.goto(f"{base_url}/api/health", wait_until="load", timeout=15000)
+            page.evaluate(f"""() => {{
+                localStorage.setItem('noba-token', '{password}');
+                localStorage.setItem('username', 'apikey');
+            }}""")
+            # Now navigate to the actual target — Vue boots with token already present
+            page.goto(f"{base_url}/{path.lstrip('/')}", wait_until="load", timeout=15000)
+            page.wait_for_timeout(wait_ms)
+        else:
+            # Navigate to the target
+            page.goto(f"{base_url}{path}", wait_until="load", timeout=15000)
 
-        # If not /api/* path, try to login
-        if not path.startswith("/api/") and password:
-            token = login(page, host, port, username, password)
-            if token:
-                # Reload with auth
-                page.goto(f"{base_url}{path}", wait_until="load", timeout=15000)
-                # Wait for Alpine.js to hydrate + data to load
-                page.wait_for_timeout(wait_ms)
+            # If not /api/* path, try to login
+            if not no_login and not path.startswith("/api/") and password:
+                token = login(page, host, port, username, password)
+                if token:
+                    # Reload with auth
+                    page.goto(f"{base_url}{path}", wait_until="load", timeout=15000)
+                    page.wait_for_timeout(wait_ms)
 
         # Optionally open a modal by clicking a trigger
         if open_modal:
@@ -166,18 +178,57 @@ def take_screenshot(
 
 
 def screenshot_all(host: str, port: int, **kwargs):
-    """Take screenshots of all major views."""
+    """Take screenshots of all major views in a single browser session."""
+    from playwright.sync_api import sync_playwright
+
     views = [
-        ("login", "/", {}),
-        ("dashboard", "/", {}),
-        ("dashboard-mobile", "/", {"width": 375, "height": 812}),
-        ("dashboard-full", "/", {"full_page": True}),
+        ("login", "/", False),
+        ("dashboard", "/", True),
+        ("agents", "/#/agents", True),
+        ("monitoring", "/#/monitoring", True),
+        ("security", "/#/security", True),
+        ("infrastructure", "/#/infrastructure", True),
+        ("automations", "/#/automations", True),
     ]
+
+    width = kwargs.get("width", 1280)
+    height = kwargs.get("height", 800)
+    wait_ms = kwargs.get("wait_ms", 2000)
+    username = kwargs.get("username", DEFAULT_USER)
+    password = kwargs.get("password", DEFAULT_PASS)
+    base_url = f"http://{host}:{port}"
+
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     paths = []
-    for name, path, overrides in views:
-        merged = {**kwargs, **overrides}
-        p = take_screenshot(host, port, name, path, **merged)
-        paths.append(p)
+
+    with sync_playwright() as p:
+        browser = p.firefox.launch(headless=True)
+        context = browser.new_context(viewport={"width": width, "height": height})
+        page = context.new_page()
+        logged_in = False
+
+        for name, path, needs_auth in views:
+            url = f"{base_url}/{path.lstrip('/')}"
+
+            if needs_auth and not logged_in and password:
+                # Login once, reuse session
+                page.goto(f"{base_url}/", wait_until="load", timeout=15000)
+                token = login(page, host, port, username, password)
+                if token:
+                    logged_in = True
+
+            page.goto(url, wait_until="load", timeout=15000)
+            if needs_auth and logged_in:
+                page.wait_for_timeout(wait_ms)
+
+            ts = time.strftime("%H%M%S")
+            filename = f"noba-{name}-{ts}.png"
+            filepath = SCREENSHOT_DIR / filename
+            page.screenshot(path=str(filepath))
+            print(f"  Screenshot saved: {filepath}")
+            paths.append(filepath)
+
+        browser.close()
     return paths
 
 
