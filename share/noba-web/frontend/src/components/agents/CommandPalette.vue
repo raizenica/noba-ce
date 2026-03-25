@@ -65,6 +65,7 @@ const selectedTarget = ref('')
 const params         = ref({})
 const sending        = ref(false)
 const outputTabs     = ref({})     // hostname -> output text
+const pendingHosts   = ref(new Set()) // hosts currently waiting for result
 const activeTab      = ref('')
 
 // ── Derived ───────────────────────────────────────────────────────────────────
@@ -103,6 +104,7 @@ async function run() {
 
     for (const host of targets) {
       outputTabs.value[host] = 'Queued…'
+      pendingHosts.value.add(host)
       if (!(activeTab.value)) activeTab.value = host
       await post(`/api/agents/${encodeURIComponent(host)}/command`, {
         type: selectedType.value,
@@ -114,7 +116,7 @@ async function run() {
       setTimeout(() => pollResult(host), CMD_POLL_THIRD_MS)
     }
     emit('result', { targets, type: selectedType.value })
-  } catch { /* non-fatal — command dispatch failure handled by UI state */
+  } catch { /* non-fatal */
   } finally {
     sending.value = false
   }
@@ -133,6 +135,7 @@ async function pollResult(hostname) {
       else if (last.error)   output = `Error: ${last.error}`
       else output = JSON.stringify(last, null, 2)
       outputTabs.value = { ...outputTabs.value, [hostname]: output.trim() }
+      pendingHosts.value.delete(hostname)
     }
   } catch { /* silent */ }
 }
@@ -234,14 +237,18 @@ async function pollResult(hostname) {
 
     <!-- Output panel -->
     <div v-if="Object.keys(outputTabs).length > 0" class="cmd-output-panel">
-      <div class="cmd-output-tabs">
+      <div class="cmd-output-tabs" style="display:flex;gap:.3rem;margin-bottom:.4rem">
         <button
           v-for="(_, host) in outputTabs"
           :key="host"
           class="btn btn-xs"
-          :class="activeTab === host ? 'btn-primary' : ''"
+          :class="activeTab === host ? 'btn-primary' : 'btn-secondary'"
           @click="activeTab = host"
-        >{{ host }}</button>
+        >
+          {{ host }}
+          <i v-if="pendingHosts.has(host)" class="fas fa-spinner fa-spin" style="margin-left:.3rem;font-size:.65rem;opacity:.7"></i>
+          <span style="margin-left:.4rem;opacity:.4" @click.stop="delete outputTabs[host]; if(activeTab===host) activeTab=Object.keys(outputTabs)[0]||''">&times;</span>
+        </button>
       </div>
       <pre class="cmd-output-pre">{{ outputTabs[activeTab] || 'Waiting for result...' }}</pre>
     </div>

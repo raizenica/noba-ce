@@ -164,7 +164,24 @@ onMounted(() => {
       </h2>
       <div style="display:flex;gap:.4rem">
         <button
-          v-if="agents.length > 0"
+          v-if="authStore.isAdmin"
+          class="btn btn-xs btn-secondary"
+          title="Deploy new agent"
+          @click="showDeploy = true"
+        >
+          <i class="fas fa-satellite-dish" style="margin-right:.3rem"></i>Deploy
+        </button>
+      </div>
+    </div>
+
+    <!-- Selection Bar (Safety & Contextual actions) -->
+    <div
+      v-if="selectedAgents.size > 0 || agents.length > 0"
+      class="selection-bar"
+      :style="selectedAgents.size > 0 ? '' : 'border-color:transparent;background:transparent;box-shadow:none;padding:0;margin-bottom:.75rem'"
+    >
+      <div style="display:flex;align-items:center;gap:.8rem;flex:1">
+        <button
           class="btn btn-xs"
           :class="selectedAgents.size === agents.length ? 'btn-primary' : 'btn-secondary'"
           @click="selectAll"
@@ -172,21 +189,22 @@ onMounted(() => {
           <i class="fas" :class="selectedAgents.size === agents.length ? 'fa-check-square' : 'fa-square'"></i>
           {{ selectedAgents.size === agents.length ? 'Deselect All' : 'Select All' }}
         </button>
-        <div v-if="selectedAgents.size > 0" style="display:flex;gap:.4rem">
-          <button class="btn btn-xs btn-primary" @click="bulkUpdate" title="Update selected agents">
-            <i class="fas fa-sync-alt"></i> Update ({{ selectedAgents.size }})
-          </button>
-          <button v-if="authStore.isAdmin" class="btn btn-xs btn-danger" @click="bulkRemove" title="Remove selected agents">
-            <i class="fas fa-trash"></i> Remove ({{ selectedAgents.size }})
-          </button>
-        </div>
-        <button
-          v-if="authStore.isAdmin"
-          class="btn btn-xs btn-secondary"
-          title="Deploy new agent"
-          @click="showDeploy = true"
-        >
-          <i class="fas fa-satellite-dish" style="margin-right:.3rem"></i>Deploy
+        
+        <template v-if="selectedAgents.size > 0">
+          <div style="width:1px;height:16px;background:var(--border);margin:0 .2rem"></div>
+          <span style="font-weight:600;font-size:.85rem">
+            {{ selectedAgents.size }} agent{{ selectedAgents.size > 1 ? 's' : '' }} selected
+          </span>
+        </template>
+      </div>
+
+      <div v-if="selectedAgents.size > 0" style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-xs btn-primary" @click="bulkUpdate">
+          <i class="fas fa-sync-alt"></i> Update
+        </button>
+        <div style="width:1px;height:16px;background:var(--border);margin:0 .2rem"></div>
+        <button v-if="authStore.isAdmin" class="btn btn-xs btn-danger" @click="bulkRemove">
+          <i class="fas fa-trash"></i> Remove
         </button>
       </div>
     </div>
@@ -401,6 +419,32 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.selection-bar {
+  display: flex;
+  align-items: center;
+  padding: .6rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2), 0 0 8px var(--accent-glow);
+  animation: slide-down 0.2s ease-out;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.btn-link:hover {
+  color: var(--text);
+}
+@keyframes slide-down {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
 .bulk-check {
   width: 20px;
   height: 20px;

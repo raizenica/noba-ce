@@ -17,7 +17,9 @@ _agent_data: dict[str, dict] = {}
 _agent_data_lock = threading.Lock()
 _AGENT_MAX_AGE = 120  # Consider agent offline after 2 minutes
 _agent_commands: dict[str, list] = {}  # hostname -> pending commands
+_delivered_commands: dict[str, list] = {}  # hostname -> in-flight (delivered, awaiting result)
 _agent_cmd_results: dict[str, list] = {}  # hostname -> recent results
+_COMMAND_DELIVERY_TIMEOUT = 600  # 10 minutes to confirm delivery
 _agent_cmd_lock = threading.Lock()
 # Condition for result notification — consumers wait(), producers notify_all()
 _agent_cmd_ready = threading.Condition(_agent_cmd_lock)

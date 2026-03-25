@@ -19,9 +19,51 @@ const showRaw       = ref(false)
 const rawJson       = ref('')
 const rawError      = ref('')
 const canvasRef     = ref(null)
+const isDirty       = ref(false)
+
+// Panning
+const panX = ref(0)
+const panY = ref(0)
+const isPanning = ref(false)
+const lastMousePos = ref({ x: 0, y: 0 })
 
 // Context menu
 const ctxMenu = ref({ show: false, x: 0, y: 0, nodeId: null })
+
+function onCanvasMouseDown(e) {
+  if (e.target === canvasRef.value || e.target.classList.contains('wb-svg')) {
+    isPanning.value = true
+    lastMousePos.value = { x: e.clientX, y: e.clientY }
+  }
+}
+
+function onGlobalMouseMove(e) {
+  if (isPanning.value) {
+    const dx = e.clientX - lastMousePos.value.x
+    const dy = e.clientY - lastMousePos.value.y
+    panX.value += dx
+    panY.value += dy
+    lastMousePos.value = { x: e.clientX, y: e.clientY }
+  }
+}
+
+function onGlobalMouseUp() {
+  isPanning.value = false
+}
+
+// ── Lifecycle ──────────────────────────────────────────────────────────────
+import { useModalsStore } from '../../stores/modals'
+const modals = useModalsStore()
+
+async function handleClose() {
+  if (isDirty.value) {
+    const ok = await modals.confirm('You have unsaved changes in the workflow builder. Close anyway?')
+    if (!ok) return
+  }
+  emit('close')
+}
+
+defineExpose({ handleClose })
 
 // ── Initialise from modelValue ─────────────────────────────────────────────
 function initFromModel(val) {
@@ -39,6 +81,7 @@ function initFromModel(val) {
     return Math.max(m, isNaN(num) ? 0 : num)
   }, 0)
   nextId.value = maxId + 1
+  isDirty.value = false
 }
 
 // Only initialise once when the modal opens; don't re-init on every emitted
@@ -63,6 +106,7 @@ function emitGraph() {
     entry: entry.value,
   }
   lastEmitted = JSON.stringify(payload)
+  isDirty.value = true
   emit('update:modelValue', payload)
 }
 
@@ -248,7 +292,11 @@ const canvasH = computed(() => {
 const zoom = ref(1)
 function zoomIn()  { zoom.value = Math.min(2, +(zoom.value + 0.15).toFixed(2)) }
 function zoomOut() { zoom.value = Math.max(0.3, +(zoom.value - 0.15).toFixed(2)) }
-function zoomReset() { zoom.value = 1 }
+function zoomReset() { 
+  zoom.value = 1
+  panX.value = 0
+  panY.value = 0
+}
 function onWheel(e) { e.deltaY < 0 ? zoomIn() : zoomOut() }
 
 // ── Raw JSON import/export ─────────────────────────────────────────────────
@@ -296,6 +344,8 @@ function deleteFromCtx() {
 
 onMounted(() => {
   document.addEventListener('contextmenu', onGlobalCtx)
+  window.addEventListener('mousemove', onGlobalMouseMove)
+  window.addEventListener('mouseup', onGlobalMouseUp)
   // Bump edgeVersion after initial render so DOM-based port positions are available
   nextTick(() => { edgeVersion.value++ })
 })
@@ -306,7 +356,11 @@ watch([nodes, edges], () => {
   clearTimeout(_edgeTimer)
   _edgeTimer = setTimeout(() => { edgeVersion.value++ }, 50)
 }, { deep: true })
-onBeforeUnmount(() => { document.removeEventListener('contextmenu', onGlobalCtx) })
+onBeforeUnmount(() => { 
+  document.removeEventListener('contextmenu', onGlobalCtx)
+  window.removeEventListener('mousemove', onGlobalMouseMove)
+  window.removeEventListener('mouseup', onGlobalMouseUp)
+})
 </script>
 
 <template>
@@ -336,8 +390,9 @@ onBeforeUnmount(() => { document.removeEventListener('contextmenu', onGlobalCtx)
     <div class="wb-toolbar-right">
       <div v-if="!showRaw" class="wb-zoom-controls">
         <button class="wb-zoom-btn" @click="zoomOut" title="Zoom out"><i class="fas fa-search-minus"></i></button>
-        <span class="wb-zoom-label" role="button" tabindex="0" @click="zoomReset" @keydown.enter="zoomReset" @keydown.space.prevent="zoomReset" title="Reset zoom">{{ Math.round(zoom * 100) }}%</span>
+        <span class="wb-zoom-label" role="button" tabindex="0" @click="zoomReset" @keydown.enter="zoomReset" @keydown.space.prevent="zoomReset" title="Reset zoom/pan">{{ Math.round(zoom * 100) }}%</span>
         <button class="wb-zoom-btn" @click="zoomIn" title="Zoom in"><i class="fas fa-search-plus"></i></button>
+        <button class="wb-zoom-btn" @click="zoomReset" title="Reset view"><i class="fas fa-compress-arrows-alt"></i></button>
       </div>
       <button v-if="!showRaw" class="wb-toggle-btn" @click="switchToRaw">
         <i class="fas fa-code"></i> JSON
@@ -359,18 +414,19 @@ onBeforeUnmount(() => { document.removeEventListener('contextmenu', onGlobalCtx)
     v-if="!showRaw"
     ref="canvasRef"
     class="wb-canvas"
-    :style="{ minHeight: '500px' }"
+    :style="{ minHeight: '500px', cursor: isPanning ? 'grabbing' : 'auto' }"
     tabindex="0"
     @click="onCanvasClick"
     @keydown="onKeyDown"
     @keydown.escape="connectingFrom = null"
+    @mousedown="onCanvasMouseDown"
     @mouseup="onNodeMouseUp"
     @wheel.prevent="onWheel"
   >
-    <!-- Zoom wrapper -->
+    <!-- Zoom + Pan wrapper -->
     <div
       class="wb-zoom-layer"
-      :style="{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: canvasW + 'px', height: canvasH + 'px' }"
+      :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, transformOrigin: '0 0', width: canvasW + 'px', height: canvasH + 'px' }"
     >
     <!-- SVG edge layer -->
     <svg class="wb-svg" :width="canvasW" :height="canvasH">

@@ -53,8 +53,9 @@ class TestSettingsGet:
             assert resp.status_code == 200
             data = resp.json()
             assert data["siteName"] == "NOBA"
-            assert data["smtpPassword"] == "hunter2"
-            assert data["apiKey"] == "secret123"
+            # Secrets are masked for ALL roles (write-only)
+            assert data["smtpPassword"] == "***"
+            assert data["apiKey"] == "***"
 
 
 # ===========================================================================

@@ -30,6 +30,7 @@ from ..constants import (
 )
 from ..agent_store import (
     _agent_cmd_lock, _agent_cmd_ready, _agent_cmd_results, _agent_commands,
+    _delivered_commands, _COMMAND_DELIVERY_TIMEOUT,
     _agent_data, _agent_data_lock, _AGENT_MAX_AGE,
     _agent_stream_lines, _agent_stream_lines_lock, _STREAM_LINES_MAX,
     _agent_streams, _agent_streams_lock,
@@ -269,11 +270,39 @@ async def api_agent_report(request: Request):
     _store_agent_metrics(hostname, body)
 
     pending = []
+    now = time.time()
     with _agent_cmd_lock:
         if hostname in _agent_commands:
             pending = _agent_commands.pop(hostname)
+            # Track delivered commands for retry on failure
+            for cmd in pending:
+                cmd["delivered_at"] = now
+            _delivered_commands.setdefault(hostname, []).extend(pending)
+        # Confirm delivery for commands whose results have arrived
+        cmd_results = body.get("cmd_results", [])
+        if cmd_results and hostname in _delivered_commands:
+            confirmed_ids = {r.get("id") for r in cmd_results if isinstance(r, dict)}
+            _delivered_commands[hostname] = [
+                c for c in _delivered_commands[hostname]
+                if c.get("id") not in confirmed_ids
+            ]
+            if not _delivered_commands[hostname]:
+                del _delivered_commands[hostname]
+        # Re-queue commands that were delivered but never confirmed (timeout)
+        if hostname in _delivered_commands:
+            timed_out = [c for c in _delivered_commands[hostname]
+                         if now - c.get("delivered_at", 0) > _COMMAND_DELIVERY_TIMEOUT]
+            if timed_out:
+                logger.warning("Agent %s: %d commands timed out without confirmation",
+                               hostname, len(timed_out))
+                _delivered_commands[hostname] = [
+                    c for c in _delivered_commands[hostname] if c not in timed_out
+                ]
+                if not _delivered_commands[hostname]:
+                    del _delivered_commands[hostname]
+        # Clean stale pending queues
         stale_cmds = [h for h, cmds in _agent_commands.items()
-                      if cmds and cmds[0].get("queued_at", 0) < time.time() - 600]
+                      if cmds and cmds[0].get("queued_at", 0) < now - 600]
         for h in stale_cmds:
             del _agent_commands[h]
     logger.info("Agent report", extra={"hostname": hostname, "ip": body.get("_ip")})

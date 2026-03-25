@@ -181,6 +181,16 @@ async function save() {
 const title = computed(() =>
   props.mode === 'create' ? 'New Automation' : 'Edit Automation',
 )
+
+const workflowBuilderRef = ref(null)
+
+async function handleClose() {
+  if (form.value.type === 'workflow' && workflowTab.value === 'visual') {
+    await workflowBuilderRef.value?.handleClose()
+  } else {
+    emit('close')
+  }
+}
 </script>
 
 <template>
@@ -188,7 +198,7 @@ const title = computed(() =>
     :show="show"
     :title="title"
     :width="form.type === 'workflow' && workflowTab === 'visual' ? '1200px' : '560px'"
-    @close="emit('close')"
+    @close="handleClose"
   >
     <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem">
 
@@ -307,7 +317,7 @@ const title = computed(() =>
 
         <!-- Visual tab -->
         <div v-if="workflowTab === 'visual'" style="margin-top:.25rem">
-          <WorkflowBuilder v-model="workflowGraph" />
+          <WorkflowBuilder ref="workflowBuilderRef" v-model="workflowGraph" @close="emit('close')" />
         </div>
 
         <!-- Code tab -->

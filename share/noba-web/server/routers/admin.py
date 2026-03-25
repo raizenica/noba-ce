@@ -42,9 +42,8 @@ router = APIRouter()
 def api_settings_get(auth=Depends(_get_auth)):
     _, role = auth
     settings = read_yaml_settings()
-    if role != "admin":
-        return {k: ("***" if is_secret_key(k) else v) for k, v in settings.items()}
-    return settings
+    # Mask secrets for ALL roles including admin — secrets are write-only
+    return {k: ("***" if is_secret_key(k) else v) for k, v in settings.items()}
 
 
 @router.post("/api/settings")

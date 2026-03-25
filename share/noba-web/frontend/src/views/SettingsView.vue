@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent } from 'vue'
+import { ref, computed, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
@@ -7,6 +7,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
+const tabSearch = ref('')
 const tab = computed(() => route.params.tab || 'general')
 
 const tabs = [
@@ -22,6 +23,15 @@ const tabs = [
   { key: 'shortcuts',  label: 'Shortcuts',   icon: 'fa-keyboard' },
   { key: 'plugins',    label: 'Plugins',     icon: 'fa-puzzle-piece', admin: true },
 ]
+
+const filteredTabs = computed(() => {
+  if (!tabSearch.value.trim()) return tabs
+  const q = tabSearch.value.toLowerCase()
+  return tabs.filter(t => 
+    t.label.toLowerCase().includes(q) || 
+    t.key.toLowerCase().includes(q)
+  )
+})
 
 const tabComponents = {
   general:      defineAsyncComponent(() => import('../components/settings/GeneralTab.vue')),
@@ -54,19 +64,38 @@ const currentTabDef = computed(() => tabs.find(t => t.key === tab.value) || tabs
       Settings &mdash; {{ currentTabDef.label }}
     </h2>
 
-    <!-- Tab bar -->
-    <div class="tab-bar" style="margin-bottom:1.25rem;display:flex;flex-wrap:wrap;gap:.3rem">
-      <button
-        v-for="t in tabs"
-        :key="t.key"
-        class="btn btn-xs"
-        :class="{ 'btn-primary': tab === t.key }"
-        @click="navigateTab(t.key)"
-      >
-        <i class="fas" :class="t.icon" style="margin-right:.3rem"></i>
-        {{ t.label }}
-        <span v-if="t.admin" style="font-size:.55rem;opacity:.6;margin-left:.2rem">(admin)</span>
-      </button>
+    <!-- Tab bar with filter -->
+    <div style="margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.75rem">
+      <div class="reveal-wrap" style="max-width:300px">
+        <input
+          v-model="tabSearch"
+          type="text"
+          class="field-input"
+          placeholder="Filter settings..."
+          style="padding-left:2.2rem"
+        >
+        <i class="fas fa-search" style="position:absolute;left:.8rem;opacity:.3;font-size:.85rem"></i>
+        <button v-if="tabSearch" class="reveal-btn" @click="tabSearch = ''" style="right:.4rem">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="tab-bar" style="display:flex;flex-wrap:wrap;gap:.3rem">
+        <button
+          v-for="t in filteredTabs"
+          :key="t.key"
+          class="btn btn-xs"
+          :class="{ 'btn-primary': tab === t.key }"
+          @click="navigateTab(t.key)"
+        >
+          <i class="fas" :class="t.icon" style="margin-right:.3rem"></i>
+          {{ t.label }}
+          <span v-if="t.admin" style="font-size:.55rem;opacity:.6;margin-left:.2rem">(admin)</span>
+        </button>
+        <div v-if="filteredTabs.length === 0" style="padding:.4rem;color:var(--text-muted);font-size:.8rem;font-style:italic">
+          No matching categories found.
+        </div>
+      </div>
     </div>
 
     <!-- Tab content -->

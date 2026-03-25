@@ -157,6 +157,14 @@ watch(activeTab, (tab) => {
             {{ agent?.platform }} &middot; {{ agent?.arch }} &middot; v{{ agent?.agent_version || '?' }}
           </div>
         </div>
+        <button
+          class="btn btn-xs"
+          title="Refresh current tab"
+          :disabled="detailLoading || historyLoading || healLoading"
+          @click="activeTab === 'overview' ? fetchDetail() : activeTab === 'history' ? fetchHistory(historyMetric) : activeTab === 'healing' ? fetchHealOutcomes() : fetchDetail()"
+        >
+          <i class="fas fa-sync-alt" :class="{ 'fa-spin': detailLoading || historyLoading || healLoading }"></i>
+        </button>
         <span
           class="badge"
           :class="agent?.online ? 'bs' : 'bd'"
@@ -181,7 +189,7 @@ watch(activeTab, (tab) => {
         <!-- Meters -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.8rem">
           <!-- CPU -->
-          <div style="padding:.6rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+          <div style="padding:.6rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)" :title="`Current CPU usage: ${agent?.cpu_percent || 0}%`">
             <div style="font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">CPU</div>
             <div style="font-size:1.4rem;font-weight:700" :style="`color:${(agent?.cpu_percent||0)>90?'var(--danger)':(agent?.cpu_percent||0)>70?'var(--warning)':'var(--accent)'}`">
               {{ agent?.cpu_percent || 0 }}%
@@ -191,7 +199,7 @@ watch(activeTab, (tab) => {
             </div>
           </div>
           <!-- Memory -->
-          <div style="padding:.6rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+          <div style="padding:.6rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)" :title="`Current memory usage: ${agent?.mem_percent || 0}% (${Math.round((agent?.mem_total_mb||0)/1024*10)/10} GB total)`">
             <div style="font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">Memory</div>
             <div style="font-size:1.4rem;font-weight:700" :style="`color:${(agent?.mem_percent||0)>90?'var(--danger)':(agent?.mem_percent||0)>70?'var(--warning)':'var(--success)'}`">
               {{ agent?.mem_percent || 0 }}%

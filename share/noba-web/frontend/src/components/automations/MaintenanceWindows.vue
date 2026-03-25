@@ -348,18 +348,19 @@ onUnmounted(() => {
 
         <!-- Name -->
         <div>
-          <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">Name</label>
+          <label class="field-label">Name</label>
           <input
             v-model="formName"
             type="text"
+            class="field-input"
             placeholder="e.g. Nightly patching"
-            style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:.35rem .5rem;font-size:.82rem"
+            style="width:100%"
           />
         </div>
 
         <!-- Type toggle -->
         <div>
-          <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">Type</label>
+          <label class="field-label">Type</label>
           <div style="display:flex;gap:.3rem">
             <button
               class="btn btn-xs"
@@ -381,23 +382,25 @@ onUnmounted(() => {
         <!-- Recurring fields -->
         <template v-if="formType === 'recurring'">
           <div>
-            <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">
+            <label class="field-label">
               Schedule <span style="font-weight:400;color:var(--text-muted)">(cron expression)</span>
             </label>
             <input
               v-model="formSchedule"
               type="text"
+              class="field-input"
               placeholder="e.g. 0 2 * * 0  (Sundays at 02:00)"
-              style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:.35rem .5rem;font-size:.82rem;font-family:monospace"
+              style="width:100%;font-family:monospace"
             />
           </div>
           <div>
-            <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">Duration (minutes)</label>
+            <label class="field-label">Duration (minutes)</label>
             <input
               v-model.number="formDuration"
               type="number"
               min="1"
-              style="width:120px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:.35rem .5rem;font-size:.82rem"
+              class="field-input"
+              style="width:120px"
             />
           </div>
         </template>
@@ -405,32 +408,32 @@ onUnmounted(() => {
         <!-- One-off fields -->
         <template v-if="formType === 'one_off'">
           <div>
-            <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">Start</label>
+            <label class="field-label">Start</label>
             <input
               v-model="formStart"
               type="datetime-local"
-              style="background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:.35rem .5rem;font-size:.82rem"
+              class="field-input"
             />
           </div>
           <div>
-            <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">End</label>
+            <label class="field-label">End</label>
             <input
               v-model="formEnd"
               type="datetime-local"
-              style="background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:.35rem .5rem;font-size:.82rem"
+              class="field-input"
             />
           </div>
         </template>
 
         <!-- Suppress alerts -->
         <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer">
-          <input v-model="formSuppressAlerts" type="checkbox" />
+          <input v-model="formSuppressAlerts" type="checkbox" style="accent-color:var(--accent)" />
           <span>Suppress alerts during window</span>
         </label>
 
         <!-- Override autonomy -->
         <div>
-          <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:.25rem">Override Autonomy</label>
+          <label class="field-label">Override Autonomy</label>
           <select
             v-model="formOverrideAutonomy"
             class="field-select"
@@ -445,7 +448,7 @@ onUnmounted(() => {
 
         <!-- Auto-close alerts -->
         <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer">
-          <input v-model="formAutoClose" type="checkbox" />
+          <input v-model="formAutoClose" type="checkbox" style="accent-color:var(--accent)" />
           <span>Auto-close alerts when window ends</span>
         </label>
 

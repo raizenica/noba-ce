@@ -13,9 +13,19 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Frontend constants module** (`constants.js`) — Centralized 15 timing/limit values from stores and components.
 - **14 CSS utility classes** — Table cell, border, spacing, and typography utilities replacing 208 inline style attributes.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
-
 ### Improved
+- **Workflow builder dirty guard** — Implemented an "unsaved changes" warning in the `WorkflowBuilder`. Users are now prompted before closing the modal if modifications were made to the graph, preventing accidental data loss.
+- **Automation bulk action safety** — Standardized bulk actions (Enable, Disable, Delete) in the Automations view using the new Selection Bar pattern. Physically separates destructive actions from global navigation and filters.
+- **Agent bulk action safety** — Moved bulk actions (Update, Remove) into a dedicated, visually distinct Selection Bar in the Agents view. Separates destructive actions from the "Select All" button to prevent accidental mass deletions.
+- **Workflow canvas panning** — Implemented mouse-drag panning and a "Reset View" control in the `WorkflowBuilder`. Improves navigation for complex multi-node automation graphs.
+- **Settings search/filter** — Added a real-time filter to the Settings view, allowing users to quickly locate specific integration or system categories among 11+ tabs.
+- **Metric tooltips** — Added contextual hover hints to agent metrics (CPU, Memory, Disk) in the `AgentDetailModal`, providing immediate detail on current utilization and capacity.
+- **Modal accessibility & UX** — Added global Escape key listener and body scroll locking to all modals. Prevents background scrolling and ensures consistent keyboard interaction.
+- **Manual modal refresh** — Added a sync button to the `AgentDetailModal` header, allowing users to re-trigger data fetching for the active tab without re-opening the modal.
+- **Enhanced command feedback** — Host output tabs in the Command Palette now display activity spinners while commands are in flight, providing clearer feedback for broadcast operations.
+- **Form field standardization** — Refactored Maintenance Window forms to use global CSS classes, ensuring consistent styling and focus behavior across all management screens.
 - **Reliable metrics rollups** — Refactored `rollup_to_1m` and `rollup_to_1h` to be gap-aware. Background tasks now automatically identify and fill missing historical data points after server outages or high-load delays.
+...
 - **Mobile header optimization** — Collapsed the search bar and status pills on mobile viewports to prevent overcrowding and ensure critical controls remain accessible.
 - **Stalled collector awareness** — Added a warning banner to the header that appears if background data collection hangs, showing the time since the last successful refresh.
 - **Unified confirmations** — Standardized all destructive actions (delete, wipe, bulk toggle) to use the global `modals.confirm()` store, replacing local dialog components and improving UI consistency.

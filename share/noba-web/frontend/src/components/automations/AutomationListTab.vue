@@ -405,36 +405,51 @@ defineExpose({ fetchAutomations, fetchAutoStats, fetchWebhooks })
         >{{ tab }}</button>
       </template>
 
-      <button
-        v-if="filteredAutoList.length > 0"
-        class="btn btn-xs btn-secondary"
-        style="margin-left:.4rem"
-        @click="selectAllAutos"
-      >
-        <i class="fas" :class="selectedAutos.size === filteredAutoList.length ? 'fa-check-square' : 'fa-square'"></i>
-      </button>
-
-      <div v-if="selectedAutos.size > 0" style="display:flex;gap:.3rem;margin-left:.4rem">
-        <button class="btn btn-xs btn-primary" @click="bulkToggleAutomations(true)">Enable ({{ selectedAutos.size }})</button>
-        <button class="btn btn-xs" @click="bulkToggleAutomations(false)">Disable</button>
-        <button class="btn btn-xs btn-danger" @click="bulkDeleteAutomations">Delete</button>
-      </div>
-
       <input
         v-model="autoSearch"
         type="text"
+        class="field-input"
         placeholder="Search..."
-        style="
-          margin-left:auto;
-          background:var(--surface);
-          border:1px solid var(--border);
-          border-radius:4px;
-          color:var(--text);
-          padding:.25rem .5rem;
-          font-size:.8rem;
-          width:160px;
-        "
+        style="margin-left:auto;width:160px;height:28px;font-size:.75rem"
       />
+    </div>
+
+    <!-- Selection Bar -->
+    <div
+      v-if="selectedAutos.size > 0 || filteredAutoList.length > 0"
+      class="selection-bar"
+      :style="selectedAutos.size > 0 ? '' : 'border-color:transparent;background:transparent;box-shadow:none;padding:0;margin-bottom:.75rem'"
+    >
+      <div style="display:flex;align-items:center;gap:.8rem;flex:1">
+        <button
+          class="btn btn-xs"
+          :class="selectedAutos.size === filteredAutoList.length ? 'btn-primary' : 'btn-secondary'"
+          @click="selectAllAutos"
+        >
+          <i class="fas" :class="selectedAutos.size === filteredAutoList.length ? 'fa-check-square' : 'fa-square'"></i>
+          {{ selectedAutos.size === filteredAutoList.length ? 'Deselect All' : 'Select All' }}
+        </button>
+
+        <template v-if="selectedAutos.size > 0">
+          <div style="width:1px;height:16px;background:var(--border);margin:0 .2rem"></div>
+          <span style="font-weight:600;font-size:.85rem">
+            {{ selectedAutos.size }} automation{{ selectedAutos.size > 1 ? 's' : '' }} selected
+          </span>
+        </template>
+      </div>
+
+      <div v-if="selectedAutos.size > 0" style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-xs btn-primary" @click="bulkToggleAutomations(true)">
+          <i class="fas fa-check"></i> Enable
+        </button>
+        <button class="btn btn-xs btn-secondary" @click="bulkToggleAutomations(false)">
+          <i class="fas fa-ban"></i> Disable
+        </button>
+        <div style="width:1px;height:16px;background:var(--border);margin:0 .2rem"></div>
+        <button class="btn btn-xs btn-danger" @click="bulkDeleteAutomations">
+          <i class="fas fa-trash"></i> Delete
+        </button>
+      </div>
     </div>
 
     <!-- Loading state -->
@@ -910,6 +925,23 @@ defineExpose({ fetchAutomations, fetchAutoStats, fetchWebhooks })
   box-sizing: border-box;
 }
 .field-input:focus { outline: none; border-color: var(--accent); }
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  padding: .6rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2), 0 0 8px var(--accent-glow);
+  animation: slide-down 0.2s ease-out;
+}
+
+@keyframes slide-down {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
 
 .bulk-check {
   width: 20px;
