@@ -161,11 +161,21 @@ defineExpose({ fetchAuditLog })
 
     <!-- Pagination -->
     <div style="display:flex;gap:.3rem;align-items:center;margin-top:.5rem;font-size:.75rem">
-      <button class="btn btn-xs" :disabled="auditPage <= 1" @click="fetchAuditLog(auditPage - 1)">
+      <button
+        class="btn btn-xs"
+        :disabled="auditPage <= 1"
+        @click="fetchAuditLog(auditPage - 1)"
+        aria-label="Previous page"
+      >
         <i class="fas fa-chevron-left"></i>
       </button>
       <span>Page {{ auditPage }}</span>
-      <button class="btn btn-xs" :disabled="auditLog.length < auditPageSize" @click="fetchAuditLog(auditPage + 1)">
+      <button
+        class="btn btn-xs"
+        :disabled="auditLog.length < auditPageSize"
+        @click="fetchAuditLog(auditPage + 1)"
+        aria-label="Next page"
+      >
         <i class="fas fa-chevron-right"></i>
       </button>
     </div>

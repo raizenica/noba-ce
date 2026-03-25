@@ -25,10 +25,20 @@ const emit = defineEmits(['change'])
 <style scoped>
 .app-tab-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.4rem;
   margin-bottom: 1.25rem;
+  overflow-x: auto;
+  padding-bottom: 4px; /* Space for scrollbar if needed */
+  -webkit-overflow-scrolling: touch;
 }
+/* Hide scrollbar for cleaner look, but keep functionality */
+.app-tab-bar::-webkit-scrollbar { height: 3px; }
+.app-tab-bar::-webkit-scrollbar-track { background: transparent; }
+.app-tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.btn { white-space: nowrap; flex-shrink: 0; }
+
 .nav-badge {
   display: inline-flex;
   align-items: center;

@@ -153,10 +153,34 @@ watch(() => props.show, (v) => {
 
 // ── Save ──────────────────────────────────────────────────────────────────
 async function save() {
-  if (!form.value.name.trim()) { notify.addToast('Name is required', 'error'); return }
+  const name = form.value.name.trim()
+  if (!name) {
+    notify.addToast('Name is required', 'error')
+    return
+  }
+
+  // Type-specific validation
+  const type = form.value.type
+  if (type === 'script' && !configScript.value.trim()) {
+    notify.addToast('Script path is required', 'error')
+    return
+  }
+  if (type === 'webhook' && !configWebhook.value.trim()) {
+    notify.addToast('Webhook URL is required', 'error')
+    return
+  }
+  if (type === 'cron' && !configCron.value.trim()) {
+    notify.addToast('Cron expression is required', 'error')
+    return
+  }
+  if (type === 'alert' && !configAlert.value.trim()) {
+    notify.addToast('Alert condition is required', 'error')
+    return
+  }
+
   const payload = {
-    name:     form.value.name.trim(),
-    type:     form.value.type,
+    name,
+    type,
     config:   buildConfigObject(),
     schedule: form.value.schedule || null,
     enabled:  form.value.enabled,

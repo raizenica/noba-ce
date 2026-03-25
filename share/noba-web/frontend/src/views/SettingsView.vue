@@ -75,7 +75,7 @@ const currentTabDef = computed(() => tabs.find(t => t.key === tab.value) || tabs
           style="padding-left:2.2rem"
         >
         <i class="fas fa-search" style="position:absolute;left:.8rem;opacity:.3;font-size:.85rem"></i>
-        <button v-if="tabSearch" class="reveal-btn" @click="tabSearch = ''" style="right:.4rem">
+        <button v-if="tabSearch" class="reveal-btn" @click="tabSearch = ''" style="right:.4rem" aria-label="Clear search">
           <i class="fas fa-times"></i>
         </button>
       </div>
