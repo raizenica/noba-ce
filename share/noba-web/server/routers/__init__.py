@@ -4,6 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .admin import router as admin_router
+from .agent_commands import router as agent_commands_router
+from .agent_deploy import router as agent_deploy_router
+from .agent_terminal import router as agent_terminal_router
 from .agents import router as agents_router
 from .auth import router as auth_router
 from .automations import router as automations_router
@@ -26,6 +29,9 @@ api_router.include_router(admin_router)
 api_router.include_router(automations_router)
 api_router.include_router(integration_instances_router)
 api_router.include_router(integrations_router)
+api_router.include_router(agent_commands_router)
+api_router.include_router(agent_deploy_router)
+api_router.include_router(agent_terminal_router)
 api_router.include_router(agents_router)
 api_router.include_router(containers_router)
 api_router.include_router(monitoring_router)
