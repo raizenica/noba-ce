@@ -466,7 +466,7 @@ def get_omv(url: str, user: str, password: str) -> dict | None:
         return None
     try:
         base = url.rstrip("/")
-        with httpx.Client(timeout=6, follow_redirects=True) as omv_client:
+        with httpx.Client(timeout=6, follow_redirects=False) as omv_client:
             # Authenticate via JSON-RPC
             login_resp = omv_client.post(
                 f"{base}/rpc.php",
@@ -552,7 +552,7 @@ def get_homebridge(url: str, user: str, password: str) -> dict | None:
         return None
     try:
         base = url.rstrip("/")
-        with httpx.Client(timeout=4, follow_redirects=True) as hb_client:
+        with httpx.Client(timeout=4, follow_redirects=False) as hb_client:
             login_r = hb_client.post(
                 f"{base}/api/auth/login",
                 json={"username": user, "password": password},

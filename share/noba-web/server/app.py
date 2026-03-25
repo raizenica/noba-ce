@@ -47,6 +47,26 @@ def _safe_remove(path: str, allowed_dir: str) -> bool:
     return False
 
 
+def _sweep_stale_commands() -> None:
+    """Remove stale agent commands/delivered entries regardless of agent activity."""
+    from .agent_store import (
+        _agent_cmd_lock, _agent_commands, _delivered_commands, _COMMAND_DELIVERY_TIMEOUT,
+    )
+    import time as _t
+    now = _t.time()
+    with _agent_cmd_lock:
+        stale = [h for h, cmds in _agent_commands.items()
+                 if cmds and cmds[0].get("queued_at", 0) < now - 600]
+        for h in stale:
+            del _agent_commands[h]
+        stale_d = [h for h, cmds in _delivered_commands.items()
+                   if cmds and all(now - c.get("delivered_at", 0) > _COMMAND_DELIVERY_TIMEOUT for c in cmds)]
+        for h in stale_d:
+            del _delivered_commands[h]
+    if stale or stale_d:
+        logger.info("Swept %d stale command queues, %d stale delivery queues", len(stale), len(stale_d))
+
+
 async def _cleanup_loop() -> None:
     """Async cleanup loop — replaces the old thread-based version."""
     import asyncio as _aio
@@ -57,6 +77,8 @@ async def _cleanup_loop() -> None:
             try:
                 token_store.cleanup()
                 rate_limiter.cleanup()
+                # Sweep stale agent commands (agents may be offline)
+                _sweep_stale_commands()
                 _backoff = 0
             except Exception as e:
                 logger.warning("Cleanup tick failed: %s", e)

@@ -375,7 +375,7 @@ class RSSFeedWatcher:
 
     def _scan_feed(self, url, ET, httpx, initial=False) -> list[str]:  # noqa: N803
         try:
-            r = httpx.get(url, timeout=10, follow_redirects=True)
+            r = httpx.get(url, timeout=10, follow_redirects=False)
             r.raise_for_status()
             root = ET.fromstring(r.text)
             # Handle both RSS and Atom feeds

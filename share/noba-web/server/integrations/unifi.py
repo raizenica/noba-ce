@@ -43,7 +43,7 @@ def get_unifi_protect(url: str, user: str, password: str, *, verify_ssl=True) ->
         return None
     try:
         base = url.rstrip("/")
-        with httpx.Client(timeout=6, verify=verify_ssl, follow_redirects=True) as up_client:
+        with httpx.Client(timeout=6, verify=verify_ssl, follow_redirects=False) as up_client:
             login_r = up_client.post(
                 f"{base}/api/auth/login",
                 json={"username": user, "password": password},

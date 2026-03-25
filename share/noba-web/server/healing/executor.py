@@ -50,6 +50,10 @@ def _get_capability_manifest(hostname: str):
         return None
 
 
+_MAX_CONCURRENT_HEALS = 10
+_heal_semaphore = threading.Semaphore(_MAX_CONCURRENT_HEALS)
+
+
 class HealExecutor:
     """Execute heal actions asynchronously with condition-based verification."""
 
@@ -60,7 +64,11 @@ class HealExecutor:
         self, plan: HealPlan,
         on_complete: Callable[[HealOutcome], None],
     ) -> None:
-        """Non-blocking: spawns a daemon thread to run action + verify."""
+        """Non-blocking: spawns a daemon thread to run action + verify.
+
+        Concurrency is capped by _heal_semaphore to prevent thread
+        exhaustion during large-scale alert storms.
+        """
         threading.Thread(
             target=self._execute_and_verify,
             args=(plan, on_complete),
@@ -69,6 +77,24 @@ class HealExecutor:
         ).start()
 
     def _execute_and_verify(
+        self, plan: HealPlan,
+        on_complete: Callable[[HealOutcome], None],
+    ) -> None:
+        if not _heal_semaphore.acquire(timeout=30):
+            logger.warning("Heal concurrency limit reached, dropping action %s for %s",
+                           plan.action_type, plan.request.target)
+            on_complete(HealOutcome(
+                action_type=plan.action_type, target=plan.request.target,
+                success=False, verified=False, duration=0,
+                error="Concurrency limit reached",
+            ))
+            return
+        try:
+            self._do_execute_and_verify(plan, on_complete)
+        finally:
+            _heal_semaphore.release()
+
+    def _do_execute_and_verify(
         self, plan: HealPlan,
         on_complete: Callable[[HealOutcome], None],
     ) -> None:

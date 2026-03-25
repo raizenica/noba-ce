@@ -130,7 +130,7 @@ def _do_http_request(
             content=body,
             auth=auth,
             timeout=timeout,
-            follow_redirects=True,
+            follow_redirects=False,
         )
         elapsed = _time.monotonic() - t0
         out = r.text + f"\n--- HTTP {r.status_code} ({elapsed:.3f}s) ---"
