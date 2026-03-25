@@ -55,16 +55,17 @@ async function bulkToggleAutomations(enabled) {
   const label = enabled ? 'enable' : 'disable'
   if (!await modals.confirm(`Bulk ${label} ${targets.length} automations?`)) return
 
-  let success = 0
+  let success = 0, fail = 0
   for (const id of targets) {
     try {
       const { put } = useApi()
       await put(`/api/automations/${id}`, { enabled })
       success++
-    } catch { /* silent */ }
+    } catch { fail++ }
   }
 
   if (success) notify.addToast(`${success} automations ${label}d`, 'success')
+  if (fail) notify.addToast(`${fail} automations failed to ${label}`, 'error')
   selectedAutos.value.clear()
   await fetchAutomations()
 }
@@ -74,15 +75,16 @@ async function bulkDeleteAutomations() {
   if (!targets.length) return
   if (!await modals.confirm(`PERMANENTLY DELETE ${targets.length} automations?`)) return
 
-  let success = 0
+  let success = 0, fail = 0
   for (const id of targets) {
     try {
       await del(`/api/automations/${id}`)
       success++
-    } catch { /* silent */ }
+    } catch { fail++ }
   }
 
   if (success) notify.addToast(`Deleted ${success} automations`, 'success')
+  if (fail) notify.addToast(`${fail} automations failed to delete`, 'error')
   selectedAutos.value.clear()
   await fetchAutomations()
   await fetchAutoStats()

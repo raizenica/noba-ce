@@ -2,9 +2,11 @@
 import { ref } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { useSettingsStore } from '../../stores/settings'
+import { useNotificationsStore } from '../../stores/notifications'
 
 const { get } = useApi()
 const settingsStore = useSettingsStore()
+const notify = useNotificationsStore()
 
 const graylogQuery   = ref('')
 const graylogLoading = ref(false)
@@ -17,8 +19,9 @@ async function searchGraylog() {
       `/api/graylog/search?q=${encodeURIComponent(graylogQuery.value)}&hours=1`
     )
     graylogResults.value = data
-  } catch { /* silent */ }
-  finally { graylogLoading.value = false }
+  } catch (e) {
+    notify.addToast(e.message || 'Graylog search failed', 'error')
+  } finally { graylogLoading.value = false }
 }
 </script>
 

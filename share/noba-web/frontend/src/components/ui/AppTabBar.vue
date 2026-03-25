@@ -4,6 +4,12 @@ defineProps({
   active: { type: String, required: true },
 })
 const emit = defineEmits(['change'])
+
+function onTabChange(key) {
+  emit('change', key)
+  const content = document.querySelector('.app-content')
+  if (content) content.scrollTo({ top: 0, behavior: 'smooth' })
+}
 </script>
 
 <template>
@@ -13,7 +19,7 @@ const emit = defineEmits(['change'])
       :key="t.key"
       class="btn btn-xs"
       :class="active === t.key ? 'btn-primary' : 'btn-secondary'"
-      @click="emit('change', t.key)"
+      @click="onTabChange(t.key)"
     >
       <i v-if="t.icon" class="fas" :class="[t.icon, 'mr-xs']"></i>
       {{ t.label }}

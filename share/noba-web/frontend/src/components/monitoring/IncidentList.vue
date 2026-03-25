@@ -27,7 +27,9 @@ async function resolveIncident(id) {
     await post(`/api/incidents/${id}/resolve`)
     notif.addToast('Incident resolved', 'success')
     await fetchIncidents()
-  } catch { /* silent */ }
+  } catch (e) {
+    notif.addToast(e.message || 'Failed to resolve incident', 'error')
+  }
 }
 
 // ── Status incidents (war room) ───────────────────────────────────────────────
