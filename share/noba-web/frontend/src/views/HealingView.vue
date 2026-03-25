@@ -152,11 +152,23 @@ const approvalBadge = computed(() => store.pendingApprovals.length || 0)
 const maintenanceBadge = computed(() => store.activeMaintenance.length || 0)
 
 // ── Effectiveness summary ─────────────────────────────────────────────────────
+const RULE_LABELS = {
+  total: 'Total',
+  verified_count: 'Verified',
+  failed_count: 'Failed',
+  pending_count: 'Pending',
+  success_rate: 'Success Rate',
+}
+
 const effectivenessEntries = computed(() => {
   const eff = store.effectiveness
   if (!eff || typeof eff !== 'object') return []
   if (Array.isArray(eff)) return eff
-  return Object.entries(eff).map(([rule_id, stats]) => ({ rule_id, ...stats }))
+  return Object.entries(eff).map(([rule_id, stats]) => ({
+    rule_id,
+    display_name: RULE_LABELS[rule_id] || rule_id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    ...stats,
+  }))
 })
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -207,7 +219,7 @@ onUnmounted(() => {
             </thead>
             <tbody>
               <tr v-for="entry in effectivenessEntries" :key="entry.rule_id" class="border-b table-row-hover">
-                <td class="td-body" style="font-family:monospace;font-size:12px">{{ entry.rule_id || '\u2013' }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ entry.display_name || entry.rule_id || '\u2013' }}</td>
                 <td class="td-body-center">{{ entry.total || entry.count || 0 }}</td>
                 <td class="td-body-center" style="color:var(--success);font-weight:600">{{ entry.successes || entry.success || 0 }}</td>
                 <td class="td-body-center" style="color:var(--danger);font-weight:600">{{ entry.failures || entry.failed || 0 }}</td>

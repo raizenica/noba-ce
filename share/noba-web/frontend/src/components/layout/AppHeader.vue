@@ -74,7 +74,7 @@ onUnmounted(() => {
 
 const themes = [
   { value: 'auto', label: 'System' },
-  { value: 'default', label: 'Operator' },
+  { value: 'default', label: 'Command' },
   { value: 'catppuccin', label: 'Catppuccin' },
   { value: 'tokyo', label: 'Tokyo' },
   { value: 'gruvbox', label: 'Gruvbox' },

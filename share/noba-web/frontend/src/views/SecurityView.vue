@@ -42,7 +42,7 @@ const CIRCUMF  = 2 * Math.PI * RADIUS
 function scoreColor(score) {
   const s = score || 0
   if (s >= 80) return 'var(--success)'
-  if (s >= 50) return 'var(--warning)'
+  if (s >= 60) return 'var(--warning)'
   return 'var(--danger)'
 }
 
@@ -61,7 +61,7 @@ function scoreGrade(score) {
 
 function agentScoreClass(score) {
   if (score >= 80) return 'bs'
-  if (score >= 50) return 'bw'
+  if (score >= 60) return 'bw'
   return 'bd'
 }
 

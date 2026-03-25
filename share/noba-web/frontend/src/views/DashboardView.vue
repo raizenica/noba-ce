@@ -100,6 +100,21 @@ function dismissWelcome() {
 
 // ── Managed integration instances ────────────────────────────────────────────
 const managedInstances = ref([])
+const showEmptyIntegrations = ref(false)
+
+const activeInstances = computed(() =>
+  managedInstances.value.filter(inst => {
+    const d = getIntegrationData(inst.id)
+    return d && Object.keys(d).length > 0
+  })
+)
+
+const emptyInstances = computed(() =>
+  managedInstances.value.filter(inst => {
+    const d = getIntegrationData(inst.id)
+    return !d || Object.keys(d).length === 0
+  })
+)
 
 async function fetchManagedInstances() {
   try {
@@ -284,9 +299,9 @@ onUnmounted(() => {
         <!-- Admin-only -->
         <RecoveryCard    v-if="showCard('recovery')"                                        data-id="recovery" />
 
-        <!-- Managed Integration Cards -->
+        <!-- Managed Integration Cards (with data) -->
         <IntegrationCard
-          v-for="inst in managedInstances"
+          v-for="inst in activeInstances"
           :key="'int-'+inst.id"
           :instance="inst"
           :template="getCardTemplate(inst.platform)"
@@ -294,6 +309,30 @@ onUnmounted(() => {
           class="card"
           :data-id="'int-'+inst.id"
         />
+      </div>
+
+      <!-- Unconfigured integrations collapsed section -->
+      <div v-if="emptyInstances.length > 0" style="margin-top:1rem">
+        <button
+          class="btn btn-xs"
+          style="width:100%;justify-content:center;gap:.5rem;padding:.5rem;opacity:.7"
+          @click="showEmptyIntegrations = !showEmptyIntegrations"
+        >
+          <i class="fas" :class="showEmptyIntegrations ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+          {{ emptyInstances.length }} unconfigured integration{{ emptyInstances.length !== 1 ? 's' : '' }}
+          <span style="font-size:.7rem;opacity:.7">(no data)</span>
+        </button>
+        <div v-if="showEmptyIntegrations" class="grid" style="margin-top:.75rem">
+          <IntegrationCard
+            v-for="inst in emptyInstances"
+            :key="'int-'+inst.id"
+            :instance="inst"
+            :template="getCardTemplate(inst.platform)"
+            :data="getIntegrationData(inst.id)"
+            class="card"
+            :data-id="'int-'+inst.id"
+          />
+        </div>
       </div>
     </template>
   </div>

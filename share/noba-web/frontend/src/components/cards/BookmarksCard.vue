@@ -24,7 +24,7 @@ const parsedBookmarks = computed(() =>
 </script>
 
 <template>
-  <DashboardCard title="Homelab Links" icon="fas fa-bookmark" card-id="bookmarks">
+  <DashboardCard title="Quick Links" icon="fas fa-bookmark" card-id="bookmarks">
     <div class="bm-grid">
       <a
         v-for="b in parsedBookmarks"

@@ -13,7 +13,19 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Frontend constants module** (`constants.js`) — Centralized 15 timing/limit values from stores and components.
 - **14 CSS utility classes** — Table cell, border, spacing, and typography utilities replacing 208 inline style attributes.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
+### Fixed
+- **Memory progress bar** — Core System card now correctly displays memory percentage by falling back to the `memPercent` SSE field when the `memory` object is a pre-formatted string.
+
 ### Improved
+- **Dashboard integration cards** — Empty "No data available" integration cards are now collapsed into a single "N unconfigured integrations" button, drastically reducing scroll depth.
+- **Log severity coloring** — System log viewer now color-codes lines: errors in red, warnings in yellow, debug dimmed — making critical issues immediately visible.
+- **Healing table labels** — Effectiveness Summary table now shows human-friendly names (Total, Verified, Failed, Pending, Success Rate) instead of raw database column names.
+- **Security score consistency** — Unified color thresholds across aggregate donut and per-agent badges (green ≥80, yellow ≥60, red <60).
+- **Monitoring tab badges** — SLA, Incidents, and Endpoints tabs now show data count badges, indicating which tabs have content at a glance.
+- **Infrastructure service map** — Service Map cards now display CPU/RAM/uptime health indicators when available from the collector.
+- **Disk Health card** — Drive list is now collapsed by default with a "Show N drives" toggle, keeping the card compact while preserving detail on demand.
+- **Theme renamed** — Default theme renamed from "Operator" to "Command" to avoid confusion with the authentication role of the same name.
+- **Quick Links** — Renamed "Homelab Bookmarks/Links" to "Quick Links" across dashboard card, settings label, and visibility toggle to align with NOBA's production positioning.
 - **Automation form validation** — Added frontend validation to the automation modal to ensure required fields (script paths, URLs, cron) are populated before submission.
 - **Mobile horizontal tab bar** — Refactored navigation tabs to use a horizontally scrollable strip on small viewports, recovering vertical space and preventing button stacking.
 - **Accessibility hardening** — Added `aria-label` attributes to multiple icon-only buttons, including the settings search clear and audit log pagination controls.

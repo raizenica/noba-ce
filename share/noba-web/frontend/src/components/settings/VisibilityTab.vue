@@ -40,7 +40,7 @@ const visItems = [
   { key: 'logs',          label: 'System Logs' },
   { key: 'automations',   label: 'Automation Deck' },
   { key: 'actions',       label: 'Quick Actions' },
-  { key: 'bookmarks',     label: 'Homelab Links' },
+  { key: 'bookmarks',     label: 'Quick Links' },
   { key: 'proxmox',       label: 'Proxmox VE' },
   { key: 'adguard',       label: 'AdGuard Home' },
   { key: 'jellyfin',      label: 'Jellyfin' },

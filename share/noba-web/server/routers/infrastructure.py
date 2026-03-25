@@ -157,12 +157,27 @@ def api_service_map(auth=Depends(_get_auth)):
         "adguardUrl": ("adguard", "AdGuard", "dns"),
     }
 
+    # Core node health from local system stats
+    nodes[0]["cpu"] = round(stats.get("cpuPercent", 0), 1)
+    nodes[0]["mem"] = round(stats.get("memPercent", 0))
+    nodes[0]["uptime"] = stats.get("uptime", "")
+
     for cfg_key, (node_id, label, category) in integration_map.items():
         url = cfg.get(cfg_key, "")
         if url:
             data = stats.get(node_id)
             status = "online" if data and (isinstance(data, dict) and data.get("status") == "online") else "configured"
-            nodes.append({"id": node_id, "label": label, "type": category, "status": status})
+            node = {"id": node_id, "label": label, "type": category, "status": status}
+            if isinstance(data, dict):
+                if "cpu" in data:
+                    node["cpu"] = round(data["cpu"], 1)
+                if "memory" in data:
+                    node["mem"] = round(data["memory"])
+                elif "mem" in data:
+                    node["mem"] = round(data["mem"])
+                if "version" in data:
+                    node["version"] = data["version"]
+            nodes.append(node)
             edges.append({"from": "noba", "to": node_id})
 
     for svc in stats.get("services", []):

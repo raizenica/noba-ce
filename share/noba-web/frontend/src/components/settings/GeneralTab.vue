@@ -204,7 +204,7 @@ async function resetLayout() {
             placeholder="192.168.1.1,10.0.0.1">
         </div>
         <div>
-          <label class="field-label" for="s-bookmarks">Homelab Bookmarks</label>
+          <label class="field-label" for="s-bookmarks">Quick Links</label>
           <textarea id="s-bookmarks" class="field-input"
             v-model="settingsStore.data.bookmarksStr"
             style="height:72px;resize:vertical"

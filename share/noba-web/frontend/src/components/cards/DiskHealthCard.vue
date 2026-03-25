@@ -1,9 +1,10 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useDashboardStore } from '../../stores/dashboard'
 import DashboardCard from './DashboardCard.vue'
 
 const dashboard = useDashboardStore()
+const expanded = ref(false)
 
 const scrutiny = computed(() => dashboard.live.scrutiny || null)
 
@@ -13,6 +14,17 @@ const health = computed(() => {
   if (s.failed > 0) return 'fail'
   if (s.warn > 0) return 'warn'
   return 'ok'
+})
+
+const deviceList = computed(() => scrutiny.value?.device_list || [])
+const diskSummary = computed(() => {
+  const s = scrutiny.value
+  if (!s) return ''
+  const parts = [`${s.devices || 0} drives`]
+  if (s.healthy) parts.push(`${s.healthy} healthy`)
+  if (s.warn) parts.push(`${s.warn} warning`)
+  if (s.failed) parts.push(`${s.failed} failed`)
+  return parts.join(', ')
 })
 </script>
 
@@ -47,25 +59,35 @@ const health = computed(() => {
         >{{ (scrutiny.maxTemp || 0) }}°C</span>
       </div>
 
-      <div style="margin-top:.6rem;max-height:200px;overflow-y:auto">
-        <div
-          v-for="d in (scrutiny.device_list || [])"
-          :key="d.serial || d.name"
-          class="row"
-          style="font-size:.75rem"
+      <div v-if="deviceList.length > 0" style="margin-top:.6rem">
+        <button
+          class="btn btn-xs"
+          style="width:100%;justify-content:center;font-size:.65rem;padding:.25rem;opacity:.7"
+          @click="expanded = !expanded"
         >
-          <span class="row-label">
-            <i
-              class="fas fa-circle"
-              style="font-size:.4rem;margin-right:4px"
-              :style="d.status === 0 ? 'color:var(--success)' : d.status === 1 ? 'color:var(--warning)' : 'color:var(--danger)'"
-              aria-hidden="true"
-            ></i>
-            /dev/{{ d.name }}
-          </span>
-          <span class="row-val" style="font-size:.65rem;opacity:.8">
-            {{ d.model }}{{ d.temperature ? ' · ' + d.temperature + '°C' : '' }}
-          </span>
+          <i class="fas" :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'" style="margin-right:4px"></i>
+          {{ expanded ? 'Hide' : 'Show' }} {{ deviceList.length }} drives
+        </button>
+        <div v-if="expanded" style="max-height:200px;overflow-y:auto;margin-top:.4rem">
+          <div
+            v-for="d in deviceList"
+            :key="d.serial || d.name"
+            class="row"
+            style="font-size:.75rem"
+          >
+            <span class="row-label">
+              <i
+                class="fas fa-circle"
+                style="font-size:.4rem;margin-right:4px"
+                :style="d.status === 0 ? 'color:var(--success)' : d.status === 1 ? 'color:var(--warning)' : 'color:var(--danger)'"
+                aria-hidden="true"
+              ></i>
+              /dev/{{ d.name }}
+            </span>
+            <span class="row-val" style="font-size:.65rem;opacity:.8">
+              {{ d.model }}{{ d.temperature ? ' · ' + d.temperature + '°C' : '' }}
+            </span>
+          </div>
         </div>
       </div>
     </template>

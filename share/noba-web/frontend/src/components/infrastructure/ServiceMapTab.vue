@@ -36,7 +36,7 @@ defineExpose({ fetchServiceMap })
         <div
           v-for="node in serviceMap.nodes"
           :key="node.id"
-          style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:100px"
+          style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:120px"
           :style="node.id === 'noba' ? 'border-color:var(--accent);box-shadow:0 0 12px var(--accent-dim)' : ''"
         >
           <div style="font-weight:600;font-size:.85rem">{{ node.label || node.id }}</div>
@@ -45,7 +45,12 @@ defineExpose({ fetchServiceMap })
             :class="nodeStatusClass(node.status)"
             style="font-size:.6rem;margin-top:4px"
           >{{ node.status }}</span>
-          <div style="font-size:.6rem;color:var(--text-dim);margin-top:2px">{{ node.type }}</div>
+          <div v-if="node.cpu != null || node.mem != null" style="font-size:.6rem;color:var(--text-muted);margin-top:4px;display:flex;gap:6px;justify-content:center">
+            <span v-if="node.cpu != null">CPU {{ node.cpu }}%</span>
+            <span v-if="node.mem != null">RAM {{ node.mem }}%</span>
+          </div>
+          <div v-if="node.uptime" style="font-size:.55rem;color:var(--text-dim);margin-top:2px">up {{ node.uptime }}</div>
+          <div v-else style="font-size:.6rem;color:var(--text-dim);margin-top:2px">{{ node.type }}</div>
         </div>
       </div>
     </template>

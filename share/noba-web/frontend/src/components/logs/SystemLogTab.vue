@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { LOG_AUTO_REFRESH_MS } from '../../constants'
 
@@ -48,6 +48,19 @@ onUnmounted(() => {
   if (_logTimer) { clearInterval(_logTimer); _logTimer = null }
 })
 
+function logLineClass(line) {
+  const lower = line.toLowerCase()
+  if (/\berror\b|\bfail(ed|ure)?\b|\bcritical\b|\bpanic\b|\bfatal\b/.test(lower)) return 'log-error'
+  if (/\bwarn(ing)?\b/.test(lower)) return 'log-warn'
+  if (/\bdebug\b/.test(lower)) return 'log-debug'
+  return ''
+}
+
+const logLines = computed(() => {
+  if (!logContent.value) return []
+  return logContent.value.split('\n')
+})
+
 defineExpose({ fetchLog })
 </script>
 
@@ -77,6 +90,13 @@ defineExpose({ fetchLog })
       id="syslog-pre"
       class="log-pre"
       style="max-height:55vh;overflow:auto;margin:0;padding:12px;font-size:.75rem;white-space:pre-wrap;word-break:break-all"
-    >{{ logContent || 'No content.' }}</pre>
+    ><template v-if="logLines.length"><span v-for="(line, i) in logLines" :key="i" :class="logLineClass(line)">{{ line }}
+</span></template><template v-else>No content.</template></pre>
   </div>
 </template>
+
+<style scoped>
+.log-error { color: var(--danger); }
+.log-warn  { color: var(--warning); }
+.log-debug { opacity: .5; }
+</style>

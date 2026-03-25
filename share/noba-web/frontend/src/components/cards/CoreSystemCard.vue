@@ -29,14 +29,16 @@ const cpuTempClass = computed(() => {
 
 const memPercent = computed(() => {
   const m = memory.value
-  if (!m || !m.total) return 0
-  return Math.round(((m.used || 0) / m.total) * 100)
+  if (m && m.total) return Math.round(((m.used || 0) / m.total) * 100)
+  return dashboard.live.memPercent || 0
 })
 
 const memLabel = computed(() => {
   const m = memory.value
-  if (!m || !m.total) return '--'
-  return `${fmtBytes(m.used || 0)} / ${fmtBytes(m.total)}`
+  if (!m) return '--'
+  if (typeof m === 'string') return m
+  if (m.total) return `${fmtBytes(m.used || 0)} / ${fmtBytes(m.total)}`
+  return '--'
 })
 
 const health = computed(() => {

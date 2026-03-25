@@ -1,5 +1,6 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
+import { useApi } from '../composables/useApi'
 import AppTabBar from '../components/ui/AppTabBar.vue'
 
 import SlaTable        from '../components/monitoring/SlaTable.vue'
@@ -10,17 +11,40 @@ import GraylogTab      from '../components/monitoring/GraylogTab.vue'
 import InfluxDbTab     from '../components/monitoring/InfluxDbTab.vue'
 import CustomChartsTab from '../components/monitoring/CustomChartsTab.vue'
 
+const { get } = useApi()
 const activeTab = ref('sla')
 
-const tabs = [
-  { key: 'sla',         label: 'SLA',           icon: 'fa-percentage' },
-  { key: 'incidents',   label: 'Incidents',     icon: 'fa-exclamation-triangle' },
+// Lightweight badge counts
+const slaCount      = ref(0)
+const incidentCount = ref(0)
+const endpointCount = ref(0)
+
+async function fetchBadgeCounts() {
+  try {
+    const sla = await get('/api/sla/summary?hours=720')
+    slaCount.value = (sla && sla.rules) ? sla.rules.length : 0
+  } catch { /* silent */ }
+  try {
+    const inc = await get('/api/incidents?limit=100')
+    incidentCount.value = Array.isArray(inc) ? inc.filter(i => !i.resolved_at).length : 0
+  } catch { /* silent */ }
+  try {
+    const ep = await get('/api/endpoints')
+    endpointCount.value = Array.isArray(ep) ? ep.length : 0
+  } catch { /* silent */ }
+}
+
+onMounted(fetchBadgeCounts)
+
+const tabs = computed(() => [
+  { key: 'sla',         label: 'SLA',           icon: 'fa-percentage',         badge: slaCount.value || undefined },
+  { key: 'incidents',   label: 'Incidents',     icon: 'fa-exclamation-triangle', badge: incidentCount.value || undefined },
   { key: 'correlation', label: 'Correlation',   icon: 'fa-project-diagram' },
   { key: 'graylog',     label: 'Graylog',       icon: 'fa-search' },
   { key: 'influxdb',    label: 'InfluxDB',      icon: 'fa-chart-area' },
   { key: 'charts',      label: 'Custom Charts', icon: 'fa-chart-bar' },
-  { key: 'endpoints',   label: 'Endpoints',     icon: 'fa-network-wired' },
-]
+  { key: 'endpoints',   label: 'Endpoints',     icon: 'fa-network-wired',      badge: endpointCount.value || undefined },
+])
 
 const correlationRef  = ref(null)
 const influxRef       = ref(null)

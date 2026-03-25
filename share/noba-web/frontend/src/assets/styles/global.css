@@ -35,7 +35,7 @@
 
 @layer tokens {
     :root {
-        /* ── Default "Operator" Theme ── */
+        /* ── Default "Command" Theme ── */
         --bg:          #060a10;
         --surface:     #0c1420;
         --surface-2:   #111d2c;
