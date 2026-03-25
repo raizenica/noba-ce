@@ -58,7 +58,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": recommendations,
         }
     except Exception as exc:
-        logger.debug("health_score: monitoring_coverage failed: %s", exc)
+        logger.warning("health_score: monitoring_coverage failed: %s", exc)
         categories["monitoring_coverage"] = {
             "score": 10, "max": 10, "status": "ok",
             "detail": "N/A", "recommendations": [],
@@ -98,7 +98,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": cert_recs[:5],
         }
     except Exception as exc:
-        logger.debug("health_score: certificate_health failed: %s", exc)
+        logger.warning("health_score: certificate_health failed: %s", exc)
         categories["certificate_health"] = {
             "score": 10, "max": 10, "status": "ok",
             "detail": "N/A", "recommendations": [],
@@ -127,7 +127,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": update_recs[:5],
         }
     except Exception as exc:
-        logger.debug("health_score: update_status failed: %s", exc)
+        logger.warning("health_score: update_status failed: %s", exc)
         categories["update_status"] = {
             "score": 10, "max": 10, "status": "ok",
             "detail": "N/A", "recommendations": [],
@@ -159,7 +159,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": sla_recs[:5],
         }
     except Exception as exc:
-        logger.debug("health_score: uptime failed: %s", exc)
+        logger.warning("health_score: uptime failed: %s", exc)
         categories["uptime"] = {
             "score": 10, "max": 10, "status": "ok",
             "detail": "N/A", "recommendations": [],
@@ -205,7 +205,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": cap_recs[:5],
         }
     except Exception as exc:
-        logger.debug("health_score: capacity failed: %s", exc)
+        logger.warning("health_score: capacity failed: %s", exc)
         categories["capacity"] = {
             "score": 10, "max": 10, "status": "ok",
             "detail": "N/A", "recommendations": [],
@@ -254,7 +254,7 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
             "recommendations": backup_recs[:5],
         }
     except Exception as exc:
-        logger.debug("health_score: backup_freshness failed: %s", exc)
+        logger.warning("health_score: backup_freshness failed: %s", exc)
         categories["backup_freshness"] = {
             "score": 5, "max": 10, "status": "warning",
             "detail": "N/A", "recommendations": ["Could not evaluate backup status"],

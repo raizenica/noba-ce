@@ -265,7 +265,7 @@ class TestNewActionTypeDelegation:
 
         with patch.object(rem_module, "execute_action",
                           return_value={"success": True, "output": "ok"}) as mock_exec:
-            result = _execute_heal(action_cfg, "rule-backup", lambda: {})
+            _execute_heal(action_cfg, "rule-backup", lambda: {})
 
         mock_exec.assert_called_once()
         assert mock_exec.call_args[0][0] == "trigger_backup"
@@ -293,7 +293,7 @@ class TestNewActionTypeDelegation:
 
         with patch.object(rem_module, "execute_action",
                           return_value={"success": True, "output": "started"}) as mock_exec:
-            result = _execute_heal(action_cfg, "rule-playbook", lambda: {})
+            _execute_heal(action_cfg, "rule-playbook", lambda: {})
 
         mock_exec.assert_called_once()
         assert mock_exec.call_args[0][0] == "run_playbook"

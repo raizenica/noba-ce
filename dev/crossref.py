@@ -166,7 +166,7 @@ def check_settings_pipeline():
     print(f"\n{BLUE}[4] Settings pipeline{NC}")
 
     config_py = read(SERVER / "config.py")
-    yaml_config = read(SERVER / "yaml_config.py")
+    read(SERVER / "yaml_config.py")  # Check for references
     app_js = read(STATIC / "app.js")
 
     # Extract WEB_KEYS from config.py
@@ -280,7 +280,7 @@ def check_css_classes():
     """Spot-check key CSS classes used in HTML exist in style.css."""
     print(f"\n{BLUE}[6] HTML classes ↔ style.css{NC}")
 
-    html = read(HTML_FILE)
+    read(HTML_FILE)  # Check for references
     css = read(STATIC / "style.css")
 
     # Extract class names from CSS (simplified — looks for .classname patterns)

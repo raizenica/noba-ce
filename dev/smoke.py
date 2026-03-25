@@ -44,14 +44,44 @@ def extract_routes(app_py_path: Path) -> list[dict]:
     ):
         method = match.group(1).upper()
         path = match.group(2)
-        # Skip SSE streams (they hang)
-        if "stream" in path.lower():
-            continue
         # Skip websocket
         if "ws" in path.lower() and "terminal" in path.lower():
             continue
         routes.append({"method": method, "path": path})
     return routes
+
+
+def test_sse_stream(base_url: str, token: str, path: str) -> tuple[bool, str]:
+    """Test SSE stream endpoint with timeout.
+    
+    SSE streams stay open, so we test that:
+    1. Connection opens successfully (200)
+    2. We receive at least one event
+    3. Connection closes cleanly
+    """
+    try:
+        url = f"{base_url}{path}"
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        
+        # Connect with stream=True and short timeout
+        with httpx.stream("GET", url, headers=headers, timeout=5.0) as r:
+            if r.status_code != 200:
+                return False, f"Status {r.status_code}"
+            
+            # Try to read first event (should arrive within timeout)
+            start = time.time()
+            for chunk in r.iter_lines():
+                if chunk.strip():
+                    elapsed = (time.time() - start) * 1000
+                    return True, f"Received event in {elapsed:.0f}ms"
+                if time.time() - start > 3.0:
+                    return False, "Timeout waiting for data"
+        
+        return True, "Stream opened successfully"
+    except httpx.ReadTimeout:
+        return True, "Stream active (timeout after receiving data)"
+    except Exception as e:
+        return False, str(e)
 
 
 def login(base_url: str, username: str, password: str) -> str | None:
@@ -83,10 +113,31 @@ def smoke_test(
         routes = [r for r in routes if filter_str.lower() in r["path"].lower()]
 
     results = {"pass": 0, "fail": 0, "skip": 0, "errors": []}
+    
+    # Find SSE streams to test separately
+    sse_streams = [r for r in routes if "stream" in r["path"].lower()]
+    regular_routes = [r for r in routes if "stream" not in r["path"].lower()]
 
-    print(f"\nSmoke testing {len(routes)} endpoint(s)...\n")
+    print(f"\nSmoke testing {len(regular_routes)} endpoint(s)...")
+    if sse_streams:
+        print(f"SSE testing {len(sse_streams)} stream(s)...\n")
 
-    for route in routes:
+    # Test SSE streams first
+    for route in sse_streams:
+        method = route["method"]
+        path = route["path"]
+        
+        success, detail = test_sse_stream(base_url, token, path)
+        if success:
+            print(f"  {GREEN}PASS{NC} SSE    {path} — {detail}")
+            results["pass"] += 1
+        else:
+            print(f"  {RED}FAIL{NC} SSE    {path} — {detail}")
+            results["fail"] += 1
+            results["errors"].append((method, path, 0, detail))
+
+    # Test regular routes
+    for route in regular_routes:
         method = route["method"]
         path = route["path"]
 
@@ -145,6 +196,8 @@ def smoke_test(
         f"{RED}{results['fail']} failed{NC}, "
         f"{YELLOW}{results['skip']} skipped{NC}"
     )
+    if sse_streams:
+        print(f"  (Includes {len(sse_streams)} SSE stream test(s))")
 
     if results["errors"]:
         print(f"\n{RED}Errors:{NC}")

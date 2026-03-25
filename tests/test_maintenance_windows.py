@@ -180,27 +180,27 @@ class TestMaintenanceWindows:
     # ── field values in returned dicts ───────────────────────────────────────
 
     def test_suppress_alerts_default_true(self):
-        wid = self._insert()
+        self._insert()
         rows = self.db.list_maintenance_windows()
         assert rows[0]["suppress_alerts"] is True
 
     def test_suppress_alerts_false(self):
-        wid = self._insert(suppress_alerts=False)
+        self._insert(suppress_alerts=False)
         rows = self.db.list_maintenance_windows()
         assert rows[0]["suppress_alerts"] is False
 
     def test_override_autonomy_stored(self):
-        wid = self._insert(override_autonomy="manual_only")
+        self._insert(override_autonomy="manual_only")
         rows = self.db.list_maintenance_windows()
         assert rows[0]["override_autonomy"] == "manual_only"
 
     def test_auto_close_alerts_false_by_default(self):
-        wid = self._insert()
+        self._insert()
         rows = self.db.list_maintenance_windows()
         assert rows[0]["auto_close_alerts"] is False
 
     def test_created_by_stored(self):
-        wid = self._insert(created_by="engineer")
+        self._insert(created_by="engineer")
         rows = self.db.list_maintenance_windows()
         assert rows[0]["created_by"] == "engineer"
 

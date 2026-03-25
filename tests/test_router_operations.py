@@ -403,7 +403,7 @@ class TestJournal:
 
     def test_since_filter_valid(self, client, operator_headers):
         with patch("server.routers.operations.subprocess.run",
-                   return_value=_make_proc(0, "log\n", "")) as mock_run:
+                   return_value=_make_proc(0, "log\n", "")):
             resp = client.get("/api/journal?since=1+hour+ago", headers=operator_headers)
         assert resp.status_code == 200
 

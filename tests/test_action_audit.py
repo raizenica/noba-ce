@@ -153,7 +153,7 @@ class TestActionAuditDB:
         assert timestamps == sorted(timestamps, reverse=True)
 
     def test_null_optional_fields(self):
-        row_id = self.db.insert_action_audit(
+        self.db.insert_action_audit(
             trigger_type="manual",
             trigger_id=None,
             action_type="flush_dns",

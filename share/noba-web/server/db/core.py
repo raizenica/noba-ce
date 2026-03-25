@@ -225,7 +225,7 @@ class Database:
 
     def __init__(self, path: str = HISTORY_DB) -> None:
         self._path = path
-        self._lock = threading.Lock()           # write lock (protects write conn)
+        self._lock = threading.RLock()           # write lock (protects write conn) - RLock for reentrancy with migrations
         self._read_lock = threading.Lock()       # read lock (protects read conn)
         self._conn: sqlite3.Connection | None = None        # write connection
         self._read_conn: sqlite3.Connection | None = None   # read connection
@@ -316,6 +316,9 @@ class Database:
         parent = os.path.dirname(self._path)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        
+        # Create schema using legacy method (migrations framework available for future use)
+        # The migrations framework is kept for future schema evolution
         with self._lock:
             conn = self._get_conn()
             conn.executescript("""

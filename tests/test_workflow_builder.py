@@ -178,11 +178,9 @@ class TestLinearGraphWorkflow:
         edges = [_edge("n1", "n2"), _edge("n2", "n3")]
         config = {"nodes": nodes, "edges": edges, "entry": "n1"}
 
-        events: list = []
-
         def fake_submit(make_proc, automation_id=None, trigger=None,
                         triggered_by=None, on_complete=None):
-            proc = make_proc(0)
+            make_proc(0)
             if on_complete:
                 on_complete(0, "done")
             return 1
@@ -222,7 +220,7 @@ class TestLinearGraphWorkflow:
 
         def fake_submit(make_proc, automation_id=None, trigger=None,
                         triggered_by=None, on_complete=None):
-            proc = make_proc(0)
+            make_proc(0)
             if on_complete:
                 on_complete(0, "failed")
             return 1
@@ -387,8 +385,6 @@ class TestApprovalGate:
             "entry": "gate1",
         }
 
-        original_execute_delay = None
-
         def fake_delay(auto_id, nodes, edges, node, triggered_by, **_kw):
             executed.append(node["id"])
 
@@ -477,7 +473,7 @@ class TestDelayNode:
         def fake_sleep(s):
             sleep_calls.append(s)
 
-        with patch("server.workflow_engine._execute_node") as mock_next, \
+        with patch("server.workflow_engine._execute_node"), \
              patch("server.workflow_engine.time") as mock_time:
             mock_time.sleep.side_effect = fake_sleep
             _execute_delay_node("wf1", nodes, edges, node, "tester")
@@ -536,7 +532,7 @@ class TestNotificationNode:
 
         with patch("server.workflow_engine.read_yaml_settings",
                    return_value={"notifications": {"slack": {}}}), \
-             patch("server.workflow_engine._execute_node") as mock_next, \
+             patch("server.workflow_engine._execute_node"), \
              patch("server.workflow_engine.threading") as mock_threading:
             # Simulate thread start calling the target immediately
             def fake_thread_ctor(**kwargs):

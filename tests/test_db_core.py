@@ -151,7 +151,8 @@ class TestLockPatterns:
     def test_write_lock_exists(self):
         db, path = _make_db()
         try:
-            assert isinstance(db._lock, type(threading.Lock()))
+            # RLock allowed for reentrant locking during migrations
+            assert isinstance(db._lock, (type(threading.Lock()), type(threading.RLock())))
         finally:
             _cleanup(path)
 
@@ -166,20 +167,17 @@ class TestLockPatterns:
         """execute_write should acquire the write lock around the operation."""
         db, path = _make_db()
         try:
-            lock_was_held = []
+            lock_count_during_fn = []
 
             def fn(conn):
-                # Lock should already be held by execute_write
-                acquired = db._lock.acquire(blocking=False)
-                if acquired:
-                    db._lock.release()
-                    lock_was_held.append(False)
-                else:
-                    lock_was_held.append(True)
+                # Check lock count - should be > 0 if lock is held
+                # For RLock, owner will be current thread; for Lock, acquire would succeed
+                lock_count_during_fn.append(db._lock._is_owned())
                 return None
 
             db.execute_write(fn)
-            assert lock_was_held == [True]
+            # With RLock, _is_owned() returns True if current thread owns it
+            assert lock_count_during_fn == [True]
         finally:
             _cleanup(path)
 

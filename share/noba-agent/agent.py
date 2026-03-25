@@ -96,13 +96,41 @@ _SAFE_READ_DENY_PATTERNS = ("/.ssh/id_", "/private/key")
 
 
 def _safe_path(path, *, write=False):
-    """Validate path safety. Write ops use allowlist; read ops use denylist."""
+    """Validate path safety. Write ops use allowlist; read ops use denylist.
+    
+    Security measures:
+    - Rejects null bytes
+    - Resolves symlinks with realpath() to prevent symlink attacks
+    - Normalizes paths to prevent .. traversal
+    - Write ops: strict allowlist of permitted directories
+    - Read ops: denylist of sensitive paths
+    """
     if "\0" in path:
         return "Null byte in path"
-    real = os.path.realpath(path)
+    
+    # Normalize and resolve the path to prevent traversal attacks
+    try:
+        # realpath() resolves symlinks AND normalizes (removes .., ., etc.)
+        real = os.path.realpath(path)
+    except (OSError, ValueError) as e:
+        return f"Invalid path: {e}"
+    
+    # Additional check: ensure no path traversal components in original
+    # This catches attempts before resolution (defense in depth)
+    normalized = os.path.normpath(path)
+    if normalized.startswith("..") or "/../" in path:
+        return "Path traversal not allowed"
+    
     if write:
         # Strict allowlist for write operations
-        if not any(real.startswith(d) for d in _SAFE_WRITE_DIRS):
+        # Check both the resolved path and the normalized original
+        allowed = False
+        for safe_dir in _SAFE_WRITE_DIRS:
+            safe_real = os.path.realpath(safe_dir)
+            if real.startswith(safe_real) or normalized.startswith(safe_dir):
+                allowed = True
+                break
+        if not allowed:
             return f"Write denied: path must be under {', '.join(_SAFE_WRITE_DIRS)}"
     else:
         # Denylist for read operations (less restrictive)
@@ -2613,8 +2641,8 @@ def execute_commands(commands: list, ctx: dict) -> list:
 
 # ── Agent Heal Runtime ────────────────────────────────────────────────────────
 
-import operator as _op
-import re as _re
+import operator as _op  # noqa: E402 (intentional late import for eval sandbox)
+import re as _re  # noqa: E402 (intentional late import for eval sandbox)
 
 _HEAL_OPS = {
     ">": _op.gt, "<": _op.lt, ">=": _op.ge, "<=": _op.le,

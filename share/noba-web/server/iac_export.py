@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+import threading
+
+from .db.core import Database
 
 logger = logging.getLogger("noba")
 
@@ -16,7 +18,7 @@ logger = logging.getLogger("noba")
 
 def _get_agent_snapshot(
     agent_data: dict[str, dict],
-    agent_data_lock: Any,
+    agent_data_lock: threading.Lock,
     agent_max_age: int,
     hostname: str | None = None,
 ) -> dict[str, dict]:
@@ -62,7 +64,7 @@ def _extract_packages(data: dict) -> list[str]:
     return []
 
 
-def _extract_baselines(db: Any, hostname: str | None = None) -> list[dict]:
+def _extract_baselines(db: Database, hostname: str | None = None) -> list[dict]:
     """Get drift baselines, optionally filtered to a specific agent group."""
     try:
         baselines = db.list_baselines()
@@ -85,9 +87,9 @@ def _yaml_indent(text: str, indent: int = 0) -> str:
 # ── Ansible Playbook Generator ───────────────────────────────────────────────
 
 def generate_ansible(
-    db: Any,
+    db: Database,
     agent_data: dict[str, dict],
-    agent_data_lock: Any,
+    agent_data_lock: threading.Lock,
     agent_max_age: int = 120,
     hostname: str | None = None,
 ) -> str:
@@ -201,9 +203,9 @@ def generate_ansible(
 # ── Docker Compose Generator ────────────────────────────────────────────────
 
 def generate_docker_compose(
-    db: Any,
+    db: Database,
     agent_data: dict[str, dict],
-    agent_data_lock: Any,
+    agent_data_lock: threading.Lock,
     agent_max_age: int = 120,
     hostname: str | None = None,
 ) -> str:
@@ -265,9 +267,9 @@ def generate_docker_compose(
 # ── Shell Script Generator ──────────────────────────────────────────────────
 
 def generate_shell_script(
-    db: Any,
+    db: Database,
     agent_data: dict[str, dict],
-    agent_data_lock: Any,
+    agent_data_lock: threading.Lock,
     agent_max_age: int = 120,
     hostname: str | None = None,
 ) -> str:

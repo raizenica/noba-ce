@@ -59,7 +59,7 @@ class TestDependencyCRUD:
         assert deps[0]["auto_discovered"] is True
 
     def test_create_network_type(self):
-        dep_id = self.db.create_dependency("webserver", "dns",
+        self.db.create_dependency("webserver", "dns",
                                            dependency_type="network")
         deps = self.db.list_dependencies()
         assert deps[0]["dependency_type"] == "network"
@@ -83,7 +83,7 @@ class TestDependencyCRUD:
         assert ok is False
 
     def test_timestamps_set(self):
-        dep_id = self.db.create_dependency("app", "db")
+        self.db.create_dependency("app", "db")
         deps = self.db.list_dependencies()
         assert deps[0]["created_at"] is not None
         assert deps[0]["created_at"] > 0

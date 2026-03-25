@@ -267,7 +267,8 @@ def collect_stats(qs: dict) -> dict:
         if fut in _done:
             try:
                 status, is_user = fut.result(timeout=0)
-            except Exception:
+            except Exception as e:
+                logger.warning("Service status check failed for %s: %s", svc, e)
                 status, is_user = "error", False
         else:
             status, is_user = "error", False
@@ -282,8 +283,8 @@ def collect_stats(qs: dict) -> dict:
                 ip_r, up, ms = fut.result(timeout=0)
                 radar.append({"ip": ip_r, "status": "Up" if up else "Down", "ms": ms if up else 0})
                 continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Ping check failed for %s: %s", ip, e)
         radar.append({"ip": ip, "status": "Down", "ms": 0})
     stats["radar"] = radar
 
@@ -293,14 +294,14 @@ def collect_stats(qs: dict) -> dict:
         try:
             _, wan_up, _ = wan_fut.result(timeout=0)
             stats["netHealth"]["wan"] = "Up" if wan_up else "Down"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("WAN health check failed: %s", e)
     if lan_fut and lan_fut in _done:
         try:
             _, lan_up, _ = lan_fut.result(timeout=0)
             stats["netHealth"]["lan"] = "Up" if lan_up else "Down"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("LAN health check failed: %s", e)
 
     # ── Integration results ───────────────────────────────────────────────────
     from .integrations.base import ConfigError, TransientError
@@ -434,8 +435,8 @@ def collect_stats(qs: dict) -> dict:
                     "level": "danger",
                     "msg":   f"BMC Sentinel: {os_ip} OS offline, BMC ({bmc_ip}) reachable!",
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("BMC sentinel check failed for %s: %s", os_ip, e)
 
     evaluate_alert_rules(stats, read_yaml_settings)
 

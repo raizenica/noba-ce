@@ -35,7 +35,7 @@ class TestDryRun:
         db.get_trust_state = MagicMock(return_value=None)
         db.get_heal_success_rate = MagicMock(return_value=0.0)
         db.insert_heal_outcome = MagicMock()
-        result = simulate_heal_event(event, db=db)
+        simulate_heal_event(event, db=db)
         # insert_heal_outcome should NOT be called (no actual execution)
         db.insert_heal_outcome.assert_not_called()
 

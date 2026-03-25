@@ -217,7 +217,7 @@ def main():
     p_slow.add_argument("log", nargs="?", type=Path, default=TRACE_LOG)
     p_slow.add_argument("--threshold", type=float, default=500, help="Threshold in ms")
 
-    p_clear = sub.add_parser("clear", help="Clear trace log")
+    sub.add_parser("clear", help="Clear trace log")
 
     args = parser.parse_args()
 

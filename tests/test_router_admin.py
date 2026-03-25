@@ -287,7 +287,7 @@ class TestBackupStatus:
         assert "cloud" in data
 
     def test_with_state_files(self, client, admin_headers):
-        state_content = "exit_code=0\nsnapshot=20260301-030000\nduration=120\ntimestamp=2026-03-01T03:02:00\n"
+        # State file content mocked
         with patch("server.routers.admin._read_state_file",
                    side_effect=lambda path: {
                        "exit_code": "0", "snapshot": "20260301-030000",

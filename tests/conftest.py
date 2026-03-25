@@ -1,7 +1,13 @@
 """Pytest fixtures for NOBA backend tests."""
+from __future__ import annotations
+
+import hashlib
+import logging
 import os
 import sys
 import tempfile
+
+import pytest
 
 # Redirect HOME to an isolated temp tree BEFORE importing any noba modules
 _tmp = tempfile.mkdtemp(prefix="noba_test_")
@@ -12,7 +18,6 @@ os.environ["NOBA_CONFIG"] = os.path.join(_fake_home, ".config", "noba", "config.
 os.environ["PID_FILE"] = os.path.join(_tmp, "noba.pid")
 
 # Pre-create users.conf so UserStore doesn't generate a random password
-import hashlib
 _salt = "testsalt"
 _dk = hashlib.pbkdf2_hmac("sha256", b"Admin1234!", _salt.encode(), 200_000)
 _hash = f"pbkdf2:{_salt}:{_dk.hex()}"
@@ -25,11 +30,7 @@ with open(os.path.join(_cfg_dir, "users.conf"), "w") as f:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share", "noba-web"))
 
 # Suppress logging
-import logging
 logging.disable(logging.CRITICAL)
-
-
-import pytest
 
 
 @pytest.fixture()

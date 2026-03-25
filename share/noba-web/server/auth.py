@@ -303,19 +303,19 @@ class TokenStore:
                 expires_at=int(expires.timestamp()),
             )
         except Exception as exc:
-            logger.debug("TokenStore DB insert failed: %s", exc)
+            logger.warning("TokenStore DB insert failed: %s", exc)
 
     def _db_delete(self, token: str) -> None:
         try:
             _get_db().delete_token(_token_hash(token))
         except Exception as exc:
-            logger.debug("TokenStore DB delete failed: %s", exc)
+            logger.warning("TokenStore DB delete failed: %s", exc)
 
     def _db_delete_by_hash(self, token_hash: str) -> None:
         try:
             _get_db().delete_token(token_hash)
         except Exception as exc:
-            logger.debug("TokenStore DB delete_by_hash failed: %s", exc)
+            logger.warning("TokenStore DB delete_by_hash failed: %s", exc)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -338,7 +338,7 @@ class TokenStore:
             if loaded:
                 logger.info("TokenStore: loaded %d token(s) from DB", loaded)
         except Exception as exc:
-            logger.debug("TokenStore load_from_db failed: %s", exc)
+            logger.warning("TokenStore load_from_db failed: %s", exc)
 
     _MAX_TOKENS = 10_000  # safety cap — force cleanup if exceeded
 
@@ -387,7 +387,7 @@ class TokenStore:
                     self._tokens[token] = (row["username"], row["role"], expires)
                 return row["username"], row["role"]
         except Exception as exc:
-            logger.debug("TokenStore DB fallback failed: %s", exc)
+            logger.warning("TokenStore DB fallback failed: %s", exc)
         # Redis fallback
         from .cache import cache as _cache  # noqa: PLC0415
 
@@ -469,7 +469,7 @@ class TokenStore:
         try:
             _get_db().cleanup_tokens()
         except Exception as exc:
-            logger.debug("TokenStore DB cleanup failed: %s", exc)
+            logger.warning("TokenStore DB cleanup failed: %s", exc)
 
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
