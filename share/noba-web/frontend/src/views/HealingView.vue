@@ -459,24 +459,24 @@ onUnmounted(() => {
                 <th class="th-left">Target</th>
                 <th class="th-left">Action</th>
                 <th class="th-center">Step</th>
-                <th class="th-left">Trust</th>
+                <th class="th-left">Trigger</th>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="row in store.pendingApprovals"
-                :key="row.id || (row.rule_id + row.ts)"
+                :key="row.id"
                 class="border-b table-row-hover" style="transition:background .15s"
               >
-                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.ts) }}</td>
-                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.rule_id || '\u2013' }}</td>
+                <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.requested_at) }}</td>
+                <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.automation_id || row.rule_id || '\u2013' }}</td>
                 <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
                 <td class="td-body">
                   <span class="badge ba">{{ row.action_type || '\u2013' }}</span>
                 </td>
                 <td class="td-body-center">{{ row.escalation_step ||0 }}</td>
                 <td class="td-body">
-                  <span class="badge bw">{{ row.trust_level }}</span>
+                  <span class="badge bw">{{ row.trigger || 'manual' }}</span>
                 </td>
               </tr>
             </tbody>

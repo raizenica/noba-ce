@@ -20,6 +20,8 @@ All notable changes to NOBA Command Center are documented in this file.
 - **GPU model `<br>` literal** — Backend no longer injects HTML `<br>` into GPU model string; frontend uses `white-space: pre-line` for multi-GPU line breaks.
 - **Pi-hole unauthorized state** — Pi-hole card now shows a clean "API Key Required" badge with a settings link instead of rendering broken empty metric boxes with raw JSON errors.
 - **Tailscale "localhost" names** — Devices reporting `HostName: "localhost"` (Android/TV devices) now fall back to `DNSName` for proper identification (e.g., "samsung-sm-s938b", "google-tv-streamer-1").
+- **Infrastructure Services tab empty** — Collector now reads `monitoredServices` from YAML config as fallback when SSE query params don't include the service list.
+- **Healing approval timestamps** — Approvals tab now correctly maps `requested_at` field from the API instead of the non-existent `ts` field. Also fixed column header "Trust" → "Trigger" and field mapping for `automation_id`.
 
 ### Improved
 - **Dashboard integration cards** — Empty "No data available" integration cards are now collapsed into a single "N unconfigured integrations" button, drastically reducing scroll depth.

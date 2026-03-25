@@ -59,7 +59,8 @@ def collect_stats(qs: dict) -> dict:
         v = qs.get(key, [""])
         return v[0] if v else ""
 
-    svc_list  = [s.strip() for s in _qs0("services").split(",") if s.strip()]
+    svc_raw   = _qs0("services") or cfg.get("monitoredServices", "")
+    svc_list  = [s.strip() for s in svc_raw.split(",") if s.strip()]
     ip_list   = [ip.strip() for ip in _qs0("radar").split(",") if ip.strip()]
     ph_url    = cfg.get("piholeUrl",  "") or _qs0("pihole")
     ph_tok    = cfg.get("piholeToken","") or _qs0("piholetok")
