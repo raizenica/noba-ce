@@ -3,7 +3,6 @@ import { computed } from 'vue'
 
 const props = defineProps({
   node: { type: Object, default: null },  // selected node data (null = nothing selected)
-  workflow: { type: Object, default: () => ({}) },  // full workflow context
 })
 
 const emit = defineEmits(['update', 'delete', 'close'])

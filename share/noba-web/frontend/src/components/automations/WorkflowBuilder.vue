@@ -188,7 +188,7 @@ onBeforeUnmount(() => { document.removeEventListener('contextmenu', onGlobalCtx)
         <div v-if="nodes.length === 0" class="wb-empty"><i class="fas fa-project-diagram"></i><p>No nodes yet — use the toolbar above to add your first node.</p></div>
       </div>
     </div>
-    <WorkflowNodeConfig v-if="selectedNodeObj" :node="selectedNodeObj" :workflow="rawSnapshot" @update="updateNode" @delete="deleteNode" @close="selectedNode = null" />
+    <WorkflowNodeConfig v-if="selectedNodeObj" :node="selectedNodeObj" @update="updateNode" @delete="deleteNode" @close="selectedNode = null" />
   </div>
 
   <!-- Footer hint -->
