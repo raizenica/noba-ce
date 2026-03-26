@@ -35,15 +35,13 @@ async function svcAction(svc, action) {
 }
 
 function statusClass(svc) {
-  if (svc.active === 'active' || svc.sub === 'running') return 'bs'
-  if (svc.active === 'failed') return 'bd'
+  if (svc.status === 'active') return 'bs'
+  if (svc.status === 'failed' || svc.status === 'error') return 'bd'
   return 'bw'
 }
 
 function statusLabel(svc) {
-  if (svc.sub === 'running') return 'running'
-  if (svc.active) return svc.active
-  return 'unknown'
+  return svc.status || 'unknown'
 }
 </script>
 
@@ -81,7 +79,7 @@ function statusLabel(svc) {
                   class="btn btn-xs"
                   title="Start"
                   @click="svcAction(svc, 'start')"
-                  :disabled="svc.sub === 'running'"
+                  :disabled="svc.status === 'active'"
                 >
                   <i class="fas fa-play"></i>
                 </button>
@@ -89,7 +87,7 @@ function statusLabel(svc) {
                   class="btn btn-xs btn-danger"
                   title="Stop"
                   @click="svcAction(svc, 'stop')"
-                  :disabled="svc.sub !== 'running'"
+                  :disabled="svc.status !== 'active'"
                 >
                   <i class="fas fa-stop"></i>
                 </button>

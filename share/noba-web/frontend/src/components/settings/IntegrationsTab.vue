@@ -7,7 +7,7 @@ import { useModalsStore } from '../../stores/modals'
 import IntegrationSetup from './IntegrationSetup.vue'
 
 const settingsStore = useSettingsStore()
-const { get, del: apiDel } = useApi()
+const { get, post, del: apiDel } = useApi()
 const notifications = useNotificationsStore()
 const modals = useModalsStore()
 
@@ -103,6 +103,23 @@ async function save() {
     saveMsg.value = 'Save failed.'
   } finally {
     saving.value = false
+  }
+}
+
+const testingAi = ref(false)
+const aiTestMsg = ref('')
+
+async function testAiConnection() {
+  testingAi.value = true
+  aiTestMsg.value = ''
+  try {
+    const data = await post('/api/ai/test', {})
+    aiTestMsg.value = '✓ ' + (data.response || 'Connected')
+  } catch (e) {
+    aiTestMsg.value = '✗ ' + (e.message || 'Connection failed')
+  } finally {
+    testingAi.value = false
+    setTimeout(() => { aiTestMsg.value = '' }, 5000)
   }
 }
 
@@ -1398,7 +1415,7 @@ const cats = [
         <div class="field-2" style="margin-top:.75rem">
           <div>
             <label class="field-label">Max Tokens</label>
-            <input class="field-input" type="number" v-model.number="settingsStore.data.llmMaxTokens" min="256" max="32768" step="256">
+            <input class="field-input" type="number" v-model.number="settingsStore.data.llmMaxTokens" min="256" max="32768" step="256" placeholder="4096">
           </div>
           <div>
             <label class="field-label">Temperature</label>
@@ -1414,12 +1431,22 @@ const cats = [
     </template>
 
     <!-- Save -->
-    <div style="margin-top:1.25rem;display:flex;gap:.75rem;align-items:center">
+    <div style="margin-top:1.25rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
       <button class="btn btn-primary" :disabled="saving" @click="save">
         <i class="fas" :class="saving ? 'fa-spinner fa-spin' : 'fa-check'"></i>
         {{ saving ? 'Saving…' : 'Save & Apply' }}
       </button>
+      <button
+        v-if="intCat === 'ai' && settingsStore.data.llmEnabled"
+        class="btn"
+        :disabled="testingAi"
+        @click="testAiConnection"
+      >
+        <i class="fas" :class="testingAi ? 'fa-spinner fa-spin' : 'fa-plug'"></i>
+        {{ testingAi ? 'Testing…' : 'Test Connection' }}
+      </button>
       <span v-if="saveMsg" style="font-size:.8rem;color:var(--text-muted)">{{ saveMsg }}</span>
+      <span v-if="aiTestMsg" style="font-size:.8rem" :style="{ color: aiTestMsg.startsWith('✓') ? 'var(--success)' : 'var(--danger)' }">{{ aiTestMsg }}</span>
     </div>
   </div>
 </template>

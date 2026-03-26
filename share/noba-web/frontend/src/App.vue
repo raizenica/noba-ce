@@ -80,6 +80,9 @@ onMounted(async () => {
       dashboard.connectSse()
     }
   }
+  if (!auth.authenticated) {
+    router.push('/login')
+  }
 })
 
 onUnmounted(() => {
@@ -110,7 +113,7 @@ watch(sidebarCollapsed, (val) => {
 <template>
   <div
     class="app-layout"
-    :class="{ 'sidebar-collapsed': sidebarCollapsed }"
+    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'no-sidebar': !auth.authenticated }"
     :data-theme="settings.preferences.theme || 'default'"
   >
     <template v-if="auth.authenticated">

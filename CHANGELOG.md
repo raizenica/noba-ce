@@ -22,6 +22,9 @@ All notable changes to NOBA Command Center are documented in this file.
 - **`.dockerignore`** — Excludes `.git`, `node_modules`, `__pycache__`, `tests/`, `.venv` from Docker build context.
 
 ### Fixed
+- **Services tab showing "unknown" for all services** — `ServiceList.vue` was reading `svc.active`/`svc.sub` (systemd raw fields) but the SSE collector sends `svc.status`. Fixed to use `svc.status` throughout status badge, class, and button disabled logic. Also fixed a service worker cache version bump (`noba-v4` → `noba-v5`) and deployment sync issue where the installed server served stale pre-build assets.
+- **Login page layout collapsed to 220px** — App layout grid was auto-placing the unauthenticated router-view into the sidebar column. Added `'no-sidebar'` class binding on `App.vue` when unauthenticated, and an explicit `router.push('/login')` fallback in `onMounted` for fresh-load cases.
+- **AI / LLM Max Tokens field blank** — Added `placeholder="4096"` to the Max Tokens input so users see the default value when their saved config doesn't include the key.
 - **Proxmox snapshot and console buttons unresponsive** — Dashboard Proxmox card buttons now call correct API endpoints (`/api/proxmox/nodes/{node}/vms/{vmid}/snapshot` and `/api/proxmox/nodes/{node}/vms/{vmid}/console`). Added toast notifications for feedback and permission checks (admin for snapshots, operator for console).
 - **Token persistence failures invisible** — Token DB operations (insert, delete, load, cleanup) now logged as `warning` instead of `debug`. Critical authentication failures now visible in production logs.
 - **Health score computation failures silent** — Health category computations (monitoring, certificates, updates, uptime, capacity, backup) now logged as `warning` instead of `debug`. Operators can now detect degraded monitoring.
@@ -38,6 +41,9 @@ All notable changes to NOBA Command Center are documented in this file.
 - **Security findings deduplication** — Re-scans now replace old findings for the host instead of appending, preventing duplicated entries in the findings table.
 - **HTTPException guards** — Added `except HTTPException: raise` before generic `except Exception` across all 11 routers (79 locations) to prevent swallowing HTTP errors.
 - **Blocking docker commands** — Wrapped remaining sync subprocess calls in `routers/containers.py` with `asyncio.to_thread()` to avoid blocking the FastAPI event loop.
+
+### Added
+- **AI / LLM Test Connection button** — Settings > Integrations > AI / LLM now shows a "Test Connection" button (when AI is enabled) that calls `/api/ai/test` and displays a success/failure message inline. Lets operators verify Ollama/Anthropic/OpenAI connectivity without leaving the settings page.
 
 ### Improved
 - **Type safety** — Replaced `Any` types with proper `Database` and `threading.Lock` types in `iac_export.py` for better IDE support and type checking.

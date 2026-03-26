@@ -1,4 +1,4 @@
-const CACHE_NAME = 'noba-v4'
+const CACHE_NAME = 'noba-v5'
 const STATS_CACHE = 'noba-stats'
 
 // Install — cache shell assets
