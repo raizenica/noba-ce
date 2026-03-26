@@ -87,8 +87,8 @@ async def agent_rdp_ws(hostname: str, ws: WebSocket):
             data = await ws.receive_json()
             msg_type = data.get("type", "")
 
-            if msg_type == "rdp_input":
-                # Only operators/admins may inject input
+            if msg_type in ("rdp_input", "rdp_clipboard_paste", "rdp_clipboard_get"):
+                # Only operators/admins may inject input or use the clipboard bridge
                 if role in ("operator", "admin"):
                     with _agent_ws_lock:
                         agent_ws = _agent_websockets.get(hostname)

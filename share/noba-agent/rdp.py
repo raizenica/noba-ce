@@ -914,6 +914,91 @@ def _rdp_encode_frame(width: int, height: int, rgb_bytes: bytes, quality: int = 
     return _b64.b64encode(png).decode("ascii")
 
 
+def _rdp_clipboard_env() -> tuple:
+    """Return (env, preexec_fn) for running clipboard tools as the desktop user."""
+    uid, gid, home, _, _ = _rdp_display_owner()
+    env = os.environ.copy()
+    env["HOME"] = home
+    env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+    env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    preexec_fn = None
+    if os.getuid() == 0 and uid != 0:
+        _uid, _gid = uid, gid
+
+        def preexec_fn():
+            os.setgid(_gid)
+            os.setuid(_uid)
+
+    return env, preexec_fn
+
+
+def _rdp_clipboard_get() -> str:
+    """Read the active desktop clipboard and return as a string."""
+    env, preexec_fn = _rdp_clipboard_env()
+    if _PLATFORM == "linux":
+        for cmd in (["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"],
+                    ["xsel", "--clipboard", "--output"]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, timeout=3,
+                                   env=env, preexec_fn=preexec_fn)
+                if r.returncode == 0:
+                    return r.stdout.decode("utf-8", errors="replace")
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+    elif _PLATFORM == "windows":
+        try:
+            r = subprocess.run(["powershell", "-noprofile", "-c", "Get-Clipboard"],
+                               capture_output=True, timeout=3)
+            return r.stdout.decode("utf-8", errors="replace").rstrip("\r\n")
+        except Exception:
+            pass
+    elif _PLATFORM == "darwin":
+        try:
+            r = subprocess.run(["pbpaste"], capture_output=True, timeout=3)
+            return r.stdout.decode("utf-8", errors="replace")
+        except Exception:
+            pass
+    return ""
+
+
+def _rdp_clipboard_paste(text: str) -> None:
+    """Set the remote clipboard to text and inject Ctrl+V to paste it."""
+    env, preexec_fn = _rdp_clipboard_env()
+    if _PLATFORM == "linux":
+        for cmd, stdin in (
+            (["wl-copy", "--"], None),
+            (["xclip", "-selection", "clipboard"], text.encode()),
+            (["xsel", "--clipboard", "--input"], text.encode()),
+        ):
+            try:
+                kw = {"input": stdin if stdin is not None else text.encode()}
+                subprocess.run(cmd, timeout=3, check=False,
+                               env=env, preexec_fn=preexec_fn, **kw)
+                break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+    elif _PLATFORM == "windows":
+        try:
+            subprocess.run(["powershell", "-noprofile", "-c",
+                            f"Set-Clipboard -Value {repr(text)}"],
+                           timeout=3, check=False)
+        except Exception:
+            pass
+    elif _PLATFORM == "darwin":
+        try:
+            subprocess.run(["pbcopy"], input=text.encode(), timeout=3, check=False)
+        except Exception:
+            pass
+    # Inject Ctrl+V to trigger paste in the focused application
+    for evt in (
+        {"event": "keydown", "keycode": 17},   # Ctrl press
+        {"event": "keydown", "keycode": 86},   # V press
+        {"event": "keyup",   "keycode": 86},   # V release
+        {"event": "keyup",   "keycode": 17},   # Ctrl release
+    ):
+        _rdp_inject_input(evt)
+
+
 def _rdp_inject_input(event: dict) -> None:
     """Inject a mouse or keyboard event on the current platform."""
     if _PLATFORM == "linux":

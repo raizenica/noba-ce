@@ -19,6 +19,8 @@ const frameW = ref(0)
 const frameH = ref(0)
 const quality = ref(70)
 const fps = ref(10)
+const clipboardStatus = ref('')   // '' | 'ok' | 'error'
+let clipboardStatusTimeout = null
 // Writable computed so it stays reactive to auth role (role loads async in new tabs)
 const _inputToggle = ref(true)
 const inputEnabled = computed({
@@ -76,6 +78,13 @@ function connect() {
     } else if (msg.type === 'rdp_unavailable') {
       status.value = 'unavailable'
       statusMsg.value = msg.reason || 'No display available on this agent'
+
+    } else if (msg.type === 'rdp_clipboard') {
+      navigator.clipboard.writeText(msg.text ?? '').then(() => {
+        _setClipboardStatus('ok')
+      }).catch(() => {
+        _setClipboardStatus('error')
+      })
     }
   }
 
@@ -128,6 +137,31 @@ async function drawFrame(b64data) {
     }
     img.src = URL.createObjectURL(blob)
   }
+}
+
+// ── Clipboard bridge ──────────────────────────────────────────────────────────
+
+function _setClipboardStatus(s) {
+  clipboardStatus.value = s
+  clearTimeout(clipboardStatusTimeout)
+  clipboardStatusTimeout = setTimeout(() => { clipboardStatus.value = '' }, 2000)
+}
+
+async function pasteToRemote() {
+  if (!inputEnabled.value || !ws || ws.readyState !== WebSocket.OPEN) return
+  try {
+    const text = await navigator.clipboard.readText()
+    if (!text) return
+    ws.send(JSON.stringify({ type: 'rdp_clipboard_paste', text }))
+    _setClipboardStatus('ok')
+  } catch {
+    _setClipboardStatus('error')
+  }
+}
+
+function copyFromRemote() {
+  if (!inputEnabled.value || !ws || ws.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify({ type: 'rdp_clipboard_get' }))
 }
 
 function disconnect() {
@@ -261,6 +295,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearTimeout(toolbarTimeout)
+  clearTimeout(clipboardStatusTimeout)
   if (ws) {
     try { ws.send(JSON.stringify({ type: 'rdp_stop' })) } catch { /* ignore */ }
     ws.close()
@@ -363,6 +398,27 @@ onUnmounted(() => {
         @click="inputEnabled = !inputEnabled"
       >
         <i class="fas fa-mouse-pointer"></i>
+      </button>
+
+      <button
+        v-if="auth.isOperator"
+        class="icon-btn"
+        :title="clipboardStatus === 'ok' ? 'Pasted!' : clipboardStatus === 'error' ? 'Clipboard error' : 'Paste local clipboard into remote'"
+        :style="clipboardStatus === 'ok' ? 'color:var(--accent)' : clipboardStatus === 'error' ? 'color:#f7768e' : ''"
+        @click="pasteToRemote"
+      >
+        <i class="fas fa-clipboard-check" v-if="clipboardStatus === 'ok'"></i>
+        <i class="fas fa-clipboard" v-else></i>
+      </button>
+
+      <button
+        v-if="auth.isOperator"
+        class="icon-btn"
+        :title="clipboardStatus === 'ok' ? 'Copied!' : clipboardStatus === 'error' ? 'Clipboard error' : 'Copy remote clipboard to local'"
+        :style="clipboardStatus === 'ok' ? 'color:var(--accent)' : clipboardStatus === 'error' ? 'color:#f7768e' : ''"
+        @click="copyFromRemote"
+      >
+        <i class="fas fa-copy"></i>
       </button>
 
       <button class="icon-btn" title="Fullscreen" @click="toggleFullscreen">

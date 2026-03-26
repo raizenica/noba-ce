@@ -430,8 +430,8 @@ async def agent_websocket(ws: WebSocket):
                 # Forward PTY messages to browser terminal subscribers
                 notify_terminal_subscribers(hostname, msg)
 
-            elif msg_type in ("rdp_frame", "rdp_unavailable"):
-                # Fan out screen frames and unavailability notices to browser RDP subscribers
+            elif msg_type in ("rdp_frame", "rdp_unavailable", "rdp_clipboard"):
+                # Fan out screen frames, unavailability notices, and clipboard responses
                 notify_rdp_subscribers(hostname, msg)
 
             elif msg_type == "ping":
