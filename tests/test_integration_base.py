@@ -25,11 +25,11 @@ def test_url_scheme_validation_rejects_ftp():
 
 
 def test_url_scheme_validation_accepts_http():
-    """Accept http:// scheme."""
+    """Accept http:// scheme with a public host."""
     from server.integrations.base import BaseIntegration
 
-    result = BaseIntegration.validate_url("http://localhost:8080")
-    assert result == "http://localhost:8080"
+    result = BaseIntegration.validate_url("http://8.8.8.8:8080")
+    assert result == "http://8.8.8.8:8080"
 
 
 def test_url_scheme_validation_accepts_https():
@@ -174,3 +174,59 @@ def test_no_cache_by_default():
     bi.get()
     bi.get()
     assert bi._call_count == 2
+
+
+def test_validate_url_rejects_loopback():
+    """Reject 127.0.0.1 (loopback) — SSRF risk."""
+    from server.integrations.base import BaseIntegration, ConfigError
+
+    with pytest.raises(ConfigError):
+        BaseIntegration.validate_url("http://127.0.0.1:8080")
+
+
+def test_validate_url_rejects_localhost():
+    """Reject http://localhost — resolves to loopback."""
+    from server.integrations.base import BaseIntegration, ConfigError
+
+    with pytest.raises(ConfigError):
+        BaseIntegration.validate_url("http://localhost/api")
+
+
+def test_validate_url_rejects_private_10():
+    """Reject 10.x.x.x private range."""
+    from server.integrations.base import BaseIntegration, ConfigError
+
+    with pytest.raises(ConfigError):
+        BaseIntegration.validate_url("http://10.0.0.1/unifi")
+
+
+def test_validate_url_rejects_private_192():
+    """Reject 192.168.x.x private range."""
+    from server.integrations.base import BaseIntegration, ConfigError
+
+    with pytest.raises(ConfigError):
+        BaseIntegration.validate_url("http://192.168.1.1:8443")
+
+
+def test_validate_url_rejects_link_local():
+    """Reject 169.254.x.x link-local range."""
+    from server.integrations.base import BaseIntegration, ConfigError
+
+    with pytest.raises(ConfigError):
+        BaseIntegration.validate_url("http://169.254.169.254/metadata")
+
+
+def test_validate_url_accepts_public_ip():
+    """Accept public IPs — they are valid integration targets."""
+    from server.integrations.base import BaseIntegration
+
+    result = BaseIntegration.validate_url("http://8.8.8.8/api")
+    assert result == "http://8.8.8.8/api"
+
+
+def test_validate_url_accepts_public_hostname():
+    """Accept non-localhost hostnames — DNS resolution not performed at validation."""
+    from server.integrations.base import BaseIntegration
+
+    result = BaseIntegration.validate_url("https://my-nas.example.com")
+    assert result == "https://my-nas.example.com"

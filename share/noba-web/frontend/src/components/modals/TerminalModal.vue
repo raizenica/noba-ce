@@ -4,10 +4,12 @@ import AppModal from '../ui/AppModal.vue'
 import { useModalsStore } from '../../stores/modals'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
+import { useApi } from '../../composables/useApi'
 
 const modals = useModalsStore()
 const auth = useAuthStore()
 const notif = useNotificationsStore()
+const api = useApi()
 
 // ── WebSocket state ───────────────────────────────────────────────────────────
 let ws = null
@@ -18,12 +20,23 @@ const connected = ref(false)
 const connecting = ref(false)
 const maximized = ref(false)
 
-function connect() {
+async function connect() {
   if (ws) return
   connecting.value = true
   lines.value = []
+
+  let wsToken
+  try {
+    const res = await api.post('/api/ws-token')
+    wsToken = res.token
+  } catch {
+    lines.value.push({ type: 'error', text: 'Failed to obtain connection token' })
+    connecting.value = false
+    return
+  }
+
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const url = `${proto}://${location.host}/api/terminal?token=${encodeURIComponent(auth.token)}`
+  const url = `${proto}://${location.host}/api/terminal?token=${encodeURIComponent(wsToken)}`
   ws = new WebSocket(url)
 
   ws.onopen = () => {

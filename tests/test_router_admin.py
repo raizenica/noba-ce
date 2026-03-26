@@ -634,6 +634,39 @@ class TestBackupRestore:
 
 
 # ===========================================================================
+# _check_restore_path helper
+# ===========================================================================
+
+class TestCheckRestorePath:
+    """_check_restore_path uses path separator to avoid prefix false-positives."""
+
+    def test_etc_blocked(self):
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/etc/passwd") is False
+
+    def test_etc_itself_blocked(self):
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/etc") is False
+
+    def test_etc2_not_blocked(self):
+        """'/etc2/foo' must NOT be blocked — starts with /etc but is not under /etc."""
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/etc2/foo") is True
+
+    def test_usr_blocked(self):
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/usr/local/bin/foo") is False
+
+    def test_home_allowed(self):
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/home/user/documents/file.txt") is True
+
+    def test_var_run_blocked(self):
+        from server.routers.admin import _check_restore_path
+        assert _check_restore_path("/var/run/service.pid") is False
+
+
+# ===========================================================================
 # GET /api/backup/config-history
 # ===========================================================================
 

@@ -443,6 +443,27 @@ def api_file_versions(request: Request, auth=Depends(_get_auth)):
     return {"path": file_path, "versions": versions[:FILE_VERSIONS_LIMIT]}
 
 
+# ── Restore path security ────────────────────────────────────────────────────
+
+_RESTORE_FORBIDDEN = (
+    "/etc", "/usr", "/bin", "/sbin", "/boot",
+    "/proc", "/sys", "/dev", "/root", "/run",
+    "/var/run", "/lib", "/lib64",
+)
+
+
+def _check_restore_path(path: str) -> bool:
+    """Return True if path is allowed as a restore destination.
+
+    Uses os.sep suffix to prevent /etc2 from matching /etc.
+    """
+    real = os.path.realpath(path)
+    for forbidden in _RESTORE_FORBIDDEN:
+        if real == forbidden or real.startswith(forbidden + os.sep):
+            return False
+    return True
+
+
 # ── /api/backup/restore ──────────────────────────────────────────────────────
 @router.post("/api/backup/restore")
 @handle_errors
@@ -481,11 +502,8 @@ async def api_backup_restore(request: Request, auth=Depends(_require_admin)):
     if not restore_to:
         raise HTTPException(400, "Cannot determine original path -- provide 'dest' in request body")
 
-    restore_real = os.path.realpath(restore_to)
-    for forbidden in ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys",
-                      "/dev", "/root", "/run", "/var/run", "/lib", "/lib64"):
-        if restore_real.startswith(forbidden):
-            raise HTTPException(403, f"Cannot restore to {forbidden}")
+    if not _check_restore_path(restore_to):
+        raise HTTPException(403, "Restore destination is in a protected system path")
 
     try:
         import shutil

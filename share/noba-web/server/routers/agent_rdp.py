@@ -10,6 +10,7 @@ from ..agent_store import (
     _rdp_subscribers, _rdp_sub_lock,
 )
 from ..constants import RDP_QUEUE_MAXSIZE
+from ..deps import ws_token_store
 
 logger = __import__("logging").getLogger("noba.agent.rdp")
 
@@ -35,10 +36,9 @@ async def agent_rdp_ws(hostname: str, ws: WebSocket):
         await ws.close(code=4001, reason="Missing token")
         return
 
-    from ..deps import token_store
-    username, role = token_store.validate(token)
+    username, role = ws_token_store.consume(token)
     if not username:
-        await ws.close(code=4001, reason="Invalid token")
+        await ws.close(code=4001, reason="Invalid or expired token")
         return
 
     await ws.accept()

@@ -169,3 +169,54 @@ class TestRateLimiter:
         rl.cleanup()
         # After cleanup with window_s=0, timestamps are stale
         assert not rl._attempts.get("1.1.1.1")
+
+
+# ── LDAP escaping ───────────────────────────────────────────────────────────
+
+class TestLdapEscape:
+    """_ldap_escape covers all RFC 4515 special characters."""
+
+    def test_escapes_backslash(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a\\b") == "a\\5cb"
+
+    def test_escapes_null(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a\x00b") == "a\\00b"
+
+    def test_escapes_star(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a*b") == "a\\2ab"
+
+    def test_escapes_parens(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("(foo)") == "\\28foo\\29"
+
+    def test_escapes_ampersand(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a&b") == "a\\26b"
+
+    def test_escapes_pipe(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a|b") == "a\\7cb"
+
+    def test_escapes_equals(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a=b") == "a\\3db"
+
+    def test_escapes_tilde(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a~b") == "a\\7eb"
+
+    def test_escapes_exclamation(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("a!b") == "a\\21b"
+
+    def test_normal_string_unchanged(self):
+        from server.auth import _ldap_escape
+        assert _ldap_escape("alice123") == "alice123"
+
+    def test_unicode_encoded(self):
+        from server.auth import _ldap_escape
+        result = _ldap_escape("caf\u00e9")
+        assert "\\c3\\a9" in result

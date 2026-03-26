@@ -14,7 +14,7 @@ from ..agent_store import (
     _agent_websockets, _agent_ws_lock,
     _terminal_subscribers, _terminal_sub_lock,
 )
-from ..deps import db
+from ..deps import db, ws_token_store
 
 logger = __import__("logging").getLogger("noba.agent.ws")
 
@@ -97,10 +97,9 @@ async def agent_terminal_ws(hostname: str, ws: WebSocket):
     if not token:
         await ws.close(code=4001, reason="Missing token")
         return
-    from ..deps import token_store
-    username, role = token_store.validate(token)
+    username, role = ws_token_store.consume(token)
     if not username:
-        await ws.close(code=4001, reason="Invalid token")
+        await ws.close(code=4001, reason="Invalid or expired token")
         return
     if role not in ("operator", "admin"):
         await ws.close(code=4003, reason="Operator access required")

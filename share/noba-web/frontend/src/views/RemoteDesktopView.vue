@@ -3,11 +3,13 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useNotificationsStore } from '../stores/notifications'
+import { useApi } from '../composables/useApi'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const notify = useNotificationsStore()
+const api = useApi()
 
 const hostname = computed(() => route.params.hostname)
 
@@ -31,23 +33,26 @@ const showToolbar = ref(true)
 const isPopup = !!window.opener
 
 let ws = null
+let connecting = false
 let toolbarTimeout = null
 let lastMoveTime = 0
 
 // ── WebSocket connection ──────────────────────────────────────────────────────
 
-function buildWsUrl() {
+function buildWsUrl(wsToken) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const host = window.location.host
   const q = new URLSearchParams({
-    token: auth.token,
+    token: wsToken,
     quality: quality.value,
     fps: fps.value,
   })
   return `${proto}://${host}/api/agents/${hostname.value}/rdp?${q}`
 }
 
-function connect() {
+async function connect() {
+  if (connecting) return
+  connecting = true
   if (ws) {
     ws.close()
     ws = null
@@ -56,7 +61,19 @@ function connect() {
   statusMsg.value = ''
   frameCount.value = 0
 
-  ws = new WebSocket(buildWsUrl())
+  let wsToken
+  try {
+    const res = await api.post('/api/ws-token')
+    wsToken = res.token
+  } catch {
+    status.value = 'error'
+    statusMsg.value = 'Failed to obtain connection token'
+    connecting = false
+    return
+  }
+
+  ws = new WebSocket(buildWsUrl(wsToken))
+  connecting = false
   ws.binaryType = 'blob'
 
   ws.onopen = () => {

@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from ..auth import (
     check_password_strength, load_legacy_user, pbkdf2_hash,
     rate_limiter, token_store, users, valid_username, verify_password,
+    ws_token_store,
 )
 from ..config import VALID_ROLES
 from ..deps import _client_ip, _get_auth, _read_body, _require_admin, db, handle_errors
@@ -92,10 +93,10 @@ async def api_login(request: Request):
             db.audit_log("login", username, "success (legacy)", ip)
             return {"token": token}
 
-    locked = rate_limiter.record_failure(ip)
+    rate_limiter.record_failure(ip)
     logger.warning("Failed login for '%s' from %s", username, ip)
     db.audit_log("login_failed", username or "unknown", f"Failed from {ip}", ip)
-    raise HTTPException(401, "Too many failed attempts." if locked else "Invalid credentials")
+    raise HTTPException(401, "Invalid credentials")
 
 
 # ── /api/logout ───────────────────────────────────────────────────────────────
@@ -111,6 +112,16 @@ async def api_logout(request: Request):
             db.audit_log("logout", uname, "", ip)
         token_store.revoke(tok)
     return {"status": "ok"}
+
+
+# ── /api/ws-token ──────────────────────────────────────────────────────────────
+@router.post("/api/ws-token")
+@handle_errors
+async def api_ws_token(auth=Depends(_get_auth)):
+    """Issue a short-lived (30 s) one-time token for WebSocket/SSE connections."""
+    username, role = auth
+    token = ws_token_store.issue(username, role)
+    return {"token": token, "expires_in": 30}
 
 
 # ── TOTP 2FA routes ──────────────────────────────────────────────────────────
