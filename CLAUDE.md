@@ -8,7 +8,7 @@
 
 ## Project Layout
 ```
-share/noba-web/server/       → Python backend modules (15 routers)
+share/noba-web/server/       → Python backend modules (19 routers)
 share/noba-web/frontend/     → Vue 3 source (src/views/, src/components/, src/stores/)
 share/noba-web/static/dist/  → Built Vue app (committed, served by FastAPI)
 share/noba-web/static/       → Legacy static assets (favicon, style.css)
@@ -73,6 +73,14 @@ cd share/noba-web/frontend && npm run build
 - `~/.config/noba-web/users.conf` — user database
 - `~/.local/share/noba-history.db` — SQLite database
 - `.env` files, `*.db` files, credential files
+
+## Architectural Decision Records
+
+Key design decisions are documented in `docs/adr/`. Read these before changing foundational patterns:
+- [ADR-001](docs/adr/ADR-001-sqlite-dual-connection-pattern.md) — why `(conn, lock, ...)` instead of a global connection
+- [ADR-002](docs/adr/ADR-002-websocket-handshake-tokens.md) — why WS auth uses short-lived tokens, not Bearer headers
+- [ADR-004](docs/adr/ADR-004-sse-telemetry-with-polling-fallback.md) — why SSE requires `_get_auth_sse` (no header support)
+- [ADR-006](docs/adr/ADR-006-risk-tiered-agent-commands.md) — why `approval_manager` is intentionally unwired
 
 ## Common Pitfalls
 - SSE (EventSource) cannot set custom headers — use `_get_auth_sse` which falls back to query param token
