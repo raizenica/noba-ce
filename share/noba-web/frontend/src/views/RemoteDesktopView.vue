@@ -21,6 +21,7 @@ const quality = ref(70)
 const fps = ref(5)
 const inputEnabled = ref(auth.isOperator)
 const showToolbar = ref(true)
+const isPopup = !!window.opener
 
 let ws = null
 let toolbarTimeout = null
@@ -123,11 +124,15 @@ async function drawFrame(b64data) {
 
 function disconnect() {
   if (ws) {
-    ws.send(JSON.stringify({ type: 'rdp_stop' }))
+    try { ws.send(JSON.stringify({ type: 'rdp_stop' })) } catch { /* ignore */ }
     ws.close()
     ws = null
   }
-  router.push({ name: 'remote' })
+  if (window.opener) {
+    window.close()
+  } else {
+    router.push({ name: 'remote' })
+  }
 }
 
 // ── Input injection ───────────────────────────────────────────────────────────
@@ -264,8 +269,8 @@ onUnmounted(() => {
         <button v-if="status !== 'connecting'" class="btn btn-primary" style="margin-top:1rem" @click="connect">
           Reconnect
         </button>
-        <button class="btn" style="margin-top:.5rem" @click="router.push({ name: 'remote' })">
-          Back to list
+        <button class="btn" style="margin-top:.5rem" @click="disconnect()">
+          {{ isPopup ? 'Close window' : 'Back to list' }}
         </button>
       </div>
     </div>
