@@ -121,6 +121,47 @@ dbus_conn.call_sync("org.gnome.Mutter.RemoteDesktop", rd_path,
     "org.gnome.Mutter.RemoteDesktop.Session", "Start",
     None, None, Gio.DBusCallFlags.NONE, -1, None)
 
+# ── Keyboard keysym helpers ───────────────────────────────────────────────────
+# Maps W3C e.key named values → X11 keysyms
+_KEY_TO_KEYSYM = {
+    "Escape": 0xFF1B, "Tab": 0xFF09, "Backspace": 0xFF08,
+    "Enter": 0xFF0D, "Return": 0xFF0D,
+    "Delete": 0xFFFF, "Insert": 0xFF63,
+    "Home": 0xFF50, "End": 0xFF57, "PageUp": 0xFF55, "PageDown": 0xFF56,
+    "ArrowLeft": 0xFF51, "ArrowUp": 0xFF52, "ArrowRight": 0xFF53, "ArrowDown": 0xFF54,
+    "F1": 0xFFBE, "F2": 0xFFBF, "F3": 0xFFC0, "F4": 0xFFC1,
+    "F5": 0xFFC2, "F6": 0xFFC3, "F7": 0xFFC4, "F8": 0xFFC5,
+    "F9": 0xFFC6, "F10": 0xFFC7, "F11": 0xFFC8, "F12": 0xFFC9,
+    "Shift": 0xFFE1, "Control": 0xFFE3, "Alt": 0xFFE9, "Meta": 0xFFEB,
+    "CapsLock": 0xFFE5, "NumLock": 0xFF7F, "ScrollLock": 0xFF14,
+    "PrintScreen": 0xFF61, "Pause": 0xFF13,
+    " ": 0x20,
+}
+# e.code → keysym for L/R modifier disambiguation
+_CODE_TO_KEYSYM = {
+    "ShiftLeft": 0xFFE1, "ShiftRight": 0xFFE2,
+    "ControlLeft": 0xFFE3, "ControlRight": 0xFFE4,
+    "AltLeft": 0xFFE9, "AltRight": 0xFFEA,
+    "MetaLeft": 0xFFEB, "MetaRight": 0xFFEC,
+}
+
+def _key_to_keysym(key, code=""):
+    """Derive X11 keysym from browser e.key + e.code."""
+    if code in _CODE_TO_KEYSYM:
+        return _CODE_TO_KEYSYM[code]
+    if key in _KEY_TO_KEYSYM:
+        return _KEY_TO_KEYSYM[key]
+    if len(key) == 1:
+        cp = ord(key)
+        return cp if cp <= 0xFF else 0x01000000 + cp
+    # Fallback for internal events without key (e.g. clipboard paste Ctrl+V)
+    if len(code) == 4 and code.startswith("Key"):
+        return ord(code[3].lower())
+    if len(code) == 6 and code.startswith("Digit"):
+        return ord(code[5])
+    return 0
+
+
 def _inject(ev):
     rd = state.get("rd_path")
     sc = state.get("sc_stream")
@@ -152,11 +193,12 @@ def _inject(ev):
                 GLib.Variant("(ui)", (0, steps)),
                 None, Gio.DBusCallFlags.NONE, 100, None)
         elif evt in ("keydown", "keyup"):
-            kc = int(ev.get("keycode", 0))
-            dbus_conn.call_sync("org.gnome.Mutter.RemoteDesktop", rd,
-                "org.gnome.Mutter.RemoteDesktop.Session", "NotifyKeyboardKeycode",
-                GLib.Variant("(ub)", (kc, evt == "keydown")),
-                None, Gio.DBusCallFlags.NONE, 100, None)
+            ks = _key_to_keysym(ev.get("key", ""), ev.get("code", ""))
+            if ks:
+                dbus_conn.call_sync("org.gnome.Mutter.RemoteDesktop", rd,
+                    "org.gnome.Mutter.RemoteDesktop.Session", "NotifyKeyboardKeysym",
+                    GLib.Variant("(ub)", (ks, evt == "keydown")),
+                    None, Gio.DBusCallFlags.NONE, 100, None)
     except Exception as e:
         print("INJECT_ERR:" + str(e), file=sys.stderr, flush=True)
 

@@ -1072,12 +1072,7 @@ def _rdp_inject_x11(event: dict) -> None:
     with _mutter_proc_lock:
         proc = _mutter_proc
     if proc is not None and proc.poll() is None:
-        # Resolve e.code → X11 hardware keycode before sending to mutter subprocess
-        if event.get("event") in ("keydown", "keyup"):
-            code = event.get("code", "")
-            kc = _js_code_to_x11_keycode(code)
-            if kc:
-                event = {**event, "keycode": kc}
+        # rdp_session.py uses NotifyKeyboardKeysym derived from key+code fields
         _rdp_inject_mutter(event)
         return
     lib = _rdp_load_x11()
