@@ -61,3 +61,25 @@ def test_handle_errors_happy_path():
     r = client.get("/ok")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+def test_handle_errors_async_happy_path():
+    app = FastAPI()
+
+    @app.get("/async-ok")
+    @handle_errors
+    async def route():
+        return {"status": "ok"}
+
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/async-ok")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+def test_handle_errors_preserves_function_name():
+    @handle_errors
+    def my_named_function():
+        pass
+
+    assert my_named_function.__name__ == "my_named_function"

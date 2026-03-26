@@ -189,8 +189,6 @@ def _read_state_file(path: str) -> dict:
                     continue
                 key, _, val = line.partition("=")
                 result[key.strip()] = val.strip().strip('"').strip("'")
-    except HTTPException:
-        raise
     except Exception:
         pass
     return result
@@ -493,8 +491,6 @@ async def api_backup_restore(request: Request, auth=Depends(_require_admin)):
         import shutil
         os.makedirs(os.path.dirname(restore_to), exist_ok=True)
         shutil.copy2(resolved, restore_to)
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(500, f"Restore failed: {e}")
 
@@ -589,8 +585,6 @@ def api_restic_status(auth=Depends(_get_auth)):
         }
     except FileNotFoundError:
         return {"configured": True, "error": "restic not installed"}
-    except HTTPException:
-        raise
     except Exception as e:
         return {"configured": True, "error": str(e)}
 
@@ -669,8 +663,6 @@ def api_backup_health(auth=Depends(_get_auth)):
             "percent_used": round(used / total * 100, 1) if total else 0,
             "snapshot_count": snapshot_count,
         }
-    except HTTPException:
-        raise
     except Exception as e:
         return {"accessible": False, "error": str(e)}
 

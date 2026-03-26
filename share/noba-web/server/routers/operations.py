@@ -48,8 +48,6 @@ async def api_recovery_tailscale(request: Request, auth=Depends(_require_operato
         db.audit_log("recovery_tailscale", username, f"exit={result.returncode}", ip)
         return {"status": "ok" if result.returncode == 0 else "error",
                 "output": result.stdout[:500], "error": result.stderr[:500]}
-    except HTTPException:
-        raise
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -71,8 +69,6 @@ async def api_recovery_dns(request: Request, auth=Depends(_require_operator)):
         db.audit_log("recovery_dns_flush", username, f"exit={result.returncode}", ip)
         return {"status": "ok" if result.returncode == 0 else "error",
                 "output": result.stdout[:500], "error": result.stderr[:500]}
-    except HTTPException:
-        raise
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -95,8 +91,6 @@ async def api_recovery_service(request: Request, auth=Depends(_require_operator)
         db.audit_log("recovery_service_restart", username, f"service={service} exit={result.returncode}", ip)
         return {"status": "ok" if result.returncode == 0 else "error",
                 "service": service, "output": result.stdout[:500]}
-    except HTTPException:
-        raise
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -192,8 +186,6 @@ def api_journal_units(auth=Depends(_require_operator)):
             if parts:
                 units.append({"name": parts[0], "status": parts[3] if len(parts) > 3 else ""})
         return units[:200]
-    except HTTPException:
-        raise
     except Exception:
         return []
 
@@ -231,8 +223,6 @@ def api_system_info(auth=Depends(_get_auth)):
         info["ram_available_gb"] = round(vm.available / (1024**3), 1)
         info["swap_total_gb"] = round(sw.total / (1024**3), 1)
         info["swap_used_gb"] = round(sw.used / (1024**3), 1)
-    except HTTPException:
-        raise
     except Exception:
         pass
     return info
@@ -336,8 +326,6 @@ async def api_cpu_governor(request: Request, auth=Depends(_require_admin)):
         r = await asyncio.to_thread(subprocess.run, ["sudo", "-n", "cpupower", "frequency-set", "-g", governor],
                           capture_output=True, timeout=10)
         ok = r.returncode == 0
-    except HTTPException:
-        raise
     except Exception:
         ok = False
     db.audit_log("cpu_governor", username, f"Set {governor} -> {ok}", _client_ip(request))
@@ -371,8 +359,6 @@ def api_processes_current(auth=Depends(_get_auth)):
                     "status": info.get("status", ""),
                     "user": (info.get("username") or "")[:20],
                 })
-        except HTTPException:
-            raise
         except Exception:
             continue
     procs.sort(key=lambda x: x["cpu"], reverse=True)
@@ -413,8 +399,6 @@ async def _ensure_agent_discovery(hostname: str, timeout: float = 15.0) -> str |
             await ws.send_json({"type": "command", "id": cmd_id,
                                 "cmd": cmd_type, "params": {}})
             cmd_ids[cmd_id] = cmd_type
-        except HTTPException:
-            raise
         except Exception:
             pass
 
@@ -584,8 +568,6 @@ async def api_backup_verify(request: Request, auth=Depends(_require_operator)):
             await ws.send_json({"type": "command", "id": cmd_id,
                                 "cmd": cmd_type, "params": params})
             delivered = True
-        except HTTPException:
-            raise
         except Exception:
             with _agent_ws_lock:
                 _agent_websockets.pop(hostname, None)
@@ -679,8 +661,6 @@ async def api_update_check(auth=Depends(_require_operator)):
             if r.status_code == 200:
                 data = r.json()
                 latest = data.get("tag_name", "").lstrip("v")
-        except HTTPException:
-            raise
         except Exception:
             pass
         return {
@@ -757,8 +737,6 @@ async def api_update_check(auth=Depends(_require_operator)):
             "current_version": VERSION,
             "error": "Update check timed out",
         }
-    except HTTPException:
-        raise
     except Exception as exc:
         logger.error("Update check failed: %s", exc)
         return {
@@ -833,8 +811,6 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
                     ["systemctl", "--user", "restart", "noba-web.service"],
                     timeout=10,
                 )
-            except HTTPException:
-                raise
             except Exception as exc:
                 logger.error("Service restart failed: %s", exc)
 
@@ -846,12 +822,8 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
             "steps": steps,
         }
 
-    except HTTPException:
-        raise
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "Update step timed out")
-    except HTTPException:
-        raise
     except Exception as exc:
         logger.exception("Update apply failed: %s", exc)
         raise HTTPException(500, f"Update failed: {exc}")
