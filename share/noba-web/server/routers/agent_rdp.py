@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from ..agent_store import (
     _agent_websockets, _agent_ws_lock,
     _rdp_subscribers, _rdp_sub_lock,
+    register_clipboard_request,
 )
 from ..constants import RDP_QUEUE_MAXSIZE
 from ..deps import ws_token_store
@@ -94,7 +96,14 @@ async def agent_rdp_ws(hostname: str, ws: WebSocket):
                         agent_ws = _agent_websockets.get(hostname)
                     if agent_ws:
                         try:
-                            await agent_ws.send_json(data)
+                            if msg_type == "rdp_clipboard_get":
+                                # Tag the request so the response is routed back
+                                # only to this viewer, not broadcast to all.
+                                req_id = secrets.token_hex(8)
+                                register_clipboard_request(req_id, q)
+                                await agent_ws.send_json({**data, "_req_id": req_id})
+                            else:
+                                await agent_ws.send_json(data)
                         except Exception:
                             pass
 

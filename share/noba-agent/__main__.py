@@ -185,7 +185,10 @@ def _ws_thread(server: str, api_key: str, hostname: str, ctx: dict) -> None:
 
                 elif msg.get("type") == "rdp_clipboard_get":
                     text = _rdp_clipboard_get()
-                    ws.send_json({"type": "rdp_clipboard", "text": text})
+                    resp: dict = {"type": "rdp_clipboard", "text": text}
+                    if "_req_id" in msg:
+                        resp["_req_id"] = msg["_req_id"]
+                    ws.send_json(resp)
 
                 elif msg.get("type") == "pong":
                     pass
