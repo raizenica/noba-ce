@@ -27,8 +27,8 @@ COPY share/noba-web/server.py /app/server.py
 COPY share/noba-web/server/ /app/server/
 COPY share/noba-web/static/ /app/static/
 
-# Copy agent script (served via /api/agent/update endpoint)
-COPY share/noba-agent/agent.py /app/noba-agent/agent.py
+# Copy agent zipapp (served via /api/agent/update endpoint)
+COPY share/noba-agent.pyz /noba-agent.pyz
 
 # Create data directories and symlink config/data paths into volumes.
 # NOBA writes to ~/.config/noba-web/ (users, auth) and ~/.local/share/ (DB).
