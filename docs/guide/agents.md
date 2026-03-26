@@ -22,7 +22,7 @@ curl -sf http://<noba-server>:8080/api/agents/install-script?key=<agent-key> | b
 ```
 
 The script:
-- Downloads `agent.py` from the NOBA server.
+- Downloads `noba-agent.pyz` from the NOBA server.
 - Installs it to `/opt/noba-agent/`.
 - Creates a systemd unit `noba-agent.service` and enables it.
 - Writes the server URL and key to `/etc/noba-agent/agent.conf`.
@@ -39,18 +39,28 @@ Each agent authenticates with a unique API key. Keys are generated in **Settings
 
 Click any online agent to open its detail panel, then use the **Command** field or the Command Palette button to send a command.
 
-Supported command types (32+):
+Supported command types (42 total, risk-tiered):
 
-| Category | Commands |
-|----------|---------|
-| System | `shell`, `reboot`, `shutdown`, `update_agent` |
-| Files | `file_read`, `file_write`, `file_delete`, `file_list` |
-| Services | `service_start`, `service_stop`, `service_restart`, `service_status` |
-| Processes | `process_list`, `process_kill` |
-| Network | `ping`, `traceroute`, `port_check`, `dns_lookup` |
-| Docker | `container_list`, `container_start`, `container_stop`, `container_restart` |
-| Packages | `package_install`, `package_remove`, `package_update` |
-| Monitoring | `metrics_snapshot`, `disk_usage`, `log_tail` |
+| Risk | Category | Commands |
+|------|----------|----------|
+| Low | System info | `ping`, `system_info`, `disk_usage`, `package_updates` |
+| Low | Services | `check_service`, `list_services` |
+| Low | Files | `file_read`, `file_list`, `file_checksum`, `file_stat` |
+| Low | Containers | `container_list`, `container_logs` |
+| Low | Network | `dns_lookup`, `network_config`, `network_stats`, `endpoint_check`, `network_discover` |
+| Low | Logs | `get_logs`, `follow_logs`, `stop_stream`, `get_stream` |
+| Low | Discovery | `discover_services`, `security_scan` |
+| Low | Users | `list_users` |
+| Medium | Services | `restart_service`, `service_control`, `set_interval` |
+| Medium | Files | `file_transfer`, `file_push` |
+| Medium | Containers | `container_control` |
+| Medium | Maintenance | `verify_backup` |
+| High | Execution | `exec` |
+| High | Files | `file_write`, `file_delete` |
+| High | System | `reboot`, `update_agent`, `uninstall_agent` |
+| High | Packages | `package_install`, `package_remove` |
+| High | Users | `user_manage` |
+| High | Processes | `process_kill` |
 
 Commands are delivered via WebSocket for near-instant execution. Results are returned and displayed in the command history panel.
 
@@ -69,6 +79,27 @@ Use **File Transfer** in the agent panel to upload or download files:
 
 - **Upload** — select a local file; it is sent to the agent's target path.
 - **Download** — enter a remote path; the file is fetched and downloaded to your browser.
+
+## Remote Desktop
+
+Click **Remote Desktop** in an agent's detail panel to open a live screen view of the remote host.
+
+- **Supported platforms**: Wayland (Mutter D-Bus), X11, Windows (GDI), macOS (Quartz)
+- **Viewer-only** for `viewer` role — `operator` and `admin` can send mouse, keyboard, and clipboard events
+- **Clipboard bridge**: paste your local clipboard into the remote session (Ctrl+V), or copy the remote clipboard to your local browser
+- **Quality controls**: adjust JPEG quality and frame rate mid-session from the toolbar
+- Multiple viewers can connect simultaneously; the agent captures once and the server fans frames out to all subscribers
+
+The remote desktop session is served over a dedicated WebSocket (`/api/agents/{hostname}/rdp`). Auth uses the same short-lived WS token as the terminal.
+
+## Embedded Terminal
+
+Click **Terminal** in an agent's detail panel to open a full PTY session directly in the browser.
+
+- Full xterm.js terminal with color support
+- Session is managed by a WebSocket PTY (`/api/agents/{hostname}/terminal`)
+- Terminal access is restricted to `admin` role
+- Session timeout is configurable via `NOBA_TERMINAL_TIMEOUT` (default: 30 minutes)
 
 ## Agent Delete
 

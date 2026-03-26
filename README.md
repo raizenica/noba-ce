@@ -89,7 +89,7 @@ Live system metrics, sparkline charts, health bar, anomaly detection — updated
 
 ### 🤖 Remote Agents
 
-Deploy lightweight agents to any Linux (or Windows) box. Send 32+ command types in real time.
+Deploy lightweight agents to any Linux (or Windows) box. Send 42 command types in real time.
 
 ![Agents](docs/images/agents.png)
 
@@ -97,6 +97,8 @@ Deploy lightweight agents to any Linux (or Windows) box. Send 32+ command types 
 - ⚡ **WebSocket real-time** — instant command delivery with HTTP polling fallback
 - 📡 **Streaming output** — long-running commands stream line-by-line
 - 📁 **File transfer** — push/pull up to 50 MB with SHA256 verification
+- 🖥️ **Remote desktop** — live screen view + mouse/keyboard/clipboard control (Wayland/X11/Windows/macOS)
+- 💻 **Embedded terminal** — full PTY session via WebSocket, streamed to browser xterm.js
 - 🛡️ **Risk-tiered auth** — low (viewer) / medium (operator) / high (admin-only)
 - 🔄 **Self-update** — agents pull updates from the NOBA server and restart
 - 🖱️ **One-click deploy** — from the dashboard via SSH, or copy-paste a one-liner
@@ -233,13 +235,14 @@ curl -sf "http://noba-server:8080/api/agent/install-script?key=YOUR_KEY" | sudo 
 ## 🗂️ Project Layout
 
 ```
-share/noba-web/server/       → Python backend (FastAPI, 16 routers, 300+ API routes)
-share/noba-web/frontend/src/ → Vue 3 frontend (80+ components, Pinia stores)
+share/noba-web/server/       → Python backend (FastAPI, 19 routers, 300+ API routes)
+share/noba-web/server/db/    → SQLite layer split into 23 domain modules (metrics, healing, audit…)
+share/noba-web/frontend/src/ → Vue 3 frontend (140+ components, 12 views, Pinia stores)
 share/noba-web/static/dist/  → Built Vue app (committed, no Node.js needed at runtime)
-share/noba-agent/            → Remote agent + installers (Linux, Windows)
+share/noba-agent/            → Agent zipapp source (9 modules: __main__, commands, rdp, terminal…)
 libexec/                     → Shell scripts (backup, disk check, cloud sync)
-dev/                         → Developer toolkit (8 tools)
-tests/                       → pytest test suite (2604 tests)
+dev/                         → Developer toolkit (7 tools)
+tests/                       → pytest test suite (3181 tests)
 ```
 
 ## 🧪 Developer Toolkit
