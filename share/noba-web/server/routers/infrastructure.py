@@ -19,11 +19,10 @@ from ..agent_store import (
     _agent_cmd_lock, _agent_commands,
     _agent_data, _agent_data_lock, _agent_websockets, _agent_ws_lock,
 )
-from ..auth import token_store
 from ..config import ALLOWED_ACTIONS
 from ..deps import (
     _client_ip, _get_auth, _int_param, _read_body,
-    _require_admin, _require_operator, db,
+    _require_admin, _require_operator, db, ws_token_store,
 )
 from ..metrics import get_listening_ports, get_network_connections, strip_ansi, validate_service_name
 from ..yaml_config import read_yaml_settings
@@ -509,7 +508,7 @@ def api_pmx_console_url(node: str, vmid: int, request: Request, auth=Depends(_re
 async def ws_terminal(ws: WebSocket):
     """WebSocket terminal -- admin only."""
     token = ws.query_params.get("token", "")
-    username, role = token_store.validate(token)
+    username, role = ws_token_store.consume(token)
     if not username or role != "admin":
         await ws.close(code=4001, reason="Unauthorized")
         return

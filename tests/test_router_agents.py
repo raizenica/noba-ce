@@ -833,3 +833,20 @@ class TestStreamLogs:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "queued"
+
+
+# ===========================================================================
+# Shell quoting security tests
+# ===========================================================================
+
+class TestAgentDeployShellQuoting:
+    """Test shlex.quote() protection for shell-interpolated values."""
+
+    def test_shlex_quote_escapes_metacharacters(self):
+        import shlex
+        assert shlex.quote("http://evil.com; rm -rf /") == "'http://evil.com; rm -rf /'"
+
+    def test_shlex_quote_on_normal_url(self):
+        import shlex
+        result = shlex.quote("http://10.0.0.1:8080")
+        assert "http://10.0.0.1:8080" in result

@@ -619,10 +619,51 @@ def get_permissions(role: str) -> list[str]:
     return sorted(PERMISSIONS.get(role, frozenset()))
 
 
+# ── WS handshake token store ──────────────────────────────────────────────────
+
+class WsTokenStore:
+    """Short-lived (30 s), one-time-use tokens for WebSocket/SSE authentication.
+
+    Flow: client POSTs /api/ws-token → gets token → opens WS with ?token=<ws_token>
+    Server calls consume() which validates and deletes in one atomic operation.
+    """
+
+    _TTL = 30  # seconds
+
+    def __init__(self) -> None:
+        self._tokens: dict[str, tuple[str, str, float]] = {}  # token → (username, role, expires)
+        self._lock = threading.Lock()
+
+    def issue(self, username: str, role: str) -> str:
+        """Issue a new short-lived token bound to username and role."""
+        token = secrets.token_urlsafe(32)
+        expires = time.time() + self._TTL
+        with self._lock:
+            # Prune expired entries opportunistically to prevent unbounded growth
+            now = time.time()
+            expired = [k for k, (_, _, exp) in self._tokens.items() if exp < now]
+            for k in expired:
+                del self._tokens[k]
+            self._tokens[token] = (username, role, expires)
+        return token
+
+    def consume(self, token: str) -> tuple[str | None, str | None]:
+        """Validate and immediately invalidate token. Returns (username, role) or (None, None)."""
+        with self._lock:
+            entry = self._tokens.pop(token, None)
+        if entry is None:
+            return None, None
+        username, role, expires = entry
+        if time.time() > expires:
+            return None, None
+        return username, role
+
+
 # ── Global singletons ─────────────────────────────────────────────────────────
 users        = UserStore()
 token_store  = TokenStore()
 rate_limiter = RateLimiter()
+ws_token_store = WsTokenStore()
 
 
 def authenticate_ldap(username: str, password: str, read_settings_fn) -> tuple[str | None, str | None]:
@@ -662,11 +703,14 @@ def authenticate_ldap(username: str, password: str, read_settings_fn) -> tuple[s
         return None, None
 
 
+_LDAP_SPECIALS = frozenset('\\*()\x00&|=~!')
+
+
 def _ldap_escape(s: str) -> str:
-    """RFC 4515 LDAP filter value escaping."""
+    """RFC 4515 LDAP filter value escaping — all special characters."""
     out = []
     for c in s:
-        if c in ('\\', '*', '(', ')', '\x00'):
+        if c in _LDAP_SPECIALS:
             out.append(f"\\{ord(c):02x}")
         elif ord(c) > 127:
             for b in c.encode("utf-8"):

@@ -3,11 +3,13 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useNotificationsStore } from '../stores/notifications'
+import { useApi } from '../composables/useApi'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const notify = useNotificationsStore()
+const api = useApi()
 
 const hostname = computed(() => route.params.hostname)
 
@@ -19,6 +21,8 @@ const frameW = ref(0)
 const frameH = ref(0)
 const quality = ref(70)
 const fps = ref(10)
+const clipboardStatus = ref('')   // '' | 'ok' | 'error'
+let clipboardStatusTimeout = null
 // Writable computed so it stays reactive to auth role (role loads async in new tabs)
 const _inputToggle = ref(true)
 const inputEnabled = computed({
@@ -29,23 +33,26 @@ const showToolbar = ref(true)
 const isPopup = !!window.opener
 
 let ws = null
+let connecting = false
 let toolbarTimeout = null
 let lastMoveTime = 0
 
 // ── WebSocket connection ──────────────────────────────────────────────────────
 
-function buildWsUrl() {
+function buildWsUrl(wsToken) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const host = window.location.host
   const q = new URLSearchParams({
-    token: auth.token,
+    token: wsToken,
     quality: quality.value,
     fps: fps.value,
   })
   return `${proto}://${host}/api/agents/${hostname.value}/rdp?${q}`
 }
 
-function connect() {
+async function connect() {
+  if (connecting) return
+  connecting = true
   if (ws) {
     ws.close()
     ws = null
@@ -54,7 +61,19 @@ function connect() {
   statusMsg.value = ''
   frameCount.value = 0
 
-  ws = new WebSocket(buildWsUrl())
+  let wsToken
+  try {
+    const res = await api.post('/api/ws-token')
+    wsToken = res.token
+  } catch {
+    status.value = 'error'
+    statusMsg.value = 'Failed to obtain connection token'
+    connecting = false
+    return
+  }
+
+  ws = new WebSocket(buildWsUrl(wsToken))
+  connecting = false
   ws.binaryType = 'blob'
 
   ws.onopen = () => {
@@ -76,6 +95,13 @@ function connect() {
     } else if (msg.type === 'rdp_unavailable') {
       status.value = 'unavailable'
       statusMsg.value = msg.reason || 'No display available on this agent'
+
+    } else if (msg.type === 'rdp_clipboard') {
+      navigator.clipboard.writeText(msg.text ?? '').then(() => {
+        _setClipboardStatus('ok')
+      }).catch(() => {
+        _setClipboardStatus('error')
+      })
     }
   }
 
@@ -128,6 +154,31 @@ async function drawFrame(b64data) {
     }
     img.src = URL.createObjectURL(blob)
   }
+}
+
+// ── Clipboard bridge ──────────────────────────────────────────────────────────
+
+function _setClipboardStatus(s) {
+  clipboardStatus.value = s
+  clearTimeout(clipboardStatusTimeout)
+  clipboardStatusTimeout = setTimeout(() => { clipboardStatus.value = '' }, 2000)
+}
+
+async function pasteToRemote() {
+  if (!inputEnabled.value || !ws || ws.readyState !== WebSocket.OPEN) return
+  try {
+    const text = await navigator.clipboard.readText()
+    if (!text) return
+    ws.send(JSON.stringify({ type: 'rdp_clipboard_paste', text }))
+    _setClipboardStatus('ok')
+  } catch {
+    _setClipboardStatus('error')
+  }
+}
+
+function copyFromRemote() {
+  if (!inputEnabled.value || !ws || ws.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify({ type: 'rdp_clipboard_get' }))
 }
 
 function disconnect() {
@@ -205,15 +256,13 @@ function onWheel(e) {
 }
 
 function onKeyDown(e) {
-  // Pass keyCode as the X11 keycode approximation.
-  // Browser keyCode ≈ X11 KeySym for common keys (A-Z, 0-9, arrows, etc.)
   e.preventDefault()
-  sendInput({ event: 'keydown', keycode: e.keyCode })
+  sendInput({ event: 'keydown', code: e.code, key: e.key, keycode: e.keyCode })
 }
 
 function onKeyUp(e) {
   e.preventDefault()
-  sendInput({ event: 'keyup', keycode: e.keyCode })
+  sendInput({ event: 'keyup', code: e.code, key: e.key, keycode: e.keyCode })
 }
 
 function onContextMenu(e) {
@@ -261,6 +310,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearTimeout(toolbarTimeout)
+  clearTimeout(clipboardStatusTimeout)
   if (ws) {
     try { ws.send(JSON.stringify({ type: 'rdp_stop' })) } catch { /* ignore */ }
     ws.close()
@@ -363,6 +413,27 @@ onUnmounted(() => {
         @click="inputEnabled = !inputEnabled"
       >
         <i class="fas fa-mouse-pointer"></i>
+      </button>
+
+      <button
+        v-if="auth.isOperator"
+        class="icon-btn"
+        :title="clipboardStatus === 'ok' ? 'Pasted!' : clipboardStatus === 'error' ? 'Clipboard error' : 'Paste local clipboard into remote'"
+        :style="clipboardStatus === 'ok' ? 'color:var(--accent)' : clipboardStatus === 'error' ? 'color:#f7768e' : ''"
+        @click="pasteToRemote"
+      >
+        <i class="fas fa-clipboard-check" v-if="clipboardStatus === 'ok'"></i>
+        <i class="fas fa-clipboard" v-else></i>
+      </button>
+
+      <button
+        v-if="auth.isOperator"
+        class="icon-btn"
+        :title="clipboardStatus === 'ok' ? 'Copied!' : clipboardStatus === 'error' ? 'Clipboard error' : 'Copy remote clipboard to local'"
+        :style="clipboardStatus === 'ok' ? 'color:var(--accent)' : clipboardStatus === 'error' ? 'color:#f7768e' : ''"
+        @click="copyFromRemote"
+      >
+        <i class="fas fa-copy"></i>
       </button>
 
       <button class="icon-btn" title="Fullscreen" @click="toggleFullscreen">

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAuthStore } from '../../stores/auth'
+import { useApi } from '../../composables/useApi'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -12,26 +13,41 @@ const props = defineProps({
 })
 
 const authStore = useAuthStore()
+const api = useApi()
 
 const termRef       = ref(null)
 const connected     = ref(false)
 const agentOnline   = ref(true)
 let ws              = null
+let connecting      = false
 let term            = null
 let fitAddon        = null
 let reconnectTimer  = null
 let sessionId       = ''
 
-function connect() {
+async function connect() {
+  if (connecting) return
+  connecting = true
   if (ws) disconnect()
-  if (!props.hostname || !authStore.token) return
+  if (!props.hostname || !authStore.token) { connecting = false; return }
 
   sessionId = `term-${props.hostname}-${Date.now()}`
 
+  let wsToken
+  try {
+    const res = await api.post('/api/ws-token')
+    wsToken = res.token
+  } catch {
+    term?.write('\r\n\x1b[31mFailed to obtain connection token\x1b[0m\r\n')
+    connecting = false
+    return
+  }
+
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${proto}//${location.host}/api/agents/${encodeURIComponent(props.hostname)}/terminal?token=${encodeURIComponent(authStore.token)}`
+  const url = `${proto}//${location.host}/api/agents/${encodeURIComponent(props.hostname)}/terminal?token=${encodeURIComponent(wsToken)}`
 
   ws = new WebSocket(url)
+  connecting = false
 
   ws.onopen = () => {
     connected.value = true

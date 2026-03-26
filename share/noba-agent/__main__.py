@@ -50,7 +50,7 @@ from commands import (  # noqa: E402
 from websocket import _WebSocketClient  # noqa: E402, F401
 from terminal import _pty_open, _pty_input, _pty_resize, _pty_close, _pty_close_all  # noqa: E402
 from healing import HealRuntime  # noqa: E402
-from rdp import _rdp_start, _rdp_stop, _rdp_inject_input, _rdp_frame_queue, _rdp_active  # noqa: E402
+from rdp import _rdp_start, _rdp_stop, _rdp_inject_input, _rdp_frame_queue, _rdp_active, _rdp_clipboard_get, _rdp_clipboard_paste  # noqa: E402, F401
 
 # ── Capability probe interval ────────────────────────────────────────────────
 _last_capability_probe: float = 0
@@ -179,6 +179,16 @@ def _ws_thread(server: str, api_key: str, hostname: str, ctx: dict) -> None:
 
                 elif msg.get("type") == "rdp_input":
                     _rdp_inject_input(msg)
+
+                elif msg.get("type") == "rdp_clipboard_paste":
+                    _rdp_clipboard_paste(msg.get("text", ""))
+
+                elif msg.get("type") == "rdp_clipboard_get":
+                    text = _rdp_clipboard_get()
+                    resp: dict = {"type": "rdp_clipboard", "text": text}
+                    if "_req_id" in msg:
+                        resp["_req_id"] = msg["_req_id"]
+                    ws.send_json(resp)
 
                 elif msg.get("type") == "pong":
                     pass

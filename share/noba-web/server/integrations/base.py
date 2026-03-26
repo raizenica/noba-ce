@@ -1,6 +1,7 @@
 """Shared infrastructure for integrations: HTTP client, helpers, base class."""
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import time
@@ -107,10 +108,19 @@ class BaseIntegration:
 
     @staticmethod
     def validate_url(url: str) -> str:
-        """Reject non-http/https schemes; return normalised URL."""
+        """Reject non-http/https schemes and private/loopback IPs; return normalised URL."""
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ConfigError(f"Unsupported URL scheme: {parsed.scheme!r}")
+        host = parsed.hostname or ""
+        if host in ("localhost", "ip6-localhost", "ip6-loopback", "::1"):
+            raise ConfigError("Integration URL must not target a private/loopback address")
+        try:
+            addr = ipaddress.ip_address(host)
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                raise ConfigError("Integration URL must not target a private/loopback address")
+        except ValueError:
+            pass  # hostname — not an IP literal, DNS not resolved here
         return url.rstrip("/")
 
     # -- public API -----------------------------------------------------------

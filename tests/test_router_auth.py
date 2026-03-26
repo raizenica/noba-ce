@@ -149,6 +149,24 @@ class TestLogin:
         })
         assert resp.status_code == 401
 
+    def test_invalid_credentials_message_consistent(self, client):
+        """All 401 login failures should return identical message (prevents enumeration)."""
+        # Test that wrong password returns generic message
+        resp1 = client.post("/api/login", json={"username": "admin", "password": "WrongPass1!"})
+        assert resp1.status_code == 401
+        msg1 = resp1.json().get("detail", "")
+
+        # Test that nonexistent user returns same message
+        resp2 = client.post("/api/login", json={"username": "nonexistent", "password": "Whatever1!"})
+        assert resp2.status_code == 401
+        msg2 = resp2.json().get("detail", "")
+
+        # Both should say "Invalid credentials" not differentiate between user not found vs wrong password
+        assert msg1 == msg2, (
+            f"Login error messages should be identical: {msg1!r} vs {msg2!r}"
+        )
+        assert "Invalid credentials" in msg1
+
 
 # ===========================================================================
 # POST /api/login — 2FA flow
@@ -1199,3 +1217,45 @@ class TestSocialLink:
     def test_link_callback_invalid_state(self, client):
         resp = client.get("/api/auth/social/google/link/callback?state=bogus&code=test")
         assert resp.status_code == 400
+
+
+# ===========================================================================
+# POST /api/ws-token
+# ===========================================================================
+
+class TestWsToken:
+    """POST /api/ws-token — short-lived WebSocket token exchange."""
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/ws-token")
+        assert resp.status_code == 401
+
+    def test_returns_token_for_authed_user(self, client, admin_headers):
+        resp = client.post("/api/ws-token", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["expires_in"] == 30
+
+    def test_viewer_can_get_ws_token(self, client, viewer_headers):
+        resp = client.post("/api/ws-token", headers=viewer_headers)
+        assert resp.status_code == 200
+
+    def test_token_is_consumed_on_use(self):
+        """ws_token_store.consume() returns user on first call, None on second."""
+        from server.auth import ws_token_store
+        tok = ws_token_store.issue("alice", "operator")
+        u1, r1 = ws_token_store.consume(tok)
+        assert u1 == "alice" and r1 == "operator"
+        u2, r2 = ws_token_store.consume(tok)
+        assert u2 is None and r2 is None
+
+    def test_expired_token_rejected(self):
+        """Tokens past their TTL are rejected."""
+        from server.auth import ws_token_store
+        tok = ws_token_store.issue("bob", "viewer")
+        with ws_token_store._lock:
+            u, r, _ = ws_token_store._tokens[tok]
+            ws_token_store._tokens[tok] = (u, r, time.time() - 1)
+        u, r = ws_token_store.consume(tok)
+        assert u is None

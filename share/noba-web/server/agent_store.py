@@ -50,6 +50,24 @@ def notify_terminal_subscribers(hostname: str, msg: dict) -> None:
 _rdp_subscribers: dict[str, list] = {}
 _rdp_sub_lock = threading.Lock()
 
+# Pending clipboard requests: {_req_id: asyncio.Queue}
+# Maps a server-generated request ID to the subscriber queue that should
+# receive the rdp_clipboard response — prevents broadcasting to all viewers.
+_rdp_clipboard_pending: dict[str, "asyncio.Queue"] = {}
+_rdp_clipboard_pending_lock = threading.Lock()
+
+
+def register_clipboard_request(req_id: str, q: "asyncio.Queue") -> None:
+    """Associate a clipboard request ID with the subscriber queue that made it."""
+    with _rdp_clipboard_pending_lock:
+        _rdp_clipboard_pending[req_id] = q
+
+
+def pop_clipboard_request(req_id: str) -> "asyncio.Queue | None":
+    """Remove and return the queue registered for *req_id*, or None if not found."""
+    with _rdp_clipboard_pending_lock:
+        return _rdp_clipboard_pending.pop(req_id, None)
+
 
 def notify_rdp_subscribers(hostname: str, msg: dict) -> None:
     """Push an RDP frame to all browser RDP subscribers for a hostname.

@@ -12,6 +12,7 @@ permissions:
 env:
   APP_NAME: noba
   APP_DESC: "NOBA Command Center — self-hosted infrastructure management platform"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   version:

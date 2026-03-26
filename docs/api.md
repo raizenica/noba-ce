@@ -176,7 +176,7 @@ Agent management, commands, file transfer, WebSocket, deploy.
 | DELETE | `/api/agents/{hostname}/stream-logs/{cmd_id}` | Operator | Stop a running log stream |
 | GET | `/api/agents/{hostname}/streams` | Read | List active log streams |
 | GET | `/api/sla/summary` | Read | SLA uptime across agents/services |
-| GET | `/api/agent/update` | Agent | Serve latest agent.py for update |
+| GET | `/api/agent/update` | Agent | Serve latest agent.pyz (zipapp) for self-update |
 | GET | `/api/agent/install-script` | Agent | Generate agent install script |
 | POST | `/api/agents/deploy` | Admin | Remote deploy agent via SSH |
 | POST | `/api/agent/file-upload` | Agent | Receive file chunk from agent |

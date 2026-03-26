@@ -25,6 +25,7 @@ from ..agent_store import (
     _agent_websockets, _agent_ws_lock,
     notify_rdp_subscribers,
     notify_terminal_subscribers,
+    pop_clipboard_request,
 )
 from ..deps import (
     _client_ip, _get_auth, _read_body,
@@ -431,8 +432,23 @@ async def agent_websocket(ws: WebSocket):
                 notify_terminal_subscribers(hostname, msg)
 
             elif msg_type in ("rdp_frame", "rdp_unavailable"):
-                # Fan out screen frames and unavailability notices to browser RDP subscribers
+                # Fan out screen frames and unavailability notices to all viewers
                 notify_rdp_subscribers(hostname, msg)
+
+            elif msg_type == "rdp_clipboard":
+                # Route clipboard response only to the viewer that requested it
+                req_id = msg.get("_req_id")
+                if req_id:
+                    target_q = pop_clipboard_request(req_id)
+                    if target_q is not None:
+                        import asyncio as _asyncio
+                        try:
+                            target_q.put_nowait(msg)
+                        except _asyncio.QueueFull:
+                            pass
+                else:
+                    # No request_id — fall back to broadcast (older agents)
+                    notify_rdp_subscribers(hostname, msg)
 
             elif msg_type == "ping":
                 await ws.send_json({"type": "pong"})

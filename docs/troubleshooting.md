@@ -517,7 +517,7 @@ Agents must be running the latest version for reliable WebSocket command deliver
 Send an `update_agent` command from the dashboard, or manually update:
 ```bash
 # On the agent host:
-curl -sf http://noba-server:8080/api/agent/update?key=YOUR_KEY -o /opt/noba-agent/agent.py
+curl -sf http://noba-server:8080/api/agent/update?key=YOUR_KEY -o /opt/noba-agent/noba-agent.pyz
 sudo systemctl restart noba-agent
 ```
 

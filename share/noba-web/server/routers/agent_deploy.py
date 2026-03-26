@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import secrets
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -229,8 +230,8 @@ sudo chmod +x /opt/noba-agent/agent.pyz
 command -v apt-get >/dev/null && sudo apt-get install -y python3-psutil 2>/dev/null || true
 command -v dnf >/dev/null && sudo dnf install -y python3-psutil 2>/dev/null || true
 sudo tee /etc/noba-agent.yaml > /dev/null <<AGENTCFG
-server: {server_url}
-api_key: {agent_key}
+server: {shlex.quote(server_url)}
+api_key: {shlex.quote(agent_key)}
 interval: 30
 hostname: $(hostname)
 AGENTCFG

@@ -9,7 +9,7 @@ import subprocess
 
 from fastapi import HTTPException, Request
 
-from .auth import authenticate, has_permission, token_store
+from .auth import authenticate, has_permission, token_store, ws_token_store  # noqa: F401
 from .config import MAX_BODY_BYTES, TRUST_PROXY
 from .db import db  # noqa: F401  -- re-exported for route modules
 
@@ -83,9 +83,9 @@ def handle_errors(func):
                 return await func(*args, **kwargs)
             except HTTPException:
                 raise
-            except Exception as e:
+            except Exception:
                 _log.exception("Unhandled error in %s", func.__name__)
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail="Internal server error")
         return _async_wrapper
     else:
         @functools.wraps(func)
@@ -94,9 +94,9 @@ def handle_errors(func):
                 return func(*args, **kwargs)
             except HTTPException:
                 raise
-            except Exception as e:
+            except Exception:
                 _log.exception("Unhandled error in %s", func.__name__)
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail="Internal server error")
         return _sync_wrapper
 
 
