@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import Sortable from 'sortablejs'
 import { useDashboardStore } from '../stores/dashboard'
 import { useSettingsStore } from '../stores/settings'
@@ -225,6 +225,18 @@ onMounted(() => {
   nextTick(() => requestAnimationFrame(() => requestAnimationFrame(initMasonry)))
 })
 
+// Re-run masonry when managed instance cards appear (data arrives after initial render)
+watch(activeInstances, () => {
+  nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+    const grid = gridRef.value
+    if (!grid) return
+    grid.querySelectorAll('.card').forEach(c => {
+      const height = c.getBoundingClientRect().height
+      if (height > 0) c.style.gridRowEnd = `span ${Math.ceil((height + 18) / 10)}`
+    })
+  })))
+})
+
 onUnmounted(() => {
   if (gridRef.value?._sortable) gridRef.value._sortable.destroy()
 })
@@ -332,7 +344,7 @@ onUnmounted(() => {
           {{ emptyInstances.length }} unconfigured integration{{ emptyInstances.length !== 1 ? 's' : '' }}
           <span style="font-size:.7rem;opacity:.7">(no data)</span>
         </button>
-        <div v-if="showEmptyIntegrations" class="grid" style="margin-top:.75rem">
+        <div v-if="showEmptyIntegrations" class="grid" style="margin-top:.75rem;grid-auto-rows:auto;gap:.875rem">
           <IntegrationCard
             v-for="inst in emptyInstances"
             :key="'int-'+inst.id"
