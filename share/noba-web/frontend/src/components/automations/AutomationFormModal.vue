@@ -206,15 +206,7 @@ const title = computed(() =>
   props.mode === 'create' ? 'New Automation' : 'Edit Automation',
 )
 
-const workflowBuilderRef = ref(null)
-
-async function handleClose() {
-  if (form.value.type === 'workflow' && workflowTab.value === 'visual') {
-    await workflowBuilderRef.value?.handleClose()
-  } else {
-    emit('close')
-  }
-}
+function handleClose() { emit('close') }
 </script>
 
 <template>
@@ -341,7 +333,7 @@ async function handleClose() {
 
         <!-- Visual tab -->
         <div v-if="workflowTab === 'visual'" style="margin-top:.25rem">
-          <WorkflowBuilder ref="workflowBuilderRef" v-model="workflowGraph" @close="emit('close')" />
+          <WorkflowBuilder v-model="workflowGraph" />
         </div>
 
         <!-- Code tab -->

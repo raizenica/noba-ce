@@ -4,7 +4,6 @@ import WorkflowNode from './WorkflowNode.vue'
 import WorkflowNodePalette from './workflow/WorkflowNodePalette.vue'
 import WorkflowNodeConfig from './workflow/WorkflowNodeConfig.vue'
 import WorkflowRawEditor from './workflow/WorkflowRawEditor.vue'
-import { useModalsStore } from '../../stores/modals'
 
 const props = defineProps({
   modelValue: { type: Object, default: () => ({ nodes: [], edges: [], entry: '' }) },
@@ -20,16 +19,12 @@ const panX = ref(0); const panY = ref(0); const isPanning = ref(false); const la
 const zoom = ref(1); const ctxMenu = ref({ show: false, x: 0, y: 0, nodeId: null })
 
 // ── Lifecycle / modals ───────────────────────────────────────────────────────
-const modals = useModalsStore()
-async function handleClose() {
-  if (isDirty.value) { const ok = await modals.confirm('You have unsaved changes in the workflow builder. Close anyway?'); if (!ok) return }
-  emit('close')
-}
+function handleClose() { emit('close') }
 defineExpose({ handleClose })
 
 // ── Node defaults ────────────────────────────────────────────────────────────
 const NODE_DEFAULTS = {
-  action: { label: 'Action' }, condition: { label: 'Condition', expression: '' },
+  action: { label: 'Action', config: { type: '', config: {} } }, condition: { label: 'Condition', expression: '' },
   approval_gate: { label: 'Approval Gate' }, parallel: { label: 'Parallel' },
   delay: { label: 'Delay', seconds: 30 }, notification: { label: 'Notification' },
 }
