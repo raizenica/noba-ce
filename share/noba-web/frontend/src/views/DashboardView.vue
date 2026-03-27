@@ -128,7 +128,7 @@ function getCardTemplate(platform) {
 }
 
 function getIntegrationData(instanceId) {
-  return dashboardStore.live[instanceId] || {}
+  return (dashboardStore.live.instances || {})[instanceId] || {}
 }
 
 // ── Glance mode ──────────────────────────────────────────────────────────────

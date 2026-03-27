@@ -37,6 +37,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
     energy: [], cameraFeeds: [], kuma: [],
     radarrExtended: null, sonarrExtended: null,
     radarrCalendar: [], sonarrCalendar: [],
+    // Managed integration instances (keyed by instance ID)
+    instances: {},
     // Background health
     collector_pulse: 0, collector_status: 'healthy',
     })

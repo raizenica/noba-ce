@@ -392,6 +392,43 @@ def collect_stats(qs: dict) -> dict:
     stats["tailscale"]      = _get(tailscale_fut, name="Tailscale")
     stats["n8n"]            = _get(n8n_fut, name="n8n")
 
+    # ── Managed integration instances ─────────────────────────────────────────
+    # Collect data for instances registered via /api/integrations/instances.
+    # Results are stored under stats["instances"][instance_id] so the frontend
+    # IntegrationCard can find them via dashboardStore.live.instances[id].
+    try:
+        import json as _json
+        _inst_list = db.list_integration_instances()
+        _PLATFORM_FETCHERS = {
+            "truenas": lambda url, ac: get_truenas(url, ac.get("api_key", "") or ac.get("token", "")),
+        }
+        _inst_futs: dict[str, object] = {}
+        for _inst in _inst_list:
+            _platform = _inst.get("platform", "")
+            _fetcher = _PLATFORM_FETCHERS.get(_platform)
+            if not _fetcher:
+                continue
+            _url = _inst.get("url", "")
+            _raw_ac = _inst.get("auth_config", "{}")
+            try:
+                _ac = _json.loads(_raw_ac) if isinstance(_raw_ac, str) else (_raw_ac or {})
+            except Exception:
+                _ac = {}
+            if _url:
+                _inst_futs[_inst["id"]] = _pool.submit(_fetcher, _url, _ac)
+        _instances_data: dict = {}
+        for _iid, _fut in _inst_futs.items():
+            try:
+                _result = _fut.result(timeout=15)
+                if _result:
+                    _instances_data[_iid] = _result
+            except Exception as _e:
+                logger.debug("Managed instance %s fetch failed: %s", _iid, _e)
+        stats["instances"] = _instances_data
+    except Exception as _e:
+        logger.warning("Managed instances collection failed: %s", _e)
+        stats["instances"] = {}
+
     stats.update(collect_disk_io())
     stats.update(collect_per_interface_net())
 
