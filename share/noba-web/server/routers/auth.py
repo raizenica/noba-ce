@@ -40,6 +40,24 @@ def _prune_oauth_states() -> None:
 router = APIRouter()
 
 
+# ── /api/auth/capabilities ────────────────────────────────────────────────────
+@router.get("/api/auth/capabilities")
+@handle_errors
+async def auth_capabilities():
+    """Return available auth methods. Used by mobile app login screen.
+    Community: always [{type:'local'}]. Enterprise: adds SAML when enabled.
+    No auth required — drives login screen before a token exists.
+    """
+    cfg = read_yaml_settings()
+    methods: list[dict] = [{"type": "local", "display_name": "Sign in"}]
+    if cfg.get("samlEnabled") and cfg.get("samlIdpSsoUrl"):
+        methods.append({
+            "type": "saml",
+            "display_name": cfg.get("samlDisplayName", "Sign in with SSO"),
+        })
+    return {"methods": methods}
+
+
 # ── /api/login ────────────────────────────────────────────────────────────────
 @router.post("/api/login")
 @handle_errors
