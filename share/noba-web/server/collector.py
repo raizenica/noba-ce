@@ -400,7 +400,10 @@ def collect_stats(qs: dict) -> dict:
         import json as _json
         _inst_list = db.list_integration_instances()
         _PLATFORM_FETCHERS = {
-            "truenas": lambda url, ac: get_truenas(url, ac.get("api_key", "") or ac.get("token", "")),
+            "truenas": lambda url, ac: get_truenas(
+                url,
+                ac.get("api_key") or ac.get("token") or ac.get("apikey_env") or ac.get("apikey") or "",
+            ),
         }
         _inst_futs: dict[str, object] = {}
         for _inst in _inst_list:
