@@ -321,6 +321,32 @@ _AUTO_BUILDERS = {
 }
 _AUTO_TYPES = ALLOWED_AUTO_TYPES  # from config
 
+# Plugin-contributed action builders — populated at startup by workflow_nodes.scan()
+_PLUGIN_BUILDERS: dict = {}
+_plugin_builders_lock = threading.Lock()
+
+
+def register_plugin_builder(type_key: str, fn) -> None:
+    """Register a workflow action builder contributed by a plugin.
+
+    Built-in types in ``_AUTO_BUILDERS`` cannot be overridden.
+    Duplicate plugin keys log a warning and the last registration wins.
+    """
+    if type_key in _AUTO_BUILDERS:
+        logger.warning(
+            "Plugin tried to register workflow node type '%s' which conflicts with a built-in type — skipping",
+            type_key,
+        )
+        return
+    with _plugin_builders_lock:
+        if type_key in _PLUGIN_BUILDERS:
+            logger.warning(
+                "Plugin workflow node type '%s' already registered — overwriting",
+                type_key,
+            )
+        _PLUGIN_BUILDERS[type_key] = fn
+    logger.info("Registered plugin workflow node type: %s", type_key)
+
 
 # ── Workflow execution ────────────────────────────────────────────────────────
 
@@ -340,7 +366,7 @@ def _run_workflow(auto_id: str, steps: list[str], triggered_by: str,
         _run_workflow(auto_id, steps, triggered_by, step_idx + 1, retries)
         return
 
-    builder = _AUTO_BUILDERS.get(step_auto["type"])
+    builder = _AUTO_BUILDERS.get(step_auto["type"]) or _PLUGIN_BUILDERS.get(step_auto["type"])
     if not builder:
         logger.warning("Workflow %s: step %d has unsupported type '%s'", auto_id, step_idx, step_auto["type"])
         _run_workflow(auto_id, steps, triggered_by, step_idx + 1, retries)
@@ -382,7 +408,7 @@ def _run_parallel_workflow(auto_id: str, steps: list[str], triggered_by: str) ->
         if not step_auto:
             logger.warning("Parallel workflow %s: step %d auto '%s' not found", auto_id, idx, step_auto_id)
             continue
-        builder = _AUTO_BUILDERS.get(step_auto["type"])
+        builder = _AUTO_BUILDERS.get(step_auto["type"]) or _PLUGIN_BUILDERS.get(step_auto["type"])
         if not builder:
             logger.warning("Parallel workflow %s: step %d unsupported type '%s'", auto_id, idx, step_auto["type"])
             continue
@@ -480,7 +506,7 @@ def _execute_action_node(
     action_type = node_config.get("type", "")
     action_cfg = node_config.get("config", {})
 
-    builder = _AUTO_BUILDERS.get(action_type)
+    builder = _AUTO_BUILDERS.get(action_type) or _PLUGIN_BUILDERS.get(action_type)
     if not builder:
         logger.warning("Workflow %s: action node '%s' has unsupported type '%s'",
                        auto_id, node["id"], action_type)

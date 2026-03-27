@@ -22,6 +22,7 @@ from .operations import router as operations_router
 from .security import router as security_router
 from .healing import router as healing_router
 from .stats import router as stats_router
+from .workflow_nodes import router as workflow_nodes_router
 
 api_router = APIRouter()
 api_router.include_router(stats_router)
@@ -43,3 +44,4 @@ api_router.include_router(intelligence_router)
 api_router.include_router(operations_router)
 api_router.include_router(dashboards_router)
 api_router.include_router(healing_router)
+api_router.include_router(workflow_nodes_router)

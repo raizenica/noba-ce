@@ -171,6 +171,8 @@ async def lifespan(app: FastAPI):
     try:
         plugin_manager.discover(app=app, db=db)
         plugin_manager.start()
+        from . import workflow_nodes as _wn
+        _wn.scan(plugin_manager)
     except Exception:
         logger.exception("Plugin system failed to start")
     from .scheduler import scheduler, fs_watcher, rss_watcher, endpoint_checker, drift_checker

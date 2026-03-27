@@ -192,6 +192,8 @@ class Plugin:
         self.interval: int = getattr(mod, "PLUGIN_INTERVAL", 10)
         self.config_schema: dict = getattr(mod, "PLUGIN_CONFIG_SCHEMA", {})
         self.enabled: bool = enabled
+        self.workflow_node: dict | None     = getattr(mod, "WORKFLOW_NODE", None)
+        self.workflow_node_run              = getattr(mod, "workflow_node_run", None)
         self.data: dict = {}
         self.html: str = ""
         self.error: str = ""

@@ -201,3 +201,41 @@ def teardown() -> None:
         except Exception:
             pass
         _client = None
+
+
+# ── Workflow node declaration ─────────────────────────────────────────────
+
+WORKFLOW_NODE = {
+    "type": "mqtt_publish",
+    "label": "MQTT Publish",
+    "icon": "fa-broadcast-tower",
+    "description": "Publish a message to an MQTT topic via the configured broker",
+    "fields": [
+        {"key": "topic",   "type": "string",  "label": "Topic",   "required": True,  "default": "noba/events"},
+        {"key": "payload", "type": "string",  "label": "Payload", "required": False, "default": "triggered"},
+        {"key": "qos",     "type": "select",  "label": "QoS",     "options": ["0", "1", "2"], "default": "0"},
+        {"key": "retain",  "type": "boolean", "label": "Retain",  "default": False},
+    ],
+}
+
+
+def workflow_node_run(config: dict) -> None:
+    """Publish an MQTT message. Requires paho-mqtt to be installed."""
+    try:
+        import paho.mqtt.publish as publish  # type: ignore
+    except ImportError:
+        raise RuntimeError("paho-mqtt is not installed. Run: pip install paho-mqtt")
+
+    # In a real plugin use ctx.get_config(); here we fall back to environment vars
+    import os
+    broker = os.environ.get("MQTT_BROKER", "localhost")
+    port   = int(os.environ.get("MQTT_PORT", "1883"))
+
+    publish.single(
+        topic    = config.get("topic",   "noba/events"),
+        payload  = config.get("payload", "triggered"),
+        qos      = int(config.get("qos", 0)),
+        retain   = bool(config.get("retain", False)),
+        hostname = broker,
+        port     = port,
+    )

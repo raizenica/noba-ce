@@ -1,11 +1,20 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
+import PluginNodeConfig from './PluginNodeConfig.vue'
+import { useWorkflowNodes } from '../../../composables/useWorkflowNodes'
+
+const { fetchNodeTypes, actionCatalog, ready } = useWorkflowNodes()
+onMounted(fetchNodeTypes)
 
 const props = defineProps({
   node: { type: Object, default: null },  // selected node data (null = nothing selected)
 })
 
 const emit = defineEmits(['update', 'delete', 'close'])
+
+// ACTION_CATALOG is now fetched from /api/workflow-nodes via useWorkflowNodes().
+// Falls back to empty array until the fetch completes (built-ins always included server-side).
+const ACTION_CATALOG = actionCatalog
 
 const nodeTypeLabel = computed(() => {
   const map = {
@@ -19,9 +28,18 @@ const nodeTypeLabel = computed(() => {
   return props.node ? (map[props.node.type] || props.node.type) : ''
 })
 
+// Derived helpers for action node sub-type config
+const actionType = computed(() => props.node?.config?.type || null)
+const actionParams = computed(() => props.node?.config?.config || {})
+
 function onField(field, value) {
   if (!props.node) return
   emit('update', { ...props.node, [field]: value })
+}
+
+function onActionType(type) {
+  if (!props.node) return
+  emit('update', { ...props.node, config: { type, config: {} } })
 }
 
 function onDelete() {
@@ -50,6 +68,38 @@ function onDelete() {
         @input="onField('label', $event.target.value)"
       />
     </div>
+
+    <!-- Action node: sub-type picker + config -->
+    <template v-if="node.type === 'action'">
+      <div class="wnc-field">
+        <label class="wnc-label">Action Type</label>
+        <select
+          class="wnc-input"
+          :value="actionType || ''"
+          @change="onActionType($event.target.value)"
+        >
+          <option value="" disabled>— select type —</option>
+          <option v-for="cat in ACTION_CATALOG" :key="cat.type" :value="cat.type">
+            {{ cat.label }}
+          </option>
+        </select>
+        <span v-if="!ready" class="wnc-hint">Loading node types…</span>
+      </div>
+
+      <!-- Built-in action types: no extra config fields -->
+      <template v-if="actionType && ['service','script','webhook','http','agent_command','remediation'].includes(actionType)">
+        <span class="wnc-hint">Configure this action in the workflow runner.</span>
+      </template>
+
+      <!-- Plugin node config — renders dynamic fields from WORKFLOW_NODE descriptor -->
+      <template v-else-if="actionType && !['service','script','webhook','http','agent_command','remediation'].includes(actionType)">
+        <PluginNodeConfig
+          :fields="ACTION_CATALOG.find(n => n.type === actionType)?.fields || []"
+          :params="actionParams"
+          @update="p => emit('update', { ...node, config: { type: actionType, config: p } })"
+        />
+      </template>
+    </template>
 
     <!-- Condition expression -->
     <div v-if="node.type === 'condition'" class="wnc-field">

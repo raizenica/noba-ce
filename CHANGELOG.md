@@ -4,6 +4,12 @@ All notable changes to NOBA Command Center are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Plugin workflow nodes: plugins can declare `WORKFLOW_NODE` + `workflow_node_run` to contribute action nodes to the workflow builder palette
+- `GET /api/workflow-nodes` endpoint returns built-in + plugin node descriptors
+- `PluginNodeConfig` component renders dynamic field forms from plugin node schemas
+- `mqtt_listener` bundled plugin now includes an MQTT Publish workflow node as a reference example
+
 ### Security
 - **GitHub Actions least-privilege permissions** — All CI jobs in `test.yml` now declare `permissions: contents: read`; `update-repo.yml` declares `contents: write` (the minimum needed to push gh-pages). Eliminates broad default GITHUB_TOKEN scope on every workflow run.
 - **TLS 1.2 minimum enforced** — Four SSL contexts in `noba-agent/websocket.py`, `noba-agent/commands.py`, `server/scheduler.py`, and `server/metrics/network.py` now explicitly set `ctx.minimum_version = ssl.TLSVersion.TLSv1_2`, removing any platform-dependent TLS 1.0/1.1 fallback.
