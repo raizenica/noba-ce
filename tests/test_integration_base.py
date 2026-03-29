@@ -176,44 +176,44 @@ def test_no_cache_by_default():
     assert bi._call_count == 2
 
 
-def test_validate_url_rejects_loopback():
-    """Reject 127.0.0.1 (loopback) — SSRF risk."""
-    from server.integrations.base import BaseIntegration, ConfigError
+def test_validate_url_accepts_loopback():
+    """Accept 127.0.0.1 — on-prem deployments may target localhost services."""
+    from server.integrations.base import BaseIntegration
 
-    with pytest.raises(ConfigError):
-        BaseIntegration.validate_url("http://127.0.0.1:8080")
-
-
-def test_validate_url_rejects_localhost():
-    """Reject http://localhost — resolves to loopback."""
-    from server.integrations.base import BaseIntegration, ConfigError
-
-    with pytest.raises(ConfigError):
-        BaseIntegration.validate_url("http://localhost/api")
+    result = BaseIntegration.validate_url("http://127.0.0.1:8080")
+    assert result == "http://127.0.0.1:8080"
 
 
-def test_validate_url_rejects_private_10():
-    """Reject 10.x.x.x private range."""
-    from server.integrations.base import BaseIntegration, ConfigError
+def test_validate_url_accepts_localhost():
+    """Accept http://localhost — on-prem deployments use local services."""
+    from server.integrations.base import BaseIntegration
 
-    with pytest.raises(ConfigError):
-        BaseIntegration.validate_url("http://10.0.0.1/unifi")
-
-
-def test_validate_url_rejects_private_192():
-    """Reject 192.168.x.x private range."""
-    from server.integrations.base import BaseIntegration, ConfigError
-
-    with pytest.raises(ConfigError):
-        BaseIntegration.validate_url("http://192.168.1.1:8443")
+    result = BaseIntegration.validate_url("http://localhost/api")
+    assert result == "http://localhost/api"
 
 
-def test_validate_url_rejects_link_local():
-    """Reject 169.254.x.x link-local range."""
-    from server.integrations.base import BaseIntegration, ConfigError
+def test_validate_url_accepts_private_10():
+    """Accept 10.x.x.x RFC1918 range — standard on-prem network."""
+    from server.integrations.base import BaseIntegration
 
-    with pytest.raises(ConfigError):
-        BaseIntegration.validate_url("http://169.254.169.254/metadata")
+    result = BaseIntegration.validate_url("http://10.0.0.1/unifi")
+    assert result == "http://10.0.0.1/unifi"
+
+
+def test_validate_url_accepts_private_192():
+    """Accept 192.168.x.x RFC1918 range — standard home/SMB network."""
+    from server.integrations.base import BaseIntegration
+
+    result = BaseIntegration.validate_url("http://192.168.1.1:8443")
+    assert result == "http://192.168.1.1:8443"
+
+
+def test_validate_url_accepts_link_local():
+    """Accept 169.254.x.x link-local — may be used in isolated networks."""
+    from server.integrations.base import BaseIntegration
+
+    result = BaseIntegration.validate_url("http://169.254.169.254/metadata")
+    assert result == "http://169.254.169.254/metadata"
 
 
 def test_validate_url_accepts_public_ip():
