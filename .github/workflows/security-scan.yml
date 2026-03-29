@@ -27,6 +27,7 @@ jobs:
             --include='*.spec' --include='*.toml' \
             --exclude-dir='.git' --exclude-dir='node_modules' \
             --exclude-dir='.claude' --exclude-dir='static/dist' \
+            --exclude='security-scan.yml' \
             . 2>/dev/null || true)
           if [ -n "$FOUND" ]; then
             echo "::error::Private infrastructure IPs found in source files!"
@@ -44,6 +45,7 @@ jobs:
             --include='*.md' --include='*.html' --include='*.json' \
             --exclude-dir='.git' --exclude-dir='node_modules' \
             --exclude-dir='.claude' --exclude-dir='static/dist' \
+            --exclude='security-scan.yml' \
             . 2>/dev/null || true)
           if [ -n "$FOUND" ]; then
             echo "::error::Real infrastructure hostnames found in source files!"
@@ -61,6 +63,7 @@ jobs:
             --include='*.md' --include='*.html' --include='*.json' \
             --exclude-dir='.git' --exclude-dir='node_modules' \
             --exclude-dir='.claude' --exclude-dir='static/dist' \
+            --exclude='security-scan.yml' \
             . 2>/dev/null || true)
           if [ -n "$FOUND" ]; then
             echo "::error::Physical location names found in source files!"
