@@ -421,7 +421,7 @@ function toggleReveal(evt) {
       <div class="field-2">
         <div>
           <label class="field-label">URL / IP</label>
-          <input class="field-input" type="url" v-model="settingsStore.data.piholeUrl" placeholder="http://192.168.100.111">
+          <input class="field-input" type="url" v-model="settingsStore.data.piholeUrl" placeholder="http://192.168.1.100">
         </div>
         <div>
           <label class="field-label">

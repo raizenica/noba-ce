@@ -19,19 +19,19 @@ The session began with a corrupted enterprise-v2 branch containing 55 untested s
 
 | Host | IP | Site | Hardware | Role |
 |------|-----|------|----------|------|
-| pve | 192.168.100.70 | Site A (Dendermonde) | 32 threads (8c/4t), 64GB RAM | Primary PVE, Ollama (llama3:8b) |
-| proxmoxa01 | 192.168.101.116 | Site A (Dendermonde) | Debian 13, Python 3.13 | Secondary PVE |
-| pve-siteb | 192.168.50.70 | Site B (Remote) | 32GB RAM | Primary PVE |
-| proxmoxb01 | 192.168.50.71 | Site B (Remote) | Debian 13, Python 3.13 | Secondary PVE |
+| pve | 192.168.x.70 | Site A | 32 threads (8c/4t), 64GB RAM | Primary PVE, Ollama (llama3:8b) |
+| proxmoxa01 | 192.168.x.116 | Site A | Debian 13, Python 3.13 | Secondary PVE |
+| pve-siteb | 192.168.y.70 | Site B (Remote) | 32GB RAM | Primary PVE |
+| proxmoxb01 | 192.168.y.71 | Site B (Remote) | Debian 13, Python 3.13 | Secondary PVE |
 
 ### Additional Infrastructure Used
 
 | Service | Location | Purpose |
 |---------|----------|---------|
 | Keycloak | localhost:8180 (Docker) | SAML IdP for SSO testing |
-| Pi-hole v6 | 192.168.100.111 (dnsa01) | Integration testing |
+| Pi-hole v6 | 192.168.x.111 (DNS primary) | Integration testing |
 | License Server | localhost:7777 | Ed25519 license signing |
-| LXC 201 | 192.168.100.70 (PVE) | PostgreSQL + MySQL migration testing |
+| LXC 201 | PVE host | PostgreSQL + MySQL migration testing |
 
 ---
 
