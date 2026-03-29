@@ -813,8 +813,7 @@ if [[ -f "$_svc_file" && "$DRY_RUN" == false ]]; then
             say_ok "Port 443 support enabled (root install)"
         else
             # For non-root: install a system-level service with the capability
-            local _sys_svc="/etc/systemd/system/noba-web.service"
-            local _user _home
+            _sys_svc="/etc/systemd/system/noba-web.service"
             _user=$(id -un)
             _home=$(eval echo "~$_user")
             if command -v sudo &>/dev/null; then
