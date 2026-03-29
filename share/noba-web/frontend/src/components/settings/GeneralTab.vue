@@ -111,11 +111,29 @@ const sslStatus = ref(null)
 const sslUploading = ref(false)
 const certFileRef = ref(null)
 const keyFileRef = ref(null)
+const newPort = ref(8080)
 
 async function fetchSslStatus() {
   try {
     sslStatus.value = await get('/api/admin/ssl')
+    newPort.value = sslStatus.value?.port || sslStatus.value?.current_port || 8080
   } catch { sslStatus.value = null }
+}
+
+async function savePort() {
+  const p = parseInt(newPort.value)
+  if (!p || p < 1 || p > 65535) {
+    notify.addToast('Port must be between 1 and 65535', 'danger')
+    return
+  }
+  try {
+    const settings = { ...settingsStore.data, port: p }
+    await post('/api/settings', settings)
+    notify.addToast(`Port set to ${p} — restart to apply`, 'success')
+    await fetchSslStatus()
+  } catch (e) {
+    notify.addToast('Save failed: ' + e.message, 'danger')
+  }
 }
 
 async function uploadSsl() {
@@ -154,16 +172,16 @@ async function removeSsl() {
 
 async function restartService() {
   if (!await modals.confirm('Restart the NOBA service now? This applies SSL/port changes.')) return
+  const proto = sslStatus.value?.enabled ? 'https' : 'http'
+  const port = parseInt(newPort.value) || sslStatus.value?.current_port || 8080
+  const portSuffix = (proto === 'https' && port === 443) || (proto === 'http' && port === 80) ? '' : `:${port}`
   try {
     await post('/api/system/update/apply', {})
-    notify.addToast('Service restarting...', 'success')
-    const proto = sslStatus.value?.enabled ? 'https' : 'http'
-    setTimeout(() => { window.location.href = `${proto}://${window.location.hostname}:${window.location.port || (proto === 'https' ? 443 : 80)}` }, 4000)
+    notify.addToast('Service restarting — redirecting...', 'success')
   } catch {
     // The restart itself kills the connection — that's expected
-    const proto = sslStatus.value?.enabled ? 'https' : 'http'
-    setTimeout(() => { window.location.href = `${proto}://${window.location.hostname}:${window.location.port || (proto === 'https' ? 443 : 80)}` }, 4000)
   }
+  setTimeout(() => { window.location.href = `${proto}://${window.location.hostname}${portSuffix}/#/settings` }, 5000)
 }
 
 function resetWelcome() {
@@ -351,6 +369,21 @@ async function resetLayout() {
         </div>
       </div>
 
+      <!-- Port -->
+      <div style="margin-bottom:.75rem">
+        <label class="field-label">Listening Port</label>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input v-model.number="newPort" type="number" min="1" max="65535" class="field-input" style="max-width:120px">
+          <button class="btn btn-sm" @click="savePort" style="width:auto">
+            <i class="fas fa-save"></i> Set Port
+          </button>
+          <span v-if="sslStatus && newPort != sslStatus.current_port" style="font-size:.75rem;color:var(--warning)">
+            <i class="fas fa-exclamation-triangle"></i> Restart required
+          </span>
+        </div>
+        <p class="help-text" style="margin-top:.3rem">Standard HTTPS uses port 443. Current: {{ sslStatus?.current_port || '8080' }}</p>
+      </div>
+
       <!-- Upload form -->
       <p class="help-text" style="margin-bottom:.5rem">
         Upload a PEM certificate (fullchain) and private key to enable HTTPS. A service restart is required after upload.
@@ -369,7 +402,7 @@ async function resetLayout() {
             <i class="fas" :class="sslUploading ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
             {{ sslUploading ? 'Uploading...' : 'Upload Certificate' }}
           </button>
-          <button v-if="sslStatus?.cert_exists" class="btn btn-sm" @click="restartService">
+          <button class="btn btn-sm" @click="restartService">
             <i class="fas fa-sync-alt"></i> Restart to Apply
           </button>
         </div>

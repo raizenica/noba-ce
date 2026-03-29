@@ -1052,12 +1052,16 @@ _SSL_DIR = os.path.expanduser("~/.config/noba/ssl")
 @handle_errors
 def api_admin_ssl_status(auth=Depends(_require_admin)):
     """Return current SSL configuration and certificate details."""
+    from ..config import PORT
     settings = read_yaml_settings()
     cert_path = settings.get("sslCertPath", "")
     key_path = settings.get("sslKeyPath", "")
     ssl_enabled = settings.get("sslEnabled", False)
+    configured_port = settings.get("port", PORT)
     result = {
         "enabled": ssl_enabled,
+        "port": configured_port,
+        "current_port": PORT,
         "cert_path": cert_path,
         "key_path": key_path,
         "cert_exists": bool(cert_path and os.path.isfile(cert_path)),

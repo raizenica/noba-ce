@@ -119,7 +119,7 @@ WEB_KEYS = frozenset([
     # Auto-update
     "autoUpdateEnabled",
     # SSL / Network
-    "sslCertPath", "sslKeyPath", "sslEnabled",
+    "sslCertPath", "sslKeyPath", "sslEnabled", "port",
 ])
 _NOTIF_WEB_KEYS = frozenset([
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
