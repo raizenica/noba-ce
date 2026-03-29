@@ -613,6 +613,27 @@ async def api_backup_321_update(request: Request, auth=Depends(_require_operator
     return {"status": "ok", "id": row_id}
 
 
+# ── Service restart helper ────────────────────────────────────────────────
+
+def _restart_service() -> None:
+    """Restart the NOBA service.
+
+    Sends SIGTERM to our own process — systemd's Restart=always policy
+    brings the service back up with the new configuration.  No privilege
+    escalation required.
+
+    Clears the update state file first so the post-update crash detector
+    doesn't count this intentional restart as a crash.
+    """
+    import signal
+    from ..scheduler import _clear_update_state
+    _clear_update_state()
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception as exc:
+        logger.error("Self-restart failed: %s", exc)
+
+
 # ── Self-update ──────────────────────────────────────────────────────────────
 
 def _find_repo_dir() -> str | None:
@@ -813,17 +834,12 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
 
         # Step 4: schedule restart (give time for response to reach client)
         import threading
-        def _restart():
-            time.sleep(2)
-            try:
-                subprocess.run(
-                    ["systemctl", "--user", "restart", "noba-web.service"],
-                    timeout=10,
-                )
-            except Exception as exc:
-                logger.error("Service restart failed: %s", exc)
 
-        threading.Thread(target=_restart, daemon=True, name="update-restart").start()
+        def _do_restart():
+            time.sleep(2)
+            _restart_service()
+
+        threading.Thread(target=_do_restart, daemon=True, name="update-restart").start()
 
         return {
             "status": "ok",
@@ -836,3 +852,21 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
     except Exception as exc:
         logger.exception("Update apply failed: %s", exc)
         raise HTTPException(500, f"Update failed: {exc}")
+
+
+@router.post("/api/system/restart")
+@handle_errors
+async def api_system_restart(request: Request, auth=Depends(_require_admin)):
+    """Restart the NOBA service (applies port/SSL changes)."""
+    username, _ = auth
+    ip = _client_ip(request)
+    db.audit_log("system_restart", username, "Service restart requested", ip)
+
+    import threading
+
+    def _do_restart():
+        time.sleep(2)
+        _restart_service()
+
+    threading.Thread(target=_do_restart, daemon=True, name="service-restart").start()
+    return {"status": "ok", "message": "Service restarting in 2 seconds..."}

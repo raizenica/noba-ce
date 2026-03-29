@@ -10,35 +10,40 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-HOST  = os.environ.get("HOST", "0.0.0.0")
-PORT  = int(os.environ.get("PORT", 8080))
-SSL_CERT = os.environ.get("SSL_CERT", "")
-SSL_KEY  = os.environ.get("SSL_KEY", "")
 
 
-def _resolve_ssl() -> dict:
-    """Resolve SSL cert/key paths from env vars or YAML config."""
-    cert = SSL_CERT
-    key = SSL_KEY
-    # Fall back to YAML config (set via the GUI)
-    if not cert or not key:
-        try:
-            import yaml
-            config_path = os.environ.get(
-                "NOBA_CONFIG",
-                os.path.expanduser("~/.config/noba/config.yaml"),
-            )
-            if os.path.isfile(config_path):
-                with open(config_path) as f:
-                    cfg = yaml.safe_load(f) or {}
-                web = cfg.get("web", {})
-                cert = cert or web.get("sslCertPath", "")
-                key = key or web.get("sslKeyPath", "")
-        except Exception:
-            pass
-    if cert and key and os.path.isfile(cert) and os.path.isfile(key):
-        return {"ssl_certfile": cert, "ssl_keyfile": key}
+def _load_yaml_web_config() -> dict:
+    """Load the 'web' section from YAML config."""
+    try:
+        import yaml
+        config_path = os.environ.get(
+            "NOBA_CONFIG",
+            os.path.expanduser("~/.config/noba/config.yaml"),
+        )
+        if os.path.isfile(config_path):
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            return cfg.get("web", {})
+    except Exception:
+        pass
     return {}
+
+
+def _resolve_network() -> tuple[str, int, dict]:
+    """Resolve host, port, and SSL config from env vars with YAML fallback."""
+    web = _load_yaml_web_config()
+    host = os.environ.get("HOST", "") or web.get("host", "0.0.0.0")
+    # YAML config takes priority for port (GUI-managed), env var is fallback
+    yaml_port = web.get("port")
+    port = int(yaml_port) if yaml_port else int(os.environ.get("PORT", 8080))
+    # SSL: env vars take priority, then YAML config
+    cert = os.environ.get("SSL_CERT", "") or web.get("sslCertPath", "")
+    key = os.environ.get("SSL_KEY", "") or web.get("sslKeyPath", "")
+    ssl_kwargs = {}
+    if cert and key and os.path.isfile(cert) and os.path.isfile(key):
+        ssl_kwargs["ssl_certfile"] = cert
+        ssl_kwargs["ssl_keyfile"] = key
+    return host, port, ssl_kwargs
 
 
 if __name__ == "__main__":
@@ -56,4 +61,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     os.chdir(_HERE)
-    uvicorn.run(app, host=HOST, port=PORT, log_config=None, access_log=False, **_resolve_ssl())
+    _host, _port, _ssl = _resolve_network()
+    uvicorn.run(app, host=_host, port=_port, log_config=None, access_log=False, **_ssl)

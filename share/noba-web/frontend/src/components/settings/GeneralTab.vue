@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { useAuthStore } from '../../stores/auth'
 import { useNotificationsStore } from '../../stores/notifications'
@@ -111,11 +111,29 @@ const sslStatus = ref(null)
 const sslUploading = ref(false)
 const certFileRef = ref(null)
 const keyFileRef = ref(null)
+const newPort = ref(8080)
 
 async function fetchSslStatus() {
   try {
     sslStatus.value = await get('/api/admin/ssl')
+    newPort.value = sslStatus.value?.port || sslStatus.value?.current_port || 8080
   } catch { sslStatus.value = null }
+}
+
+async function savePort() {
+  const p = parseInt(newPort.value)
+  if (!p || p < 1 || p > 65535) {
+    notify.addToast('Port must be between 1 and 65535', 'danger')
+    return
+  }
+  try {
+    const settings = { ...settingsStore.data, port: p }
+    await post('/api/settings', settings)
+    notify.addToast(`Port set to ${p} — restart to apply`, 'success')
+    await fetchSslStatus()
+  } catch (e) {
+    notify.addToast('Save failed: ' + e.message, 'danger')
+  }
 }
 
 async function uploadSsl() {
@@ -152,18 +170,65 @@ async function removeSsl() {
   }
 }
 
+const hasPendingChanges = computed(() => {
+  if (!sslStatus.value) return false
+  const portChanged = newPort.value != sslStatus.value.current_port
+  const sslChanged = (sslStatus.value.cert_exists && !window.location.protocol.startsWith('https'))
+    || (!sslStatus.value.cert_exists && window.location.protocol.startsWith('https'))
+  return portChanged || sslChanged
+})
+
+const restarting = ref(false)
+const restartCountdown = ref(0)
+
 async function restartService() {
   if (!await modals.confirm('Restart the NOBA service now? This applies SSL/port changes.')) return
+  // Re-fetch latest SSL status before computing redirect
+  await fetchSslStatus()
+  const port = parseInt(newPort.value) || sslStatus.value?.current_port || 8080
+  const useHttps = sslStatus.value?.cert_exists && sslStatus.value?.enabled
+  const proto = useHttps ? 'https' : 'http'
+  const portSuffix = (proto === 'https' && port === 443) || (proto === 'http' && port === 80) ? '' : `:${port}`
+  const targetUrl = `${proto}://${window.location.hostname}${portSuffix}/#/settings`
+
+  restarting.value = true
+  restartCountdown.value = 8
   try {
-    await post('/api/system/update/apply', {})
-    notify.addToast('Service restarting...', 'success')
-    const proto = sslStatus.value?.enabled ? 'https' : 'http'
-    setTimeout(() => { window.location.href = `${proto}://${window.location.hostname}:${window.location.port || (proto === 'https' ? 443 : 80)}` }, 4000)
+    await post('/api/system/restart', {})
   } catch {
-    // The restart itself kills the connection — that's expected
-    const proto = sslStatus.value?.enabled ? 'https' : 'http'
-    setTimeout(() => { window.location.href = `${proto}://${window.location.hostname}:${window.location.port || (proto === 'https' ? 443 : 80)}` }, 4000)
+    // The restart kills the connection — expected
   }
+
+  // Countdown then poll until the new server is up
+  const tick = setInterval(() => {
+    restartCountdown.value--
+    if (restartCountdown.value <= 0) {
+      clearInterval(tick)
+      pollAndRedirect(targetUrl)
+    }
+  }, 1000)
+}
+
+async function pollAndRedirect(url) {
+  let attempts = 0
+  const maxAttempts = 20
+  const poll = setInterval(async () => {
+    attempts++
+    try {
+      const r = await fetch(url.replace('/#/settings', '/api/health'), { mode: 'no-cors' })
+      if (r.ok || r.type === 'opaque') {
+        clearInterval(poll)
+        window.location.href = url
+      }
+    } catch {
+      // Server not up yet
+    }
+    if (attempts >= maxAttempts) {
+      clearInterval(poll)
+      // Force redirect anyway after max attempts
+      window.location.href = url
+    }
+  }, 1500)
 }
 
 function resetWelcome() {
@@ -186,6 +251,21 @@ async function resetLayout() {
 
 <template>
   <div>
+    <!-- Restart overlay -->
+    <div v-if="restarting" class="restart-overlay">
+      <div class="restart-modal">
+        <i class="fas fa-sync-alt fa-spin" style="font-size:2rem;color:var(--accent);margin-bottom:1rem"></i>
+        <h3 style="margin:0 0 .5rem">Restarting NOBA</h3>
+        <p v-if="restartCountdown > 0" style="color:var(--text-muted);margin:0">
+          Applying changes... redirecting in {{ restartCountdown }}s
+        </p>
+        <p v-else style="color:var(--text-muted);margin:0">
+          <i class="fas fa-circle-notch fa-spin" style="margin-right:.3rem"></i>
+          Waiting for server...
+        </p>
+      </div>
+    </div>
+
     <!-- System Update (admin only) -->
     <div v-if="authStore.isAdmin" class="s-section">
       <span class="s-label">System Update</span>
@@ -319,60 +399,92 @@ async function resetLayout() {
 
     <!-- SSL / HTTPS (admin only) -->
     <div v-if="authStore.isAdmin" class="s-section">
-      <span class="s-label">SSL / HTTPS</span>
+      <span class="s-label">Network &amp; SSL</span>
 
-      <!-- Current status -->
-      <div v-if="sslStatus" style="margin-bottom:.75rem">
-        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
-          <span v-if="sslStatus.enabled && sslStatus.cert_exists" class="badge bs" style="font-size:.7rem">
-            <i class="fas fa-lock"></i> HTTPS Active
-          </span>
-          <span v-else class="badge bw" style="font-size:.7rem">
-            <i class="fas fa-unlock"></i> HTTP Only
-          </span>
+      <!-- Current status bar -->
+      <div v-if="sslStatus" style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem;padding:.6rem .8rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:.8rem">
+        <span v-if="sslStatus.cert_exists" style="color:var(--success)">
+          <i class="fas fa-lock"></i> HTTPS
+        </span>
+        <span v-else style="color:var(--text-muted)">
+          <i class="fas fa-unlock"></i> HTTP
+        </span>
+        <span style="color:var(--text-dim)">|</span>
+        <span>Port <strong>{{ sslStatus.current_port }}</strong></span>
+        <span v-if="hasPendingChanges" style="color:var(--warning);margin-left:auto">
+          <i class="fas fa-exclamation-triangle"></i> Pending changes — restart to apply
+        </span>
+      </div>
+
+      <!-- Certificate info -->
+      <div v-if="sslStatus?.cert_info && !sslStatus.cert_info.error" style="font-size:.78rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.6rem .8rem;margin-bottom:.6rem">
+        <div style="margin-bottom:.3rem"><strong>Subject:</strong> {{ sslStatus.cert_info.subject }}</div>
+        <div v-if="sslStatus.cert_info.sans" style="margin-bottom:.3rem"><strong>Domains:</strong> {{ sslStatus.cert_info.sans.join(', ') }}</div>
+        <div style="margin-bottom:.3rem"><strong>Issuer:</strong> {{ sslStatus.cert_info.issuer }}</div>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap">
+          <span><strong>Valid from:</strong> {{ new Date(sslStatus.cert_info.not_before).toLocaleDateString() }}</span>
+          <span><strong>Expires:</strong> {{ new Date(sslStatus.cert_info.not_after).toLocaleDateString() }}</span>
         </div>
-
-        <!-- Certificate info -->
-        <div v-if="sslStatus.cert_info && !sslStatus.cert_info.error" style="font-size:.78rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:.6rem .8rem;margin-bottom:.6rem">
-          <div style="margin-bottom:.3rem"><strong>Subject:</strong> {{ sslStatus.cert_info.subject }}</div>
-          <div v-if="sslStatus.cert_info.sans" style="margin-bottom:.3rem"><strong>Domains:</strong> {{ sslStatus.cert_info.sans.join(', ') }}</div>
-          <div style="margin-bottom:.3rem"><strong>Issuer:</strong> {{ sslStatus.cert_info.issuer }}</div>
-          <div style="display:flex;gap:1rem">
-            <span><strong>Valid from:</strong> {{ new Date(sslStatus.cert_info.not_before).toLocaleDateString() }}</span>
-            <span><strong>Expires:</strong> {{ new Date(sslStatus.cert_info.not_after).toLocaleDateString() }}</span>
-          </div>
-        </div>
-
-        <!-- Remove button for existing cert -->
-        <div v-if="sslStatus.cert_exists" style="margin-bottom:.75rem">
-          <button class="btn btn-sm" style="color:var(--danger)" @click="removeSsl">
+        <div style="margin-top:.5rem">
+          <button class="btn btn-sm" style="color:var(--danger);width:auto" @click="removeSsl">
             <i class="fas fa-trash"></i> Remove Certificate
           </button>
         </div>
       </div>
 
-      <!-- Upload form -->
-      <p class="help-text" style="margin-bottom:.5rem">
-        Upload a PEM certificate (fullchain) and private key to enable HTTPS. A service restart is required after upload.
-      </p>
-      <div style="display:flex;flex-direction:column;gap:.5rem">
-        <div>
-          <label class="field-label">Certificate (fullchain.pem)</label>
-          <input ref="certFileRef" type="file" accept=".pem,.crt,.cer" class="field-input" style="padding:.3rem">
+      <!-- Port configuration -->
+      <div style="margin-bottom:.75rem">
+        <label class="field-label">Listening Port</label>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input v-model.number="newPort" type="number" min="1" max="65535" class="field-input" style="max-width:120px">
+          <button class="btn btn-sm" @click="savePort" style="width:auto">
+            <i class="fas fa-save"></i> Set Port
+          </button>
         </div>
-        <div>
-          <label class="field-label">Private Key (privkey.pem)</label>
-          <input ref="keyFileRef" type="file" accept=".pem,.key" class="field-input" style="padding:.3rem">
+        <!-- Port < 1024 warning -->
+        <div v-if="newPort < 1024" style="font-size:.75rem;color:var(--warning);margin-top:.4rem;padding:.4rem .6rem;background:var(--surface-2);border-radius:4px">
+          <i class="fas fa-shield-alt" style="margin-right:.3rem"></i>
+          <strong>Ports below 1024 require root privileges.</strong>
+          If NOBA runs as a user service, use a high port (e.g. 8443) and configure your
+          reverse proxy (NPM, Traefik, Caddy) to forward port 443 to it.
+          System-level installs running as root can bind port 443 directly.
         </div>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.25rem">
-          <button class="btn btn-sm btn-primary" :disabled="sslUploading" @click="uploadSsl">
+        <p v-else class="help-text" style="margin-top:.3rem">
+          Default: 8080. Use 8443 for HTTPS behind a reverse proxy, or 443 for system-level installs.
+        </p>
+      </div>
+
+      <!-- Certificate upload -->
+      <div style="margin-bottom:.75rem">
+        <label class="field-label" style="margin-bottom:.4rem">SSL Certificate</label>
+        <p class="help-text" style="margin-bottom:.5rem">
+          Upload a PEM-encoded certificate chain and private key to enable HTTPS.
+          For Docker or reverse-proxy setups, configure SSL on your proxy instead.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          <div>
+            <label class="field-label" style="font-size:.7rem">Certificate chain (fullchain.pem)</label>
+            <input ref="certFileRef" type="file" accept=".pem,.crt,.cer" class="field-input" style="padding:.3rem">
+          </div>
+          <div>
+            <label class="field-label" style="font-size:.7rem">Private key (privkey.pem)</label>
+            <input ref="keyFileRef" type="file" accept=".pem,.key" class="field-input" style="padding:.3rem">
+          </div>
+          <button class="btn btn-sm btn-primary" :disabled="sslUploading" @click="uploadSsl" style="width:fit-content">
             <i class="fas" :class="sslUploading ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
             {{ sslUploading ? 'Uploading...' : 'Upload Certificate' }}
           </button>
-          <button v-if="sslStatus?.cert_exists" class="btn btn-sm" @click="restartService">
-            <i class="fas fa-sync-alt"></i> Restart to Apply
-          </button>
         </div>
+      </div>
+
+      <!-- Apply changes -->
+      <div style="display:flex;gap:.5rem;align-items:center;padding-top:.5rem;border-top:1px solid var(--border)">
+        <button class="btn btn-sm btn-primary" @click="restartService" style="width:auto">
+          <i class="fas fa-sync-alt"></i> Restart to Apply
+        </button>
+        <span style="font-size:.75rem;color:var(--text-muted)">
+          Restarts the service to apply port and SSL changes. The page will redirect automatically.
+        </span>
       </div>
     </div>
 
@@ -427,3 +539,23 @@ async function resetLayout() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.restart-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.restart-modal {
+  text-align: center;
+  padding: 2.5rem 3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 400px;
+}
+</style>

@@ -10,8 +10,19 @@ _SECRET_PATTERNS = re.compile(
 )
 
 
+_NON_SECRET_KEYS = frozenset({
+    "sslCertPath", "sslKeyPath",
+})
+
+
 def is_secret_key(key: str) -> bool:
-    """Check if a settings key name likely contains a secret value."""
+    """Check if a settings key name likely contains a secret value.
+
+    Some keys match the pattern (e.g. sslKeyPath contains 'key') but hold
+    file paths, not credentials — these are explicitly excluded.
+    """
+    if key in _NON_SECRET_KEYS:
+        return False
     return bool(_SECRET_PATTERNS.search(key))
 
 
