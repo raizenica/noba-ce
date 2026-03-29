@@ -1221,13 +1221,8 @@ class AutoUpdater:
 
             # Step 4: restart service (give time for audit log to flush)
             time.sleep(2)
-            try:
-                subprocess.run(
-                    ["systemctl", "--user", "restart", "noba-web.service"],
-                    timeout=10,
-                )
-            except Exception as exc:
-                logger.error("Auto-updater: service restart failed: %s", exc)
+            from .routers.operations import _restart_service
+            _restart_service()
 
         except subprocess.TimeoutExpired:
             logger.error("Auto-updater: operation timed out")

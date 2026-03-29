@@ -33,7 +33,9 @@ def _resolve_network() -> tuple[str, int, dict]:
     """Resolve host, port, and SSL config from env vars with YAML fallback."""
     web = _load_yaml_web_config()
     host = os.environ.get("HOST", "") or web.get("host", "0.0.0.0")
-    port = int(os.environ.get("PORT", 0) or web.get("port", 8080))
+    # YAML config takes priority for port (GUI-managed), env var is fallback
+    yaml_port = web.get("port")
+    port = int(yaml_port) if yaml_port else int(os.environ.get("PORT", 8080))
     # SSL: env vars take priority, then YAML config
     cert = os.environ.get("SSL_CERT", "") or web.get("sslCertPath", "")
     key = os.environ.get("SSL_KEY", "") or web.get("sslKeyPath", "")
