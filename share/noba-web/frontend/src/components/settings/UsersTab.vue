@@ -1,14 +1,32 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../../stores/auth'
+import { useSettingsStore } from '../../stores/settings'
+import { useNotificationsStore } from '../../stores/notifications'
 import { useApi } from '../../composables/useApi'
 import { useModalsStore } from '../../stores/modals'
 import AppModal from '../ui/AppModal.vue'
 import { USER_ACTION_MSG_TIMEOUT_MS } from '../../constants'
 
 const authStore = useAuthStore()
+const settingsStore = useSettingsStore()
+const notify = useNotificationsStore()
 const { post } = useApi()
 const modals = useModalsStore()
+
+const savingSeats = ref(false)
+
+async function saveSeatLimit() {
+  savingSeats.value = true
+  try {
+    await settingsStore.saveSettings()
+    notify.addToast('Seat limit saved', 'success')
+  } catch (e) {
+    notify.addToast('Save failed: ' + (e.message || 'Unknown error'), 'danger')
+  } finally {
+    savingSeats.value = false
+  }
+}
 
 const userList = ref([])
 const usersLoading = ref(false)
@@ -192,6 +210,33 @@ function roleBadgeClass(role) {
           </button>
           <button class="btn btn-sm btn-primary" @click="showAddForm = !showAddForm">
             <i class="fas fa-plus"></i> Add User
+          </button>
+        </div>
+      </div>
+
+      <!-- Seat Limit -->
+      <div class="s-section">
+        <span class="s-label">Seat Limit</span>
+        <p class="help-text" style="margin-bottom:.75rem">
+          Restrict the number of user accounts allowed. Set to 0 for unlimited.
+          When the limit is reached, a warning appears in the header.
+        </p>
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <div>
+            <label class="field-label" for="seat-limit">Max Users</label>
+            <input
+              id="seat-limit"
+              class="field-input"
+              type="number"
+              min="0"
+              max="9999"
+              v-model.number="settingsStore.data.seatLimit"
+              style="max-width:100px"
+            >
+          </div>
+          <button class="btn btn-primary" style="margin-top:1.1rem" :disabled="savingSeats" @click="saveSeatLimit">
+            <i class="fas" :class="savingSeats ? 'fa-spinner fa-spin' : 'fa-check'"></i>
+            {{ savingSeats ? 'Saving…' : 'Save' }}
           </button>
         </div>
       </div>

@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from .config import AUTH_CONFIG, USER_DB, TOKEN_TTL_H, _PW_MIN_LEN
+from .config import AUTH_CONFIG, USER_DB, TOKEN_TTL_H
 
 
 def _get_db():
@@ -36,13 +36,22 @@ def valid_username(name: str) -> bool:
     return bool(_USERNAME_RE.match(name))
 
 
-def check_password_strength(password: str) -> str | None:
-    if len(password) < _PW_MIN_LEN:
-        return f"Password must be at least {_PW_MIN_LEN} characters"
-    if not re.search(r"[A-Z]", password):
+def check_password_strength(password: str, tenant_id: str = "default") -> str | None:
+    """Validate password against the tenant's configured policy."""
+    try:
+        policy = _get_db().password_policy_get(tenant_id)
+    except Exception:
+        from .db.password_policy import DEFAULT_POLICY  # noqa: PLC0415
+        policy = dict(DEFAULT_POLICY)
+
+    if len(password) < policy["min_length"]:
+        return f"Password must be at least {policy['min_length']} characters"
+    if policy["require_uppercase"] and not re.search(r"[A-Z]", password):
         return "Password must contain at least one uppercase letter"
-    if not re.search(r"[0-9!@#$%^&*()_+\-=\[\]{};':\",./<>?\\|`~]", password):
-        return "Password must contain at least one digit or special character"
+    if policy["require_digit"] and not re.search(r"[0-9]", password):
+        return "Password must contain at least one digit"
+    if policy["require_special"] and not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\",./<>?\\|`~]", password):
+        return "Password must contain at least one special character"
     return None
 
 
@@ -105,11 +114,12 @@ class UserStore:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._db: dict[str, tuple[str, str, str]] = {}  # username -> (hash, role, totp_secret)
+        # username -> (hash, role, totp_secret, display_name, disabled)
+        self._db: dict[str, tuple[str, str, str, str, bool]] = {}
         self.load()
 
     def load(self) -> None:
-        new_db: dict[str, tuple[str, str, str]] = {}
+        new_db: dict[str, tuple[str, str, str, str, bool]] = {}
         if os.path.exists(USER_DB):
             try:
                 with open(USER_DB, encoding="utf-8") as f:
@@ -121,27 +131,31 @@ class UserStore:
                         if len(user_rest) != 2:
                             continue
                         uname, rest = user_rest
-                        # Try 3-field format: hash:role:totp_secret
-                        # The hash itself may contain colons (e.g. pbkdf2:salt:dk),
-                        # so we split from the right to get role and optional totp.
-                        # 2-field legacy: rest = "hash:role"
-                        # 3-field new:    rest = "hash:role:totp_secret"
-                        # Since hash can contain ':', we rsplit to peel off fields.
-                        # Try rsplit with maxsplit=2 to get (hash, role, totp)
+                        # Format (newest first, parsed via rsplit):
+                        #   hash:role:totp:display_name:disabled
+                        #   hash:role:totp
+                        #   hash:role
+                        # Hash can contain ':', so rsplit from right.
+                        # Peel off disabled and display_name first if present.
+                        # Try rsplit 4 to get (hash, role, totp, display_name, disabled)
+                        parts = rest.rsplit(":", 4)
+                        if len(parts) == 5 and parts[1] in ("admin", "operator", "viewer"):
+                            new_db[uname] = (parts[0], parts[1], parts[2], parts[3], parts[4] == "1")
+                            continue
+                        # Try rsplit 3 to get (hash, role, totp, display_name)
+                        parts = rest.rsplit(":", 3)
+                        if len(parts) == 4 and parts[1] in ("admin", "operator", "viewer"):
+                            new_db[uname] = (parts[0], parts[1], parts[2], parts[3], False)
+                            continue
+                        # Try rsplit 2 to get (hash, role, totp)
                         parts = rest.rsplit(":", 2)
-                        if len(parts) == 3:
-                            # Could be (hash_part, role, totp) or (prefix, salt_dk, role)
-                            # Determine if parts[1] is a valid role
-                            if parts[1] in ("admin", "operator", "viewer"):
-                                new_db[uname] = (parts[0], parts[1], parts[2])
-                            else:
-                                # Fall back to 2-field parse
-                                hash_role = rest.rsplit(":", 1)
-                                if len(hash_role) == 2:
-                                    new_db[uname] = (hash_role[0], hash_role[1], "")
-                        elif len(parts) == 2:
-                            new_db[uname] = (parts[0], parts[1], "")
-                        # len(parts) == 1 is malformed, skip
+                        if len(parts) == 3 and parts[1] in ("admin", "operator", "viewer"):
+                            new_db[uname] = (parts[0], parts[1], parts[2], "", False)
+                            continue
+                        # Fall back to 2-field: hash:role
+                        hash_role = rest.rsplit(":", 1)
+                        if len(hash_role) == 2:
+                            new_db[uname] = (hash_role[0], hash_role[1], "", "", False)
             except Exception as e:
                 logger.error("Failed to load users: %s", e)
         with self._lock:
@@ -163,8 +177,8 @@ class UserStore:
             with self._lock:
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with open(fd, "w", encoding="utf-8") as f:
-                    for username, (hashval, role, totp_secret) in self._db.items():
-                        f.write(f"{username}:{hashval}:{role}:{totp_secret}\n")
+                    for username, (hashval, role, totp_secret, dname, dis) in self._db.items():
+                        f.write(f"{username}:{hashval}:{role}:{totp_secret}:{dname}:{'1' if dis else '0'}\n")
                 os.replace(tmp, USER_DB)
         except Exception:
             if os.path.exists(tmp):
@@ -180,9 +194,10 @@ class UserStore:
                 return (data[0], data[1])
         return None
 
-    def add(self, username: str, hashval: str, role: str, totp_secret: str = "") -> None:
+    def add(self, username: str, hashval: str, role: str, totp_secret: str = "",
+            display_name: str = "") -> None:
         with self._lock:
-            self._db[username] = (hashval, role, totp_secret)
+            self._db[username] = (hashval, role, totp_secret, display_name, False)
         self.save()
 
     def remove(self, username: str) -> bool:
@@ -198,13 +213,48 @@ class UserStore:
             if username not in self._db:
                 return False
             old = self._db[username]
-            self._db[username] = (hashval, old[1], old[2])
+            self._db[username] = (hashval, old[1], old[2], old[3], old[4])
         self.save()
         return True
 
+    def update_role(self, username: str, role: str) -> bool:
+        with self._lock:
+            if username not in self._db:
+                return False
+            old = self._db[username]
+            self._db[username] = (old[0], role, old[2], old[3], old[4])
+        self.save()
+        return True
+
+    def update_display_name(self, username: str, display_name: str) -> bool:
+        with self._lock:
+            if username not in self._db:
+                return False
+            old = self._db[username]
+            self._db[username] = (old[0], old[1], old[2], display_name, old[4])
+        self.save()
+        return True
+
+    def set_disabled(self, username: str, disabled: bool) -> bool:
+        with self._lock:
+            if username not in self._db:
+                return False
+            old = self._db[username]
+            self._db[username] = (old[0], old[1], old[2], old[3], disabled)
+        self.save()
+        return True
+
+    def is_disabled(self, username: str) -> bool:
+        with self._lock:
+            data = self._db.get(username)
+            return bool(data and data[4]) if data else False
+
     def list_users(self) -> list[dict]:
         with self._lock:
-            return [{"username": u, "role": r} for u, (_, r, _totp) in self._db.items()]
+            return [
+                {"username": u, "role": r, "display_name": dn, "disabled": dis}
+                for u, (_, r, _totp, dn, dis) in self._db.items()
+            ]
 
     def exists(self, username: str) -> bool:
         with self._lock:
@@ -224,10 +274,7 @@ class UserStore:
             if username not in self._db:
                 return False
             old = self._db[username]
-            if len(old) >= 3:
-                self._db[username] = (old[0], old[1], secret or "")
-            else:
-                self._db[username] = (old[0], old[1], secret or "")
+            self._db[username] = (old[0], old[1], secret or "", old[3], old[4])
         self.save()
         return True
 

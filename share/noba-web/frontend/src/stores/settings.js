@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useApi } from '../composables/useApi'
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -37,5 +37,21 @@ export const useSettingsStore = defineStore('settings', () => {
     await put('/api/user/preferences', { ...preferences, vis: { ...vis } })
   }
 
-  return { loaded, data, vis, preferences, fetchSettings, saveSettings, fetchPreferences, savePreferences }
+  const branding = computed(() => ({
+    orgName:     data.brandingOrgName     || '',
+    accentColor: data.brandingAccentColor || '',
+    logoUrl:     data.brandingLogoUrl     || '',
+    loginBgUrl:  data.brandingLoginBgUrl  || '',
+  }))
+
+  function applyBranding() {
+    const color = data.brandingAccentColor
+    if (color && /^#[0-9a-fA-F]{3,8}$/.test(color)) {
+      document.documentElement.style.setProperty('--accent', color)
+    } else {
+      document.documentElement.style.removeProperty('--accent')
+    }
+  }
+
+  return { loaded, data, vis, preferences, fetchSettings, saveSettings, fetchPreferences, savePreferences, branding, applyBranding }
 })

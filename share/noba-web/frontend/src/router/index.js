@@ -15,6 +15,7 @@ const routes = [
   { path: '/settings/:tab?', name: 'settings', component: () => import('../views/SettingsView.vue') },
   { path: '/remote', name: 'remote', component: () => import('../views/RemoteView.vue') },
   { path: '/remote/:hostname', name: 'remote-desktop', component: () => import('../views/RemoteDesktopView.vue'), meta: { standalone: true } },
+  { path: '/sso-callback', name: 'sso-callback', component: () => import('../views/SsoCallbackView.vue'), meta: { public: true } },
 ]
 
 const router = createRouter({
@@ -24,8 +25,8 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (to.name !== 'login' && !auth.authenticated) return { name: 'login' }
   if (to.name === 'login' && auth.authenticated) return { name: 'dashboard' }
+  if (!to.meta.public && to.name !== 'login' && !auth.authenticated) return { name: 'login' }
 })
 
 export default router

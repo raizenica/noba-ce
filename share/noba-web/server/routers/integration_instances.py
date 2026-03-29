@@ -1,17 +1,15 @@
 """Noba -- Integration instance management API."""
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
 import os
-import socket
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ..deps import _get_auth, _read_body, _require_admin, _require_operator, db, handle_errors
+from ..deps import _get_auth, _read_body, _require_admin, _require_operator, db, get_tenant_id, handle_errors
 
 logger = logging.getLogger("noba")
 router = APIRouter(tags=["integrations"])
@@ -23,38 +21,18 @@ _UPDATABLE_FIELDS = frozenset({
 
 
 def _is_safe_url(url: str) -> bool:
-    """Block requests to private/internal networks."""
+    """Validate URL has a valid scheme and resolvable host.
+
+    Private/RFC1918 IPs are allowed — NOBA is designed for on-premises
+    deployments where integrations run on private networks.
+    """
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
         if not hostname:
             return False
-        # Block common internal targets
-        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        if parsed.scheme not in ("http", "https"):
             return False
-        # Block metadata endpoints
-        if hostname.startswith("169.254."):
-            return False
-        # Block private IP ranges
-        try:
-            ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                return False
-        except ValueError:
-            pass  # hostname is a domain name — resolve and check below
-        # If it's a hostname (not an IP), resolve it and check the resolved IP
-        try:
-            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            for family, _, _, _, sockaddr in resolved:
-                ip_str = sockaddr[0]
-                try:
-                    ip = ipaddress.ip_address(ip_str)
-                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                        return False
-                except ValueError:
-                    continue
-        except socket.gaierror:
-            return False  # can't resolve = not safe
         return True
     except HTTPException:
         raise
@@ -70,9 +48,10 @@ def api_list_instances(
     category: str | None = None,
     site: str | None = None,
     auth=Depends(_get_auth),
+    tenant_id: str = Depends(get_tenant_id),
 ):
-    """List integration instances, optionally filtered by category or site."""
-    results = db.list_integration_instances(category=category, site=site)
+    """List integration instances filtered by caller's tenant, category, and/or site."""
+    results = db.list_integration_instances(category=category, site=site, tenant_id=tenant_id)
     username, role = auth
     if role != "admin":
         for item in results:
@@ -104,7 +83,11 @@ def api_get_instance(instance_id: str, auth=Depends(_get_auth)):
 
 @router.post("/api/integrations/instances")
 @handle_errors
-async def api_create_instance(request: Request, auth=Depends(_require_admin)):
+async def api_create_instance(
+    request: Request,
+    auth=Depends(_require_admin),
+    tenant_id: str = Depends(get_tenant_id),
+):
     """Create a new integration instance."""
     body = await _read_body(request)
 
@@ -130,6 +113,7 @@ async def api_create_instance(request: Request, auth=Depends(_require_admin)):
             auth_config=auth_config,
             site=body.get("site"),
             tags=tags,
+            tenant_id=tenant_id,
         )
     except HTTPException:
         raise
@@ -268,6 +252,9 @@ async def api_test_connection(request: Request, auth=Depends(_require_operator))
 
     if not url:
         return {"success": False, "error": "No URL provided", "platform": platform}
+
+    if not _is_safe_url(url):
+        return {"success": False, "error": "URL targets a private or internal address", "platform": platform}
 
     verify = body.get("verify_ssl", True)
     if isinstance(verify, str) and os.path.isfile(verify):

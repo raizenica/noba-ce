@@ -1,0 +1,4 @@
+# Enterprise-tier optional dependencies (not required for community/SQLite deployments)
+psycopg2-binary>=2.9
+PyMySQL>=1.1
+alembic>=1.13

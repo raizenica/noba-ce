@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""NOBA database migration CLI.
+
+Wraps Alembic for PostgreSQL enterprise deployments and the built-in
+SQLite migration framework for community installs.
+
+Usage:
+    noba-migrate status          -- show current schema version
+    noba-migrate upgrade         -- apply all pending migrations (default: head)
+    noba-migrate upgrade <rev>   -- upgrade to specific revision
+    noba-migrate downgrade <rev> -- downgrade to revision (e.g. -1 or 000)
+    noba-migrate history         -- list all migrations and their status
+    noba-migrate stamp <rev>     -- mark revision as applied without running SQL
+                                    (use 'stamp 001' on existing PG installs)
+
+Environment variables:
+    DATABASE_URL    PostgreSQL connection string (required for PG mode)
+                    Example: postgresql://noba:secret@localhost:5432/noba
+                    If not set, operates in SQLite mode.
+
+Examples:
+    # Fresh PostgreSQL install
+    export DATABASE_URL=postgresql://noba:secret@localhost/noba
+    noba-migrate upgrade
+
+    # Existing PostgreSQL install bootstrapped by NOBA server
+    export DATABASE_URL=postgresql://noba:secret@localhost/noba
+    noba-migrate stamp 001
+
+    # Check SQLite schema version (community install)
+    noba-migrate status
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+# ── Locate project root ───────────────────────────────────────────────────────
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+_SERVER_ROOT = os.path.join(_PROJECT_ROOT, "share", "noba-web")
+
+if _SERVER_ROOT not in sys.path:
+    sys.path.insert(0, _SERVER_ROOT)
+
+_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+
+def _sqlite_status() -> None:
+    """Show SQLite schema version using the built-in migration framework."""
+    try:
+        from server.config import HISTORY_DB
+        from server.db.migrations import get_current_version, MIGRATIONS
+        import sqlite3
+
+        conn = sqlite3.connect(HISTORY_DB)
+        current = get_current_version(conn)
+        conn.close()
+
+        latest = MIGRATIONS[-1]["version"] if MIGRATIONS else 0
+        print(f"SQLite schema: v{current} / v{latest} (latest)")
+        if current < latest:
+            pending = [m for m in MIGRATIONS if m["version"] > current]
+            print(f"  {len(pending)} pending migration(s): "
+                  + ", ".join(f"v{m['version']} ({m['name']})" for m in pending))
+            print("  Note: pending migrations are applied automatically at server startup.")
+        else:
+            print("  Schema is up to date.")
+    except Exception as exc:
+        print(f"Error reading SQLite schema: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _alembic_cmd(args: list[str]) -> None:
+    """Delegate to Alembic CLI with our alembic.ini."""
+    try:
+        from alembic.config import main as alembic_main
+    except ImportError:
+        print(
+            "alembic is not installed. Install it with:\n"
+            "  pip install alembic\n"
+            "or:\n"
+            "  pip install -r requirements-enterprise.txt",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    os.chdir(_PROJECT_ROOT)
+    sys.argv = ["alembic", "-c", "alembic.ini"] + args
+    alembic_main()
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
+
+    command = args[0]
+
+    # SQLite mode: only 'status' makes sense
+    if not _DATABASE_URL or not _DATABASE_URL.lower().startswith("postgres"):
+        if command == "status":
+            _sqlite_status()
+        else:
+            print(
+                f"Command '{command}' requires a PostgreSQL DATABASE_URL.\n"
+                "SQLite schema is managed automatically by the NOBA server at startup.\n"
+                "Use 'noba-migrate status' to check the current SQLite schema version.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return
+
+    # PostgreSQL mode: delegate to Alembic
+    alembic_map = {
+        "upgrade":   ["upgrade"] + (args[1:] or ["head"]),
+        "downgrade": ["downgrade"] + args[1:],
+        "history":   ["history", "--verbose"],
+        "stamp":     ["stamp"] + args[1:],
+        "status":    ["current", "--verbose"],
+        "current":   ["current", "--verbose"],
+    }
+
+    if command not in alembic_map:
+        print(f"Unknown command: {command}\nRun 'noba-migrate --help' for usage.", file=sys.stderr)
+        sys.exit(1)
+
+    _alembic_cmd(alembic_map[command])
+
+
+if __name__ == "__main__":
+    main()

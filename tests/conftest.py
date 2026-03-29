@@ -97,6 +97,26 @@ def mock_agent_key():
 
 
 @pytest.fixture(autouse=True)
+def _clear_saml_states():
+    """Ensure SAML relay-state store is clean between tests."""
+    from server.routers.saml import _saml_states, _saml_states_lock
+    with _saml_states_lock:
+        _saml_states.clear()
+    yield
+    with _saml_states_lock:
+        _saml_states.clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_webauthn_challenges():
+    """Ensure WebAuthn challenge store is clean between tests."""
+    from server.routers.webauthn import _challenges
+    _challenges.clear()
+    yield
+    _challenges.clear()
+
+
+@pytest.fixture(autouse=True)
 def _clean_agent_state():
     """Reset agent in-memory stores between tests to prevent leakage."""
     from server.agent_store import (
@@ -115,3 +135,21 @@ def _clean_agent_state():
     with _agent_cmd_lock:
         _agent_commands.clear()
         _agent_cmd_results.clear()
+
+
+import os as _os
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "postgres: requires DATABASE_URL env var pointing to a live PostgreSQL instance",
+    )
+
+
+def pytest_collection_modifyitems(items):
+    if not _os.environ.get("DATABASE_URL", "").lower().startswith("postgres"):
+        skip = pytest.mark.skip(reason="DATABASE_URL not set to a PostgreSQL URL")
+        for item in items:
+            if "postgres" in item.keywords:
+                item.add_marker(skip)

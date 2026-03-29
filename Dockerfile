@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python dependencies
 RUN pip install --no-cache-dir \
     'fastapi>=0.110.0' 'uvicorn[standard]>=0.27.1' 'psutil>=5.9.8' \
-    'pyyaml>=6.0' 'httpx>=0.27' 'websocket-client>=1.7' 'cryptography>=41.0'
+    'pyyaml>=6.0' 'httpx>=0.27' 'websocket-client>=1.7' 'cryptography>=41.0' \
+    'python-multipart>=0.0.6'
 
 WORKDIR /app
 

@@ -15,8 +15,8 @@ from ..auth import authenticate
 from ..config import ALLOWED_AUTO_TYPES, SCRIPT_DIR, SCRIPT_MAP
 from ..deps import (
     _client_ip, _get_auth, _int_param, _read_body, _require_admin,
-    _require_operator, _safe_int, db,
-    handle_errors,
+    _require_operator, _safe_int, check_not_frozen, check_tenant_quota,
+    db, get_tenant_id, handle_errors,
 )
 from ..runner import job_runner
 from ..workflow_engine import (
@@ -113,14 +113,18 @@ async def api_run_approve(run_id: int, request: Request, auth=Depends(_require_a
 # ── /api/automations — CRUD + manual trigger ─────────────────────────────────
 @router.get("/api/automations")
 @handle_errors
-def api_automations_list(request: Request, auth=Depends(_get_auth)):
+def api_automations_list(
+    request: Request,
+    auth=Depends(_get_auth),
+    tenant_id: str = Depends(get_tenant_id),
+):
     type_filter = request.query_params.get("type")
-    return db.list_automations(type_filter=type_filter)
+    return db.list_automations(type_filter=type_filter, tenant_id=tenant_id)
 
 
 @router.post("/api/automations")
 @handle_errors
-async def api_automations_create(request: Request, auth=Depends(_require_operator)):
+async def api_automations_create(request: Request, auth=Depends(_require_operator), tenant_id: str = Depends(get_tenant_id), _frozen=Depends(check_not_frozen)):
     import uuid
     username, _ = auth
     ip = _client_ip(request)
@@ -142,8 +146,9 @@ async def api_automations_create(request: Request, auth=Depends(_require_operato
         if role != "admin":
             raise HTTPException(403, "Custom script commands require admin role")
     _validate_auto_config(atype, config)
+    check_tenant_quota(tenant_id, "automation", "max_automations")
     auto_id = uuid.uuid4().hex[:12]
-    if not db.insert_automation(auto_id, name, atype, config, schedule, enabled):
+    if not db.insert_automation(auto_id, name, atype, config, schedule, enabled, tenant_id=tenant_id):
         raise HTTPException(500, "Failed to create automation")
     db.audit_log("automation_create", username, f"Created '{name}' ({atype})", ip)
     return {"id": auto_id, "status": "ok"}
@@ -151,7 +156,7 @@ async def api_automations_create(request: Request, auth=Depends(_require_operato
 
 @router.put("/api/automations/{auto_id}")
 @handle_errors
-async def api_automations_update(auto_id: str, request: Request, auth=Depends(_require_operator)):
+async def api_automations_update(auto_id: str, request: Request, auth=Depends(_require_operator), _frozen=Depends(check_not_frozen)):
     username, _ = auth
     ip = _client_ip(request)
     existing = db.get_automation(auto_id)
@@ -186,7 +191,7 @@ async def api_automations_update(auto_id: str, request: Request, auth=Depends(_r
 
 @router.delete("/api/automations/{auto_id}")
 @handle_errors
-def api_automations_delete(auto_id: str, request: Request, auth=Depends(_require_admin)):
+def api_automations_delete(auto_id: str, request: Request, auth=Depends(_require_admin), _frozen=Depends(check_not_frozen)):
     username, _ = auth
     ip = _client_ip(request)
     existing = db.get_automation(auto_id)
@@ -671,13 +676,14 @@ def api_webhooks_list(auth=Depends(_require_admin)):
 
 @router.post("/api/webhooks")
 @handle_errors
-async def api_webhooks_create(request: Request, auth=Depends(_require_admin)):
+async def api_webhooks_create(request: Request, auth=Depends(_require_admin), tenant_id: str = Depends(get_tenant_id), _frozen=Depends(check_not_frozen)):
     """Create a new webhook endpoint with auto-generated hook_id and secret."""
 
     username, _ = auth
     ip = _client_ip(request)
     body = await _read_body(request)
     name = (body.get("name") or "").strip()
+    check_tenant_quota(tenant_id, "webhook", "max_webhooks")
     automation_id = body.get("automation_id") or None
     if not name:
         raise HTTPException(400, "Name is required")

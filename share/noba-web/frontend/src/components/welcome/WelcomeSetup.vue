@@ -97,7 +97,8 @@ function closeModal() {
 }
 
 async function onIntegrationSaved() {
-  closeModal()
+  // Stay open so the user can add more integrations before continuing
+  fetchData()
 }
 
 // ── Data loading ────────────────────────────────────────────────────────────
@@ -140,8 +141,8 @@ onMounted(fetchData)
         v-for="step in steps"
         :key="step.key"
         class="step-card"
-        :class="{ done: step.done, auto: step.auto }"
-        @click="!step.done && !step.auto && openStep(step.key)"
+        :class="{ done: step.done, auto: step.auto, clickable: !step.auto }"
+        @click="!step.auto && openStep(step.key)"
       >
         <div class="step-check">
           <i v-if="step.done" class="fas fa-check-circle"></i>
@@ -152,11 +153,10 @@ onMounted(fetchData)
           <div class="step-title">{{ step.title }}</div>
           <div class="step-desc">{{ step.desc }}</div>
         </div>
-        <div v-if="!step.done && !step.auto" class="step-action">
-          <button class="btn btn-sm btn-primary">Set Up</button>
-        </div>
-        <div v-else-if="step.done && !step.auto" class="step-action">
-          <span class="step-done-label">Done</span>
+        <div v-if="!step.auto" class="step-action">
+          <button class="btn btn-sm" :class="step.done ? '' : 'btn-primary'">
+            {{ step.done ? 'Edit' : 'Set Up' }}
+          </button>
         </div>
       </div>
     </div>
@@ -171,7 +171,7 @@ onMounted(fetchData)
     </div>
 
     <!-- ── Integration Setup Modal ──────────────────────────────────────── -->
-    <AppModal :show="activeModal === 'integrations'" title="Connect a Service" width="640px" @close="closeModal">
+    <AppModal :show="activeModal === 'integrations'" title="Connect Your Services" width="640px" @close="closeModal">
       <IntegrationSetup @saved="onIntegrationSaved" @cancel="closeModal" />
     </AppModal>
 

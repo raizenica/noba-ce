@@ -105,6 +105,7 @@ async function uploadConfigRestore(evt) {
 
 function resetWelcome() {
   localStorage.removeItem('noba:welcome_dismissed')
+  localStorage.setItem('noba:welcome_force', '1')
   notify.addToast('Setup wizard will show on your next dashboard visit.', 'success')
 }
 

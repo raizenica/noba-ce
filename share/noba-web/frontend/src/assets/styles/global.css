@@ -113,6 +113,12 @@
         --text: #e8d5d5; --text-muted: #a87a7a; --text-dim: #4a2828;
         --accent: #cc1a1a; --success: #4caf50; --warning: #e65100; --danger: #ff1744;
     }
+    [data-theme="enterprise"] {
+        --bg: #07091a; --surface: #0d1230; --surface-2: #131928;
+        --border: #1c2940; --border-hi: #2d4270;
+        --text: #d8e4f0; --text-muted: #7a92b0; --text-dim: #1c2940;
+        --accent: #d4a843; --success: #4caf50; --warning: #ff9800; --danger: #f44336;
+    }
 }
 
 /* ── 2. Global Layout Shell ── */
@@ -230,9 +236,15 @@
         color: var(--accent); font-size: 0.85rem; flex-shrink: 0;
     }
     .app-sidebar-logo .logo-text { overflow: hidden; white-space: nowrap; line-height: 1.2; }
-    .app-sidebar-logo .logo-name { font-size: 1rem; font-weight: 700; letter-spacing: .15em; }
+    .app-sidebar-logo .logo-name { font-size: 1rem; font-weight: 700; letter-spacing: .15em; display: flex; align-items: center; gap: .4rem; }
     .app-sidebar-logo .logo-tagline { font-size: .55rem; letter-spacing: .2em; color: var(--text-muted); text-transform: uppercase; }
     .sidebar-collapsed .app-sidebar-logo .logo-text { display: none; }
+    .logo-edition {
+        font-size: .42rem; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+        color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+        padding: 1px 5px; border-radius: 3px; flex-shrink: 0; line-height: 1.6;
+    }
 
     .app-sidebar-nav {
         flex: 1; padding: 8px; overflow-y: auto; overflow-x: hidden;
@@ -269,6 +281,12 @@
     }
     .sidebar-sub-item:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 6%, transparent); }
     .sidebar-sub-item.active { color: var(--accent); font-weight: 600; }
+    .sidebar-sub-divider {
+        font-size: .52rem; letter-spacing: .16em; text-transform: uppercase;
+        color: var(--accent); opacity: .6;
+        padding: .55rem .5rem .2rem;
+        pointer-events: none;
+    }
     .sidebar-collapsed .sidebar-sub-items { display: none; }
 
     /* User section */

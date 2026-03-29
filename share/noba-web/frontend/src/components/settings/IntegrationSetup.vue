@@ -180,6 +180,23 @@ async function saveInstance() {
       notifications.addToast('Integration saved successfully', 'success')
     }
     emit('saved')
+    // Reset form so user can add another integration
+    if (!isEdit.value) {
+      step.value = 0
+      selectedCategory.value = ''
+      selectedPlatform.value = ''
+      instanceId.value = ''
+      instanceUrl.value = ''
+      authMethod.value = 'none'
+      authToken.value = ''
+      authUser.value = ''
+      authPass.value = ''
+      authApiKey.value = ''
+      instanceSite.value = ''
+      instanceTags.value = ''
+      verifySsl.value = true
+      testResult.value = null
+    }
   } catch (e) {
     notifications.addToast('Failed to save: ' + (e.message || 'Unknown error'), 'danger')
   } finally {

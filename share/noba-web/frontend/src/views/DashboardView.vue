@@ -52,7 +52,8 @@ import VaultwardenCard  from '../components/cards/VaultwardenCard.vue'
 import VpnCard          from '../components/cards/VpnCard.vue'
 import EnergyCard       from '../components/cards/EnergyCard.vue'
 import CameraFeedsCard  from '../components/cards/CameraFeedsCard.vue'
-import RecoveryCard     from '../components/cards/RecoveryCard.vue'
+import RecoveryCard          from '../components/cards/RecoveryCard.vue'
+import ExecutiveSummaryCard  from '../components/cards/ExecutiveSummaryCard.vue'
 import N8nCard         from '../components/cards/N8nCard.vue'
 import PredictionCard  from '../components/cards/PredictionCard.vue'
 import IntegrationCard      from '../components/cards/IntegrationCard.vue'
@@ -69,12 +70,15 @@ const toolbarRef     = ref(null)
 
 // ── First-run detection ──────────────────────────────────────────────────────
 const welcomeDismissed = ref(localStorage.getItem('noba:welcome_dismissed') === '1')
+const welcomeForced = ref(localStorage.getItem('noba:welcome_force') === '1')
 const _INTEGRATION_KEYS = [
   'piholeUrl', 'hassUrl', 'unifiUrl', 'proxmoxUrl', 'truenasUrl',
   'plexUrl', 'jellyfinUrl', 'qbitUrl', 'adguardUrl', 'sonarrUrl',
   'radarrUrl', 'speedtestUrl', 'kumaUrl', 'monitoredServices',
 ]
 const isFirstRun = computed(() => {
+  // Forced re-run from Settings → Re-run Setup Wizard
+  if (welcomeForced.value) return true
   if (welcomeDismissed.value) return false
   if (!settingsStore.loaded) return false
   const d = settingsStore.data
@@ -83,7 +87,9 @@ const isFirstRun = computed(() => {
 })
 function dismissWelcome() {
   welcomeDismissed.value = true
+  welcomeForced.value = false
   localStorage.setItem('noba:welcome_dismissed', '1')
+  localStorage.removeItem('noba:welcome_force')
   // Re-use the shared masonry observer after the grid renders
   setTimeout(() => nextTick(() => requestAnimationFrame(() => requestAnimationFrame(initMasonry))), 300)
 }
@@ -263,6 +269,9 @@ onUnmounted(() => {
 
       <!-- Card grid -->
       <div ref="gridRef" class="grid" :class="{ 'glance-mode': glanceMode }">
+        <!-- Enterprise Summary (always visible — key enterprise differentiator) -->
+        <ExecutiveSummaryCard                                                               data-id="executive" />
+
         <!-- System cards -->
         <CoreSystemCard     v-if="showCard('core')"                                        data-id="core" />
         <SystemHealthCard                                                                   data-id="health" />

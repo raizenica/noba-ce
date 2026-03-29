@@ -23,7 +23,8 @@ def create_tables(conn: sqlite3.Connection) -> None:
             enabled INTEGER NOT NULL DEFAULT 1,
             health_status TEXT DEFAULT 'unknown',
             last_seen INTEGER,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            tenant_id TEXT NOT NULL DEFAULT 'default'
         );
 
         CREATE TABLE IF NOT EXISTS integration_groups (
@@ -54,6 +55,7 @@ def insert_instance(
     auth_config: str,
     site: str | None = None,
     tags: str | None = None,
+    tenant_id: str = "default",
 ) -> None:
     """Insert a new integration instance."""
     now = int(time.time())
@@ -61,10 +63,10 @@ def insert_instance(
         conn.execute(
             """
             INSERT INTO integration_instances
-                (id, category, platform, url, auth_config, site, tags, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, category, platform, url, auth_config, site, tags, created_at, tenant_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (id, category, platform, url, auth_config, site, tags, now),
+            (id, category, platform, url, auth_config, site, tags, now, tenant_id),
         )
         conn.commit()
 
@@ -92,8 +94,9 @@ def list_instances(
     *,
     category: str | None = None,
     site: str | None = None,
+    tenant_id: str | None = None,
 ) -> list[dict]:
-    """Return integration instances, optionally filtered by category and/or site."""
+    """Return integration instances, optionally filtered by category, site, and/or tenant_id."""
     clauses: list[str] = []
     args: list = []
     if category is not None:
@@ -102,6 +105,9 @@ def list_instances(
     if site is not None:
         clauses.append("site = ?")
         args.append(site)
+    if tenant_id is not None:
+        clauses.append("tenant_id = ?")
+        args.append(tenant_id)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     with lock:
         cur = conn.execute(
@@ -556,9 +562,9 @@ class _IntegrationsMixin:
         return get_instance(self._get_read_conn(), self._read_lock, instance_id)
 
     def list_integration_instances(
-        self, *, category: str | None = None, site: str | None = None
+        self, *, category: str | None = None, site: str | None = None, tenant_id: str | None = None,
     ) -> list[dict]:
-        return list_instances(self._get_read_conn(), self._read_lock, category=category, site=site)
+        return list_instances(self._get_read_conn(), self._read_lock, category=category, site=site, tenant_id=tenant_id)
 
     def update_integration_health(self, instance_id: str, health_status: str) -> None:
         update_health(self._get_conn(), self._lock, instance_id, health_status)

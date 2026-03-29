@@ -10,6 +10,7 @@ from .agent_rdp import router as agent_rdp_router
 from .agent_terminal import router as agent_terminal_router
 from .agents import router as agents_router
 from .auth import router as auth_router
+from .saml import router as saml_router
 from .automations import router as automations_router
 from .containers import router as containers_router
 from .dashboards import router as dashboards_router
@@ -21,12 +22,19 @@ from .monitoring import router as monitoring_router
 from .operations import router as operations_router
 from .security import router as security_router
 from .healing import router as healing_router
+from .scim import router as scim_router
+from .enterprise import router as enterprise_router
+from .license import router as license_router
+from .tenants import router as tenants_router
 from .stats import router as stats_router
+from .webauthn import router as webauthn_router
 from .workflow_nodes import router as workflow_nodes_router
 
 api_router = APIRouter()
 api_router.include_router(stats_router)
 api_router.include_router(auth_router)
+api_router.include_router(saml_router)
+api_router.include_router(webauthn_router)
 api_router.include_router(admin_router)
 api_router.include_router(automations_router)
 api_router.include_router(integration_instances_router)
@@ -44,4 +52,8 @@ api_router.include_router(intelligence_router)
 api_router.include_router(operations_router)
 api_router.include_router(dashboards_router)
 api_router.include_router(healing_router)
+api_router.include_router(scim_router)
+api_router.include_router(enterprise_router)
+api_router.include_router(license_router)
+api_router.include_router(tenants_router)
 api_router.include_router(workflow_nodes_router)

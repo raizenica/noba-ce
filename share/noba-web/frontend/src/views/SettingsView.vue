@@ -22,6 +22,21 @@ const tabs = [
   { key: 'statuspage', label: 'Status Page', icon: 'fa-signal',       admin: true },
   { key: 'shortcuts',  label: 'Shortcuts',   icon: 'fa-keyboard' },
   { key: 'plugins',    label: 'Plugins',     icon: 'fa-puzzle-piece', admin: true },
+  { key: 'saml',     label: 'SAML SSO',  icon: 'fa-id-card',     admin: true },
+  { key: 'scim',     label: 'SCIM',      icon: 'fa-sync-alt',    admin: true },
+  { key: 'webauthn', label: 'WebAuthn',  icon: 'fa-fingerprint', admin: true },
+  { key: 'database',  label: 'Database',  icon: 'fa-server',   admin: true },
+  { key: 'branding',  label: 'Branding',  icon: 'fa-palette',  admin: true },
+  { key: 'tenants',    label: 'Tenants',    icon: 'fa-building',       admin: true },
+  { key: 'audit',      label: 'Audit Log',  icon: 'fa-history',        admin: true },
+  { key: 'compliance', label: 'Compliance', icon: 'fa-clipboard-check', admin: true },
+  { key: 'rbac',       label: 'Access Control', icon: 'fa-shield-alt', admin: true },
+  { key: 'freeze',     label: 'Freeze Windows', icon: 'fa-snowflake',  admin: true },
+  { key: 'vault',      label: 'Secrets Vault',  icon: 'fa-vault',      admin: true },
+  { key: 'password-policy', label: 'Password Policy', icon: 'fa-key', admin: true },
+  { key: 'sessions',   label: 'Sessions',   icon: 'fa-clock',          admin: true },
+  { key: 'retention',  label: 'Data Retention', icon: 'fa-database',   admin: true },
+  { key: 'license',    label: 'License',    icon: 'fa-key',            admin: true },
 ]
 
 const filteredTabs = computed(() => {
@@ -45,6 +60,21 @@ const tabComponents = {
   statuspage:   defineAsyncComponent(() => import('../components/settings/StatusPageTab.vue')),
   shortcuts:    defineAsyncComponent(() => import('../components/settings/ShortcutsTab.vue')),
   plugins:      defineAsyncComponent(() => import('../components/settings/PluginsTab.vue')),
+  saml:     defineAsyncComponent(() => import('../components/settings/SamlTab.vue')),
+  scim:     defineAsyncComponent(() => import('../components/settings/ScimTab.vue')),
+  webauthn: defineAsyncComponent(() => import('../components/settings/WebAuthnTab.vue')),
+  database: defineAsyncComponent(() => import('../components/settings/DatabaseTab.vue')),
+  branding: defineAsyncComponent(() => import('../components/settings/BrandingTab.vue')),
+  tenants:    defineAsyncComponent(() => import('../components/settings/TenantsTab.vue')),
+  audit:      defineAsyncComponent(() => import('../components/settings/AuditTab.vue')),
+  compliance: defineAsyncComponent(() => import('../components/settings/ComplianceTab.vue')),
+  rbac:       defineAsyncComponent(() => import('../components/settings/RBACTab.vue')),
+  freeze:     defineAsyncComponent(() => import('../components/settings/FreezeTab.vue')),
+  vault:      defineAsyncComponent(() => import('../components/settings/VaultTab.vue')),
+  'password-policy': defineAsyncComponent(() => import('../components/settings/PasswordPolicyTab.vue')),
+  sessions:   defineAsyncComponent(() => import('../components/settings/SessionsTab.vue')),
+  retention:  defineAsyncComponent(() => import('../components/settings/RetentionTab.vue')),
+  license:    defineAsyncComponent(() => import('../components/settings/LicenseTab.vue')),
 }
 
 const tabComponent = computed(() => tabComponents[tab.value])

@@ -21,8 +21,12 @@ PID_FILE    = os.environ.get("PID_FILE", "/tmp/noba-web-server.pid")
 ACTION_LOG  = os.path.join(LOG_DIR, "noba-action.log")
 AUTH_CONFIG = os.path.expanduser("~/.config/noba-web/auth.conf")
 USER_DB     = os.path.expanduser("~/.config/noba-web/users.conf")
-NOBA_YAML   = os.environ.get("NOBA_CONFIG", os.path.expanduser("~/.config/noba/config.yaml"))
+NOBA_YAML    = os.environ.get("NOBA_CONFIG", os.path.expanduser("~/.config/noba/config.yaml"))
+NOBA_LICENSE = os.path.join(os.path.dirname(NOBA_YAML), "noba.license")
 HISTORY_DB  = os.path.join(LOG_DIR, "noba-history.db")
+DATABASE_URL  = os.environ.get("DATABASE_URL", "")
+NOBA_PG_POOL_MIN  = int(os.environ.get("NOBA_PG_POOL_MIN", 1))
+NOBA_PG_POOL_MAX  = int(os.environ.get("NOBA_PG_POOL_MAX", 10))
 
 # ── Limits & tunables ────────────────────────────────────────────────────────
 MAX_BODY_BYTES        = 64 * 1024
@@ -104,6 +108,16 @@ WEB_KEYS = frozenset([
     # AI / LLM
     "llmProvider", "llmModel", "llmApiKey", "llmBaseUrl",
     "llmMaxTokens", "llmTemperature", "llmEnabled",
+    # Enterprise – SAML SSO
+    "samlEnabled", "samlIdpSsoUrl", "samlIdpCert",
+    "samlEntityId", "samlAcsUrl", "samlDefaultRole", "samlGroupMapping",
+    "samlAllowedRedirectUris",
+    # Enterprise – Branding
+    "brandingOrgName", "brandingAccentColor", "brandingLogoUrl", "brandingLoginBgUrl",
+    # Enterprise – License
+    "seatLimit",
+    # Auto-update
+    "autoUpdateEnabled",
 ])
 _NOTIF_WEB_KEYS = frozenset([
     "pushoverEnabled", "pushoverAppToken", "pushoverUserKey",
@@ -150,7 +164,7 @@ SECURITY_HEADERS = {
         "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self' data:; "
-        "img-src 'self' data: blob:; connect-src 'self' wss: ws:"
+        "img-src 'self' data: blob: https: http:; connect-src 'self' wss: ws:"
     ),
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
 }

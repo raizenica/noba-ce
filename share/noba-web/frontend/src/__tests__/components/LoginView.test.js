@@ -162,18 +162,21 @@ describe('LoginView', () => {
     let resolveLogin
     const loginPromise = new Promise((res) => { resolveLogin = res })
 
-    // First call: GET /api/auth/providers (on mount) — resolve immediately
-    // Second call: POST /api/login (from auth.login) — stays pending
+    // onMounted makes 3 fetch calls: branding, providers, saml — all fail immediately
+    // Final call: POST /api/login (from auth.login) — stays pending
     global.fetch = vi.fn()
-      .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
-      .mockReturnValueOnce(loginPromise)
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) }) // branding
+      .mockResolvedValueOnce({ ok: false, json: async () => ([]) }) // providers
+      .mockResolvedValueOnce({ ok: false })                         // saml/metadata
+      .mockReturnValueOnce(loginPromise)                            // login (pending)
 
     const wrapper = mount(LoginView, {
       global: { plugins: [router] },
     })
 
-    // Wait for mount's provider fetch to settle
-    await new Promise((r) => setTimeout(r, 0))
+    // Wait for all 3 mount fetches (branding, providers, saml) to settle
+    await new Promise((r) => setTimeout(r, 10))
+    await wrapper.vm.$nextTick()
 
     await wrapper.find('input[type="text"]').setValue('alice')
     await wrapper.find('input[type="password"]').setValue('secret')
@@ -183,15 +186,16 @@ describe('LoginView', () => {
 
     // Yield to let the synchronous part of handleLogin run (loading.value = true)
     await new Promise((r) => setTimeout(r, 0))
+    await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('button[type="submit"]').element.disabled).toBe(true)
 
     // Clean up — resolve the pending fetch so no uncaught rejection
     resolveLogin({ ok: false, json: async () => ({}) })
   })
 
-  it('shows social login provider buttons when none configured', async () => {
-    // No providers configured — should show greyed-out placeholder buttons
+  it('hides social login section when no providers configured', async () => {
+    // No providers configured — provider section should not render
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       json: async () => ([]),
@@ -205,8 +209,8 @@ describe('LoginView', () => {
     await new Promise((r) => setTimeout(r, 0))
     await wrapper.vm.$nextTick()
 
-    // Should show placeholder provider names (greyed out)
-    expect(wrapper.text()).toContain('Google')
-    expect(wrapper.text()).toContain('GitHub')
+    // No providers returned — social buttons should not be shown
+    expect(wrapper.text()).not.toContain('Google')
+    expect(wrapper.text()).not.toContain('GitHub')
   })
 })

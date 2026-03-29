@@ -204,7 +204,61 @@ MIGRATIONS: list[dict] = [
             DROP TABLE IF EXISTS endpoint_monitors;
         """,
     },
+    {
+        "version": 6,
+        "name": "multi_tenancy",
+        "up": """
+            -- Tenant registry
+            CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                slug TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                disabled INTEGER NOT NULL DEFAULT 0,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                limits_json TEXT NOT NULL DEFAULT '{}'
+            );
+
+            -- User→tenant membership with per-tenant role
+            CREATE TABLE IF NOT EXISTS tenant_members (
+                tenant_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                joined_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, username)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tenant_members_username ON tenant_members(username);
+
+            -- Seed the default tenant so existing installs stay functional
+            INSERT OR IGNORE INTO tenants (id, name, slug, created_at)
+                VALUES ('default', 'Default Organization', 'default',
+                        CAST(strftime('%s','now') AS INTEGER));
+        """,
+        "down": """
+            DROP INDEX IF EXISTS idx_tenant_members_username;
+            DROP TABLE IF EXISTS tenant_members;
+            DROP TABLE IF EXISTS tenants;
+        """,
+    },
+    {
+        "version": 7,
+        "name": "enterprise_tenant_columns",
+        "up": "",  # handled programmatically below
+        "down": "",  # ALTER TABLE DROP COLUMN not supported in SQLite
+    },
 ]
+
+
+def _apply_v7_tenant_columns(conn: sqlite3.Connection) -> None:
+    """Add tenant_id to existing tables that predate enterprise multi-tenancy."""
+    tables = ["audit", "automations", "integration_instances", "api_keys"]
+    for table in tables:
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "tenant_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
+
 
 _SCHEMA_VERSION_TABLE = "schema_version"
 
@@ -236,7 +290,11 @@ def _apply_migration(
     try:
         with lock:
             # Execute migration SQL
-            conn.executescript(up_sql)
+            if up_sql:
+                conn.executescript(up_sql)
+            # Run programmatic migrations
+            if version == 7:
+                _apply_v7_tenant_columns(conn)
             # Record version
             conn.execute(
                 f"INSERT INTO {_SCHEMA_VERSION_TABLE} (version, applied_at) VALUES (?, ?)",

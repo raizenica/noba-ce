@@ -1,17 +1,17 @@
 <div align="center">
 
-# 🛸 NOBA Command Center
+# NOBA Command Center — Enterprise
 
 **Infrastructure management, from one dashboard.**
 
 Real-time monitoring · Self-healing infrastructure · Remote agents · Predictive intelligence · 40+ integrations
 Deploy anywhere — bare metal, Docker, multi-site.
 
-`FastAPI` · `Vue 3 + Vite` · `Chart.js` · `SQLite WAL` · `Pinia`
+`FastAPI` · `Vue 3 + Vite` · `Chart.js` · `SQLite / PostgreSQL / MySQL` · `Pinia`
 
 <br>
 
-![Dashboard](docs/images/dashboard.png)
+![Enterprise Dashboard](docs/images/enterprise-preview.gif)
 
 </div>
 
@@ -22,8 +22,8 @@ Deploy anywhere — bare metal, Docker, multi-site.
 ### 🐧 Bare Metal
 
 ```bash
-git clone https://github.com/raizenica/noba.git
-cd noba
+git clone https://github.com/raizenica/noba-enterprise.git
+cd noba-enterprise
 bash install.sh
 ```
 
@@ -35,8 +35,8 @@ journalctl --user -u noba-web.service | grep password
 ### 🐳 Docker
 
 ```bash
-git clone https://github.com/raizenica/noba.git
-cd noba
+git clone https://github.com/raizenica/noba-enterprise.git
+cd noba-enterprise
 docker compose up -d
 ```
 
@@ -73,6 +73,24 @@ volumes:
 
 ---
 
+## 🏢 Enterprise Features
+
+Everything in the community edition, plus:
+
+| Feature | Description |
+|---------|-------------|
+| **SAML 2.0 SSO** | IdP-initiated and SP-initiated login, metadata endpoint, attribute mapping |
+| **SCIM 2.0 Provisioning** | Auto-provision / deprovision users and groups from your identity provider |
+| **WebAuthn / Passkeys** | Hardware key and biometric login — FIDO2 compliant |
+| **PostgreSQL backend** | Drop-in replacement for SQLite — connection pooling, HA-ready |
+| **MySQL / MariaDB backend** | Alternative relational backend for existing DB infrastructure |
+| **Enterprise theme** | Deep navy + gold UI palette, ENTERPRISE badge throughout |
+| **Multi-instance management** | Manage and monitor instances across sites from a single pane |
+
+See [docs/enterprise-setup.md](docs/enterprise-setup.md) for full setup instructions.
+
+---
+
 ## 🖥️ Features at a Glance
 
 ### 📊 Dashboard & Monitoring
@@ -91,8 +109,6 @@ Live system metrics, sparkline charts, health bar, anomaly detection — updated
 
 Deploy lightweight agents to any Linux (or Windows) box. Send 42 command types in real time.
 
-![Agents](docs/images/agents.png)
-
 - 🚀 **Zero-dependency agent** — reads `/proc` directly, optional psutil for cross-platform
 - ⚡ **WebSocket real-time** — instant command delivery with HTTP polling fallback
 - 📡 **Streaming output** — long-running commands stream line-by-line
@@ -109,9 +125,10 @@ Per-agent security scoring with findings, config audit, and posture ring.
 
 ![Security](docs/images/security.png)
 
-- 🔐 **PBKDF2 hashing**, TOTP 2FA, OIDC, LDAP, API keys
+- 🔐 **SAML 2.0 / OIDC / LDAP** — enterprise identity providers, attribute mapping
+- 🔑 **WebAuthn / Passkeys** — FIDO2 hardware keys and biometrics
+- 🔏 **SCIM 2.0** — automatic user lifecycle management from your IdP
 - 👥 **3-tier RBAC** — admin, operator, viewer with fine-grained permissions
-- 🧱 **Input validation** — regex + length limits on all user inputs
 - 📋 **Audit logging** — every action tracked with username, IP, timestamp
 - 🚦 **Rate limiting** — per-IP and per-user with automatic lockout
 
@@ -131,8 +148,6 @@ SLA dashboards, incident tracking, endpoint checks, custom charts, InfluxDB pane
 
 Service topology, config drift detection, network maps, predictive disk intelligence.
 
-![Infrastructure](docs/images/infrastructure.png)
-
 - 🗺️ **Service dependency topology** — force-directed graph with impact analysis
 - 🔀 **Configuration drift** — baseline checksums across agents, alert on changes
 - 🌐 **Tailscale network map** — visual node grid with online/offline status
@@ -140,6 +155,16 @@ Service topology, config drift detection, network maps, predictive disk intellig
 - 🏥 **Per-service health scoring** — weighted composite (uptime 40%, latency 25%, error rate 20%, headroom 15%)
 - 📝 **Real-time log streaming** — live tail via WebSocket, color-coded by priority
 - 📄 **Public status page** — component groups, 90-day uptime, no auth required
+
+### 🔑 Login
+
+Enterprise-grade login with SSO support out of the box.
+
+![Login](docs/images/login.png)
+
+- **SAML 2.0 button** — auto-detected when SAML is configured
+- **OIDC / OAuth providers** — Google, GitHub, Microsoft, and custom
+- **Standard credentials** — username + password with TOTP 2FA option
 
 ---
 
@@ -152,7 +177,7 @@ Service topology, config drift detection, network maps, predictive disk intellig
 | 🌐 **Network** | Pi-hole v5/v6, AdGuard Home, Traefik, Nginx Proxy Manager, Cloudflare, UniFi |
 | 🏠 **IoT & Home** | Home Assistant, Homebridge, Zigbee2MQTT, ESPHome, UniFi Protect, PiKVM |
 | 🛠️ **DevOps** | Kubernetes, Gitea, GitLab, GitHub, Paperless-ngx, Vaultwarden |
-| 🔑 **Auth** | SSO/OIDC, LDAP/AD, TOTP 2FA, API keys, IP whitelisting |
+| 🔑 **Auth** | SAML 2.0, SCIM 2.0, WebAuthn, OIDC/OAuth, LDAP/AD, TOTP 2FA, API keys |
 | 📡 **Monitoring** | Tailscale mesh, cert expiry, domain expiry, weather, energy (Shelly) |
 
 ---
@@ -204,9 +229,9 @@ Fully autonomous infrastructure repair with safety controls and graduated trust.
 
 ## 🎨 UI / UX
 
-- 🧭 **Sidebar navigation** — persistent left sidebar with icon-only collapse
+- 🧭 **Sidebar navigation** — persistent left sidebar with ENTERPRISE badge, icon-only collapse
 - 🔍 **Global search** — `Ctrl+K` command palette
-- 🎭 **7 themes** — Default, Nord, Dracula, Tokyo, Catppuccin, Gruvbox, Blood Moon
+- 🎭 **8 themes** — Enterprise, Default, Nord, Dracula, Tokyo, Catppuccin, Gruvbox, Blood Moon
 - 👁️ **Quick glance** — press `g` to collapse all cards to headers
 - ⌨️ **Keyboard shortcuts** — fully customizable hotkeys
 - 🔔 **Notification center** — bell icon with unread count + PWA push
@@ -282,6 +307,6 @@ All settings are also configurable from the dashboard UI under **Settings → In
 
 **Prerequisites:** Python 3.10+ · Linux (Fedora, Ubuntu, Debian, Raspberry Pi OS, TrueNAS SCALE)
 
-📄 MIT License
+📄 MIT License · [Community Edition](https://github.com/raizenica/noba)
 
 </div>

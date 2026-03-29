@@ -16,10 +16,12 @@ from .collector import bg_collector, get_shutdown_flag
 from .config import NOBA_YAML, PID_FILE, SECURITY_HEADERS, VERSION
 from .db import db
 from . import deps as _deps
+from .logging_config import setup_logging as _setup_logging
 from .plugins import plugin_manager
 from .runner import job_runner
 from .auth import rate_limiter, token_store
 
+_setup_logging()
 logger = logging.getLogger("noba")
 _server_start_time = time.time()
 
@@ -87,9 +89,14 @@ async def _cleanup_loop() -> None:
             counter += 1
             if counter >= 12:
                 counter = 0
-                db.prune_history()
-                db.prune_audit()
-                db.prune_job_runs()
+                # Read configured retention policies (enterprise) or use defaults
+                try:
+                    _ret = db.retention_get("default")
+                except Exception:
+                    _ret = {}
+                db.prune_history(days=_ret.get("metrics_days"))
+                db.prune_audit(days=_ret.get("audit_days"))
+                db.prune_job_runs(days=_ret.get("job_runs_days"))
                 db.prune_rollups()
                 db.prune_endpoint_check_history()
                 try:
@@ -175,11 +182,15 @@ async def lifespan(app: FastAPI):
         _wn.scan(plugin_manager)
     except Exception:
         logger.exception("Plugin system failed to start")
-    from .scheduler import scheduler, fs_watcher, rss_watcher, endpoint_checker, drift_checker
+    from .scheduler import (
+        scheduler, fs_watcher, rss_watcher, endpoint_checker,
+        drift_checker, auto_updater,
+    )
     loop = _asyncio.get_running_loop()
     for name, component in [
         ("scheduler", scheduler), ("fs_watcher", fs_watcher),
         ("rss_watcher", rss_watcher), ("endpoint_checker", endpoint_checker),
+        ("auto_updater", auto_updater),
     ]:
         try:
             component.start()
@@ -212,7 +223,7 @@ async def lifespan(app: FastAPI):
     yield
     _cleanup_task.cancel()
     _transfer_cleanup_task.cancel()
-    for component in [rss_watcher, endpoint_checker, drift_checker, fs_watcher, scheduler]:
+    for component in [auto_updater, rss_watcher, endpoint_checker, drift_checker, fs_watcher, scheduler]:
         try:
             component.stop()
         except Exception:

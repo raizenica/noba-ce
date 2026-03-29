@@ -53,30 +53,11 @@ function onKeyDown(e) {
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
 
-  // Handle OIDC callback: exchange one-time code for auth token
-  const hash = window.location.hash
-  if (hash && hash.includes('oidc_code=')) {
-    const codeMatch = hash.match(/oidc_code=([^&]+)/)
-    if (codeMatch) {
-      try {
-        const res = await fetch('/api/auth/oidc/exchange', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: codeMatch[1] }),
-        })
-        if (res.ok) {
-          const data = await res.json()
-          auth.setToken(data.token)
-        }
-      } catch { /* OIDC exchange failed */ }
-      window.history.replaceState({}, '', '/#/dashboard')
-    }
-  }
-
   if (auth.token) {
     await auth.fetchUserInfo()
     if (auth.authenticated) {
       await settings.fetchSettings()
+      settings.applyBranding()
       await settings.fetchPreferences()
       if (!isMobile() && settings.preferences.sidebarCollapsed !== undefined) {
         sidebarCollapsed.value = settings.preferences.sidebarCollapsed
@@ -84,7 +65,7 @@ onMounted(async () => {
       dashboard.connectSse()
     }
   }
-  if (!auth.authenticated) {
+  if (!auth.authenticated && !window.location.hash.includes('/sso-callback')) {
     router.push('/login')
   }
 })

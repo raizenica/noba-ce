@@ -16,7 +16,7 @@ const authStore = useAuthStore()
 const store = useHealingStore()
 const notify = useNotificationsStore()
 const modals = useModalsStore()
-const { addInterval, clearAll } = useIntervals()
+const { register, clearAll } = useIntervals()
 
 // ── Tab state ─────────────────────────────────────────────────────────────────
 const activeTab = ref('overview')
@@ -82,7 +82,7 @@ function trustLevelClass(level) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 onMounted(() => {
   store.fetchAll()
-  addInterval(() => store.fetchAll(), HEALING_FETCH_ALL_INTERVAL_MS)
+  register('healing-fetch', () => store.fetchAll(), HEALING_FETCH_ALL_INTERVAL_MS)
 })
 
 onUnmounted(() => {

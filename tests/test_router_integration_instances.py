@@ -321,57 +321,50 @@ class TestConnectionTest:
 # SSRF Protection
 # ===========================================================================
 
-class TestSSRFProtection:
-    """_is_safe_url unit tests — the function guards automation webhooks (remediation.py).
-    Integration test-connection is operator-gated and intentionally allows private IPs
-    so users can reach their own NAS/Proxmox/UniFi on local networks."""
+class TestURLValidation:
+    """_is_safe_url validates scheme but allows private/RFC1918 IPs for on-prem deployments."""
 
-    def test_localhost_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://localhost:8080/api") is False
-
-    def test_127_0_0_1_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://127.0.0.1:9090") is False
-
-    def test_private_ip_10_x_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://10.0.0.1:3000") is False
-
-    def test_private_ip_192_168_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://192.168.1.1") is False
-
-    def test_metadata_169_254_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://169.254.169.254/latest/meta-data/") is False
-
-    def test_ipv6_loopback_blocked(self):
-        from server.routers.integration_instances import _is_safe_url
-        assert _is_safe_url("http://[::1]:8080") is False
-
-    def test_dns_rebind_private_blocked(self):
-        """Hostname resolving to private IP should be blocked."""
-        from server.routers.integration_instances import _is_safe_url
-        with patch("server.routers.integration_instances.socket.getaddrinfo") as mock_dns:
-            mock_dns.return_value = [(2, 1, 6, "", ("10.0.0.5", 80))]
-            assert _is_safe_url("http://evil.example.com/api") is False
-
-    def test_integration_endpoint_allows_private_ip(self, client, operator_headers):
-        """test-connection must NOT block private IPs — operators configure local devices."""
-        with patch("server.routers.integration_instances.httpx.AsyncClient") as mock_client:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_client.return_value)
-            mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.return_value.get = AsyncMock(return_value=mock_resp)
-            resp = client.post(
-                "/api/integrations/instances/test-connection",
-                json={"url": "http://192.168.1.100/api", "platform": "truenas"},
-                headers=operator_headers,
-            )
+    def test_rejects_invalid_scheme(self, client, operator_headers):
+        resp = client.post(
+            "/api/integrations/instances/test-connection",
+            json={"url": "ftp://example.com", "platform": "generic"},
+            headers=operator_headers,
+        )
         assert resp.status_code == 200
-        assert resp.json().get("success") is True
+        assert resp.json()["success"] is False
+
+    def test_accepts_private_192_168(self, client, operator_headers):
+        """RFC1918 private IPs must be allowed — NOBA is designed for on-prem."""
+        resp = client.post(
+            "/api/integrations/instances/test-connection",
+            json={"url": "http://192.168.1.1:8080", "platform": "generic"},
+            headers=operator_headers,
+        )
+        assert resp.status_code == 200
+        # Connection may fail (host unreachable) but URL should not be rejected
+        data = resp.json()
+        assert "private" not in data.get("error", "").lower()
+        assert "internal" not in data.get("error", "").lower()
+
+    def test_accepts_private_10_x(self, client, operator_headers):
+        resp = client.post(
+            "/api/integrations/instances/test-connection",
+            json={"url": "http://10.0.0.1:3000", "platform": "generic"},
+            headers=operator_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "private" not in data.get("error", "").lower()
+
+    def test_accepts_localhost(self, client, operator_headers):
+        resp = client.post(
+            "/api/integrations/instances/test-connection",
+            json={"url": "http://localhost:8080/api", "platform": "generic"},
+            headers=operator_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "private" not in data.get("error", "").lower()
 
 
 # ===========================================================================

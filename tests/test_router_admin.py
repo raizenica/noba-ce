@@ -6,6 +6,8 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 # ===========================================================================
 # GET /api/settings
@@ -1385,3 +1387,70 @@ class TestGraylogSearch:
             data = resp.json()
             assert data["messages"] == []
             assert data["total"] == 0
+
+
+class TestApiKeyScoping:
+    """API keys with scope/IP/rate-limit restrictions."""
+
+    @pytest.fixture
+    def scoped_key(self, client, admin_headers):
+        """Create an API key scoped to /api/metrics only."""
+        resp = client.post("/api/admin/api-keys", headers=admin_headers, json={
+            "name": "metrics-only",
+            "role": "viewer",
+            "scope": "metrics",
+        })
+        assert resp.status_code == 200
+        return resp.json()["key"]
+
+    def test_scoped_key_allows_metrics(self, client, scoped_key):
+        resp = client.get("/api/metrics/available",
+                          headers={"Authorization": f"ApiKey {scoped_key}"})
+        # 200 or 404 (endpoint may not exist in test) — but NOT 403
+        assert resp.status_code != 403
+
+    def test_scoped_key_blocks_admin(self, client, scoped_key):
+        resp = client.get("/api/admin/users",
+                          headers={"Authorization": f"ApiKey {scoped_key}"})
+        assert resp.status_code == 403
+
+    def test_unscoped_key_allows_all(self, client, admin_headers):
+        resp = client.post("/api/admin/api-keys", headers=admin_headers, json={
+            "name": "unscoped",
+            "role": "admin",
+            "scope": "",
+        })
+        key = resp.json()["key"]
+        resp2 = client.get("/api/admin/users",
+                           headers={"Authorization": f"ApiKey {key}"})
+        assert resp2.status_code != 403
+
+    def test_ip_restricted_key_blocked_from_wrong_ip(self, client, admin_headers):
+        resp = client.post("/api/admin/api-keys", headers=admin_headers, json={
+            "name": "ip-restricted",
+            "role": "viewer",
+            "allowed_ips": ["10.0.0.0/8"],
+        })
+        key = resp.json()["key"]
+        # TestClient uses 127.0.0.1 — not in 10.0.0.0/8
+        resp2 = client.get("/api/metrics/available",
+                           headers={"Authorization": f"ApiKey {key}"})
+        assert resp2.status_code == 403
+
+    def test_rate_limited_key_returns_429_when_exceeded(self, client, admin_headers):
+        resp = client.post("/api/admin/api-keys", headers=admin_headers, json={
+            "name": "rate-limited",
+            "role": "viewer",
+            "rate_limit": 2,
+        })
+        assert resp.status_code == 200
+        key = resp.json()["key"]
+        headers = {"Authorization": f"ApiKey {key}"}
+        # First two requests should not be rate-limited
+        r1 = client.get("/api/metrics/available", headers=headers)
+        r2 = client.get("/api/metrics/available", headers=headers)
+        assert r1.status_code != 429
+        assert r2.status_code != 429
+        # Third request exceeds rate_limit=2 → 429
+        r3 = client.get("/api/metrics/available", headers=headers)
+        assert r3.status_code == 429

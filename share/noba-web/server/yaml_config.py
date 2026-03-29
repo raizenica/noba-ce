@@ -126,6 +126,12 @@ def read_yaml_settings() -> dict:
         "llmMaxTokens": 4096, "llmTemperature": 0.3, "llmEnabled": False,
         # ── Workflow automation ────────────────────────────────────────────
         "n8nUrl": "", "n8nApiKey": "",
+        # ── Enterprise – Branding ──────────────────────────────────────────
+        "brandingOrgName": "", "brandingAccentColor": "",
+        "brandingLogoUrl": "", "brandingLoginBgUrl": "",
+        # ── Enterprise – License ───────────────────────────────────────────
+        "seatLimit": 0,
+        "trialStartTs": 0,
     }
     if not os.path.exists(NOBA_YAML):
         with _settings_cache_lock:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import re
 import subprocess
 import time
@@ -780,28 +781,87 @@ def _handle_clear_cache(params):
 
 def _handle_trigger_backup(params):
     source = params.get("source", "default")
-    # Trigger via the existing backup automation
     from .runner import job_runner
+    # Look for a user-defined backup automation to trigger
+    from .db import db as _db
     try:
-        run_id = job_runner.submit(
-            lambda rid: subprocess.Popen(
-                ["echo", f"Backup triggered for {source}"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            ),
-            trigger=f"remediation:trigger_backup:{source}",
-            triggered_by="system",
-        )
-        return {"success": True, "output": f"Backup queued: run_id={run_id}"}
+        autos = _db.get_automations()
+        backup_auto = None
+        for a in autos:
+            name = (a.get("name") or "").lower()
+            atype = (a.get("type") or "").lower()
+            if "backup" in name or atype == "script" and "backup" in (a.get("command") or "").lower():
+                backup_auto = a
+                break
+        if backup_auto:
+            cmd = backup_auto.get("command", "")
+            run_id = job_runner.submit(
+                lambda rid: subprocess.Popen(
+                    cmd if isinstance(cmd, list) else ["bash", "-c", cmd],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                ),
+                trigger=f"remediation:trigger_backup:{source}",
+                triggered_by="system",
+            )
+            return {"success": True, "output": f"Backup automation '{backup_auto.get('name')}' triggered: run_id={run_id}"}
     except Exception as e:
-        return {"success": False, "output": str(e)}
+        logger.warning("trigger_backup automation lookup failed: %s", e)
+    # Fallback: check for backup script in SCRIPT_MAP
+    from .config import SCRIPT_DIR
+    backup_script = os.path.join(SCRIPT_DIR, "backup-to-nas.sh")
+    if os.path.isfile(backup_script):
+        try:
+            run_id = job_runner.submit(
+                lambda rid: subprocess.Popen(
+                    ["bash", backup_script],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                ),
+                trigger=f"remediation:trigger_backup:{source}",
+                triggered_by="system",
+            )
+            return {"success": True, "output": f"Backup script triggered: run_id={run_id}"}
+        except Exception as e:
+            return {"success": False, "output": str(e)}
+    return {"success": False, "output": "No backup automation or script found. Configure a backup automation first."}
 
 
 def _handle_failover_dns(params):
-    primary = params["primary"]
-    secondary = params["secondary"]
-    # This would configure DNS failover — implementation depends on infrastructure
-    logger.warning("DNS failover: %s -> %s", primary, secondary)
-    return {"success": True, "output": f"DNS failover: {primary} -> {secondary}"}
+    primary = params.get("primary", "")
+    secondary = params.get("secondary", "")
+    if not primary or not secondary:
+        return {"success": False, "output": "Missing 'primary' and/or 'secondary' DNS server params"}
+    # Attempt actual resolv.conf update on Linux systems
+    resolv = "/etc/resolv.conf"
+    try:
+        with open(resolv) as f:
+            original = f.read()
+        # Replace the primary nameserver with the secondary
+        new_lines = []
+        replaced = False
+        for line in original.splitlines():
+            if line.strip().startswith("nameserver") and primary in line and not replaced:
+                new_lines.append(f"nameserver {secondary}")
+                replaced = True
+            else:
+                new_lines.append(line)
+        if not replaced:
+            # Primary not found in resolv.conf — prepend secondary
+            new_lines.insert(0, f"nameserver {secondary}")
+        result = subprocess.run(
+            ["sudo", "-n", "tee", resolv],
+            input="\n".join(new_lines) + "\n",
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            logger.info("DNS failover applied: %s -> %s", primary, secondary)
+            return {"success": True, "output": f"DNS failover applied: {primary} -> {secondary}"}
+        # sudo not available or denied
+        logger.warning("DNS failover: sudo write failed: %s", result.stderr.strip())
+        return {"success": False, "output": f"DNS failover requires sudo access: {result.stderr.strip()}"}
+    except FileNotFoundError:
+        return {"success": False, "output": f"{resolv} not found — DNS failover not supported on this platform"}
+    except Exception as e:
+        return {"success": False, "output": f"DNS failover failed: {e}"}
 
 
 def _handle_scale_container(params):

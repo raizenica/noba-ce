@@ -44,16 +44,17 @@ def insert_automation(
     config: dict,
     schedule: str | None = None,
     enabled: bool = True,
+    tenant_id: str = "default",
 ) -> bool:
     now = int(time.time())
     try:
         with lock:
             conn.execute(
                 "INSERT OR IGNORE INTO automations "
-                "(id, name, type, config, schedule, enabled, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "(id, name, type, config, schedule, enabled, created_at, updated_at, tenant_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (auto_id, name, atype, json.dumps(config), schedule,
-                 1 if enabled else 0, now, now),
+                 1 if enabled else 0, now, now, tenant_id),
             )
             conn.commit()
         return True
@@ -117,20 +118,24 @@ def list_automations(
     conn: sqlite3.Connection,
     lock: threading.Lock,
     type_filter: str | None = None,
+    tenant_id: str | None = None,
 ) -> list[dict]:
     try:
+        clauses: list[str] = []
+        args: list = []
+        if type_filter:
+            clauses.append("type = ?")
+            args.append(type_filter)
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            args.append(tenant_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with lock:
-            if type_filter:
-                rows = conn.execute(
-                    "SELECT id, name, type, config, schedule, enabled, created_at, updated_at "
-                    "FROM automations WHERE type = ? ORDER BY name",
-                    (type_filter,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT id, name, type, config, schedule, enabled, created_at, updated_at "
-                    "FROM automations ORDER BY name"
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT id, name, type, config, schedule, enabled, created_at, updated_at "
+                f"FROM automations {where} ORDER BY name",
+                args,
+            ).fetchall()
         return [
             {
                 "id": r[0], "name": r[1], "type": r[2],
@@ -349,8 +354,10 @@ def get_workflow_trace(
 def prune_job_runs(
     conn: sqlite3.Connection,
     lock: threading.Lock,
+    days: int | None = None,
 ) -> None:
-    cutoff = int(time.time()) - JOB_RETENTION_DAYS * 86400
+    retention = days if days is not None else JOB_RETENTION_DAYS
+    cutoff = int(time.time()) - retention * 86400
     try:
         with lock:
             conn.execute(
@@ -847,7 +854,24 @@ def _get_active_maintenance_windows(
 
         if one_off_start is not None and one_off_end is not None:
             # One-off window: directly check time range
-            if one_off_start <= now <= one_off_end:
+            # Handle both unix timestamps and ISO 8601 strings
+            try:
+                start_ts = int(one_off_start)
+            except (ValueError, TypeError):
+                from datetime import datetime
+                try:
+                    start_ts = int(datetime.fromisoformat(str(one_off_start).replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    continue
+            try:
+                end_ts = int(one_off_end)
+            except (ValueError, TypeError):
+                from datetime import datetime
+                try:
+                    end_ts = int(datetime.fromisoformat(str(one_off_end).replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    continue
+            if start_ts <= now <= end_ts:
                 active.append(window)
         elif schedule:
             # Cron-based: check if any minute in the last duration_min matches
@@ -1108,7 +1132,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             schedule   TEXT,
             enabled    INTEGER NOT NULL DEFAULT 1,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            tenant_id TEXT NOT NULL DEFAULT 'default'
         );
 
         CREATE TABLE IF NOT EXISTS job_runs (
@@ -1201,9 +1226,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
 class _AutomationsMixin:
     def insert_automation(self, auto_id: str, name: str, atype: str,
                           config: dict, schedule: str | None = None,
-                          enabled: bool = True) -> bool:
+                          enabled: bool = True, tenant_id: str = "default") -> bool:
         return insert_automation(self._get_conn(), self._lock, auto_id, name, atype,
-                                 config, schedule=schedule, enabled=enabled)
+                                 config, schedule=schedule, enabled=enabled, tenant_id=tenant_id)
 
     def update_automation(self, auto_id: str, **kwargs) -> bool:
         return update_automation(self._get_conn(), self._lock, auto_id, **kwargs)
@@ -1211,8 +1236,8 @@ class _AutomationsMixin:
     def delete_automation(self, auto_id: str) -> bool:
         return delete_automation(self._get_conn(), self._lock, auto_id)
 
-    def list_automations(self, type_filter: str | None = None) -> list[dict]:
-        return list_automations(self._get_read_conn(), self._read_lock, type_filter=type_filter)
+    def list_automations(self, type_filter: str | None = None, tenant_id: str | None = None) -> list[dict]:
+        return list_automations(self._get_read_conn(), self._read_lock, type_filter=type_filter, tenant_id=tenant_id)
 
     def get_automation(self, auto_id: str) -> dict | None:
         return get_automation(self._get_read_conn(), self._read_lock, auto_id)
@@ -1240,8 +1265,8 @@ class _AutomationsMixin:
     def get_workflow_trace(self, workflow_auto_id: str, limit: int = 20) -> list[dict]:
         return get_workflow_trace(self._get_read_conn(), self._read_lock, workflow_auto_id, limit=limit)
 
-    def prune_job_runs(self) -> None:
-        prune_job_runs(self._get_conn(), self._lock)
+    def prune_job_runs(self, days: int | None = None) -> None:
+        prune_job_runs(self._get_conn(), self._lock, days=days)
 
     def mark_stale_jobs(self) -> None:
         mark_stale_jobs(self._get_conn(), self._lock)

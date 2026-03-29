@@ -892,9 +892,357 @@ class DriftChecker:
             logger.error("Manual drift check error: %s", e)
 
 
+# ── Post-update health & rollback (shared by manual + auto updates) ──────────
+
+_UPDATE_STATE_FILE = os.path.join(
+    os.path.expanduser("~/.local/share"), "noba-update.state",
+)
+_STABILITY_WINDOW = 300   # 5 min — server must survive this long after ANY update
+_MAX_CRASH_RETRIES = 2    # roll back after this many consecutive post-update crashes
+_HEALTH_ENDPOINTS = (
+    "/api/system/status",
+    "/api/agents",
+    "/api/dashboard",
+)
+
+
+def _read_update_state() -> dict | None:
+    try:
+        import json
+        with open(_UPDATE_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def write_update_state(prev_commit: str, branch: str, source: str = "auto") -> None:
+    """Save pre-update commit for rollback.  Called by both auto and manual updates."""
+    import json
+    state = {
+        "prev_commit": prev_commit,
+        "branch": branch,
+        "source": source,
+        "updated_at": int(time.time()),
+        "crashes": 0,
+    }
+    with open(_UPDATE_STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def _clear_update_state() -> None:
+    try:
+        os.unlink(_UPDATE_STATE_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def run_post_update_health_check() -> tuple[bool, list[str]]:
+    """Verify core API endpoints are responding after an update.
+
+    Returns (healthy, errors).  Called after the stability window to confirm
+    the server is actually functional, not just alive.
+    """
+    from .config import PORT
+    import urllib.request
+    errors = []
+    base = f"http://127.0.0.1:{PORT}"
+    for path in _HEALTH_ENDPOINTS:
+        try:
+            req = urllib.request.Request(f"{base}{path}", method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 500:
+                    errors.append(f"{path} returned {resp.status}")
+        except Exception as e:
+            errors.append(f"{path}: {e}")
+    return (len(errors) == 0, errors)
+
+
+def check_post_update_crash() -> None:
+    """Called early in server startup — detect post-update crash loops.
+
+    Works for BOTH manual and automatic updates because both write the
+    same state file before restarting.
+    """
+    from .routers.operations import _find_repo_dir, _git
+
+    state = _read_update_state()
+    if state is None:
+        return
+
+    elapsed = int(time.time()) - state.get("updated_at", 0)
+    if elapsed > _STABILITY_WINDOW:
+        _clear_update_state()
+        return
+
+    crashes = state.get("crashes", 0) + 1
+    prev_commit = state.get("prev_commit", "")
+    source = state.get("source", "unknown")
+
+    if crashes > _MAX_CRASH_RETRIES and prev_commit:
+        logger.critical(
+            "Post-update safety: %d crash(es) after %s update — rolling back to %s",
+            crashes, source, prev_commit[:12],
+        )
+        repo_dir = _find_repo_dir()
+        if repo_dir:
+            rollback = _git(repo_dir, "checkout", prev_commit, timeout=15)
+            if rollback.returncode == 0:
+                install_script = os.path.join(repo_dir, "install.sh")
+                if os.path.isfile(install_script):
+                    subprocess.run(
+                        ["bash", install_script, "--auto-approve", "--skip-deps", "--no-restart"],
+                        cwd=repo_dir, capture_output=True, text=True, timeout=120,
+                    )
+                db.audit_log(
+                    "update_rollback", "system",
+                    f"Rolled back to {prev_commit[:12]} after {crashes} post-{source}-update crash(es).",
+                )
+                # Disable auto-update to stop re-pulling the same bad commit
+                try:
+                    from .yaml_config import read_yaml_settings, write_yaml_settings
+                    settings = read_yaml_settings()
+                    settings["autoUpdateEnabled"] = False
+                    write_yaml_settings(settings)
+                except Exception:
+                    pass
+            else:
+                logger.error("Rollback failed: %s", rollback.stderr.strip())
+        _clear_update_state()
+        return
+
+    # Not at threshold — increment crash counter
+    import json
+    state["crashes"] = crashes
+    logger.warning(
+        "Post-update safety: restart detected after %s update (crash #%d/%d)",
+        source, crashes, _MAX_CRASH_RETRIES,
+    )
+    try:
+        with open(_UPDATE_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
+class AutoUpdater:
+    """Background thread that checks for updates and applies them automatically.
+
+    Runs every 6 hours (configurable).  Skips Docker containers (they
+    require ``docker pull``).  Skips when a maintenance window is active.
+    Logs every action to the audit trail.
+
+    Rollback safety is shared with manual updates — both write a state file
+    before restarting.  On startup, ``check_post_update_crash()`` detects
+    crash loops and rolls back regardless of how the update was triggered.
+    After the stability window, ``run_post_update_health_check()`` pings
+    core endpoints to confirm the server is actually functional.
+    """
+
+    _DEFAULT_INTERVAL = 6 * 3600  # 6 hours
+
+    def __init__(self) -> None:
+        self._shutdown = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        # Crash-loop detection runs here (before the bg thread) for both
+        # manual and auto updates — the state file is source-agnostic.
+        check_post_update_crash()
+        self._shutdown.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="auto-updater")
+        self._thread.start()
+        logger.info("Auto-updater started")
+
+    def stop(self) -> None:
+        self._shutdown.set()
+        if self._thread:
+            self._thread.join(timeout=10)
+
+    # ── helpers (imported lazily to avoid circular imports) ───────────────
+
+    @staticmethod
+    def _find_repo_dir():
+        from .routers.operations import _find_repo_dir
+        return _find_repo_dir()
+
+    @staticmethod
+    def _git(repo_dir: str, *args: str, timeout: int = 30):
+        from .routers.operations import _git
+        return _git(repo_dir, *args, timeout=timeout)
+
+    @staticmethod
+    def _is_docker() -> bool:
+        return os.path.isfile("/.dockerenv") or os.path.isfile("/run/.containerenv")
+
+    # ── main loop ────────────────────────────────────────────────────────
+
+    def _loop(self) -> None:
+        # Initial delay — let the server fully start before first check
+        if self._shutdown.wait(120):
+            return
+
+        # If we survived the initial delay after an update, run health check
+        state = _read_update_state()
+        if state is not None:
+            elapsed = int(time.time()) - state.get("updated_at", 0)
+            if elapsed <= _STABILITY_WINDOW + 120:
+                healthy, errors = run_post_update_health_check()
+                if healthy:
+                    source = state.get("source", "unknown")
+                    logger.info(
+                        "Post-update health check passed (%s update) — server stable",
+                        source,
+                    )
+                    db.audit_log(
+                        "update_health_ok", "system",
+                        f"Post-{source}-update health check passed. Server stable.",
+                    )
+                    _clear_update_state()
+                else:
+                    logger.error(
+                        "Post-update health check FAILED: %s — treating as crash",
+                        "; ".join(errors),
+                    )
+                    db.audit_log(
+                        "update_health_failed", "system",
+                        f"Health check failed: {'; '.join(errors)}",
+                    )
+                    # Treat failed health check as a crash — next restart will
+                    # increment the counter and eventually trigger rollback
+                    check_post_update_crash()
+
+        while not self._shutdown.is_set():
+            try:
+                self._tick()
+            except Exception as e:
+                logger.error("Auto-updater tick error: %s", e)
+            self._shutdown.wait(self._DEFAULT_INTERVAL)
+
+    def _tick(self) -> None:
+        from .yaml_config import read_yaml_settings
+        settings = read_yaml_settings()
+        # Setting: autoUpdateEnabled (defaults True for non-Docker)
+        if not settings.get("autoUpdateEnabled", True):
+            return
+
+        if self._is_docker():
+            return
+
+        # Skip during maintenance windows
+        try:
+            active = db.get_active_maintenance_windows()
+            if active:
+                logger.debug("Auto-updater: skipping — maintenance window active")
+                return
+        except Exception:
+            pass  # if MW check fails, proceed with update
+
+        repo_dir = self._find_repo_dir()
+        if not repo_dir:
+            return
+
+        try:
+            # Fetch latest from remote
+            fetch = self._git(repo_dir, "fetch", "--quiet", "origin", timeout=15)
+            if fetch.returncode != 0:
+                logger.warning("Auto-updater: git fetch failed: %s", fetch.stderr.strip())
+                return
+
+            # Get current branch
+            branch_result = self._git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+            branch = branch_result.stdout.strip() or "main"
+
+            # Count commits behind
+            behind = self._git(repo_dir, "rev-list", "--count", f"HEAD..origin/{branch}")
+            commits_behind = int(behind.stdout.strip()) if behind.returncode == 0 else 0
+
+            if commits_behind == 0:
+                return
+
+            # Save current commit for rollback before pulling
+            head = self._git(repo_dir, "rev-parse", "HEAD")
+            prev_commit = head.stdout.strip() if head.returncode == 0 else ""
+            if prev_commit:
+                write_update_state(prev_commit, branch, source="auto")
+
+            logger.info(
+                "Auto-updater: %d commit(s) behind on %s — applying update",
+                commits_behind, branch,
+            )
+            db.audit_log(
+                "auto_update_start", "system",
+                f"Auto-update: {commits_behind} commit(s) behind on {branch}",
+            )
+
+            # Step 1: git pull --ff-only
+            pull = self._git(repo_dir, "pull", "--ff-only", "origin", timeout=60)
+            if pull.returncode != 0:
+                msg = f"Auto-updater: git pull failed: {pull.stderr.strip()}"
+                logger.error(msg)
+                db.audit_log("auto_update_failed", "system", msg)
+                _clear_update_state()
+                return
+
+            # Step 2: rebuild frontend if build script exists
+            build_script = os.path.join(repo_dir, "scripts", "build-frontend.sh")
+            if os.path.isfile(build_script):
+                build = subprocess.run(
+                    ["bash", build_script],
+                    cwd=repo_dir, capture_output=True, text=True, timeout=120,
+                )
+                if build.returncode != 0:
+                    logger.warning(
+                        "Auto-updater: frontend build failed: %s",
+                        (build.stdout + build.stderr).strip()[-300:],
+                    )
+
+            # Step 3: re-install
+            install_script = os.path.join(repo_dir, "install.sh")
+            if os.path.isfile(install_script):
+                install = subprocess.run(
+                    ["bash", install_script, "--auto-approve", "--skip-deps", "--no-restart"],
+                    cwd=repo_dir, capture_output=True, text=True, timeout=120,
+                )
+                if install.returncode != 0:
+                    msg = f"Auto-updater: install.sh failed: {(install.stdout + install.stderr).strip()[-300:]}"
+                    logger.error(msg)
+                    db.audit_log("auto_update_failed", "system", msg)
+                    _clear_update_state()
+                    return
+
+            db.audit_log(
+                "auto_update_applied", "system",
+                f"Auto-update applied: {commits_behind} commit(s) on {branch}. "
+                f"Rollback anchor: {prev_commit[:12]}. Restarting…",
+            )
+            logger.info("Auto-updater: update applied, scheduling restart")
+
+            # Step 4: restart service (give time for audit log to flush)
+            time.sleep(2)
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", "restart", "noba-web.service"],
+                    timeout=10,
+                )
+            except Exception as exc:
+                logger.error("Auto-updater: service restart failed: %s", exc)
+
+        except subprocess.TimeoutExpired:
+            logger.error("Auto-updater: operation timed out")
+            db.audit_log("auto_update_failed", "system", "Auto-update timed out")
+            _clear_update_state()
+        except Exception as exc:
+            logger.error("Auto-updater: unexpected error: %s", exc)
+            db.audit_log("auto_update_failed", "system", f"Auto-update error: {exc}")
+            _clear_update_state()
+
+
 # Singletons
 scheduler = Scheduler()
 fs_watcher = FSTriggerWatcher()
 rss_watcher = RSSFeedWatcher()
 endpoint_checker = EndpointChecker()
 drift_checker = DriftChecker()
+auto_updater = AutoUpdater()

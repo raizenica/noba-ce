@@ -354,27 +354,22 @@ class TestTotpDisable:
 # ===========================================================================
 
 class TestAuthProviders:
-    """Provider listing — public endpoint.
+    """Provider listing — public endpoint."""
 
-    NOTE: api_auth_providers has a return type annotation ``-> dict`` but
-    actually returns a list.  FastAPI response validation rejects this with
-    a 500.  These tests document the current (broken) behaviour so any
-    future fix can be verified by flipping assertions to 200.
-    """
-
-    def test_returns_500_due_to_type_annotation_bug(self, client):
-        """The endpoint currently fails because it returns list, not dict."""
+    def test_returns_empty_list_when_no_providers(self, client):
         with patch("server.routers.auth.read_yaml_settings", return_value={}):
             resp = client.get("/api/auth/providers")
-            # This is a known bug: return type is -> dict but a list is returned.
-            assert resp.status_code == 500
+            assert resp.status_code == 200
+            assert resp.json() == []
 
-    def test_returns_500_even_with_providers_configured(self, client):
-        """Even with providers, the type annotation bug causes 500."""
+    def test_returns_providers_when_configured(self, client):
         cfg = {"socialProviders": {"google": {"clientId": "test-id", "clientSecret": "test-secret"}}}
         with patch("server.routers.auth.read_yaml_settings", return_value=cfg):
             resp = client.get("/api/auth/providers")
-            assert resp.status_code == 500
+            assert resp.status_code == 200
+            providers = resp.json()
+            assert len(providers) == 1
+            assert providers[0]["id"] == "google"
 
 
 # ===========================================================================

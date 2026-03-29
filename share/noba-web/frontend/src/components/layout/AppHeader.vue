@@ -1,5 +1,5 @@
 <script setup>
-import { ref, inject, onMounted, onUnmounted } from 'vue'
+import { ref, inject, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDashboardStore } from '../../stores/dashboard'
 import { useSettingsStore } from '../../stores/settings'
@@ -7,6 +7,7 @@ import { useNotificationsStore } from '../../stores/notifications'
 import { useAuthStore } from '../../stores/auth'
 import { useModalsStore } from '../../stores/modals'
 import { useApprovalsStore } from '../../stores/approvals'
+import { useLicenseStore } from '../../stores/license'
 import { useApi, useApiHealth } from '../../composables/useApi'
 
 const toggleSidebar = inject('toggleSidebar')
@@ -18,6 +19,7 @@ const notifStore = useNotificationsStore()
 const auth = useAuthStore()
 const modals = useModalsStore()
 const approvalsStore = useApprovalsStore()
+const licenseStore = useLicenseStore()
 const { get } = useApi()
 const apiHealth = useApiHealth()
 
@@ -53,6 +55,10 @@ let _maintenancePollInterval = null
 let _updateCheckInterval     = null
 
 onMounted(() => {
+  if (auth.isAdmin) licenseStore.fetchStatus()
+  // If role isn't set yet (fetchUserInfo still in progress), watch for it
+  else watch(() => auth.isAdmin, (isAdmin) => { if (isAdmin) licenseStore.fetchStatus() }, { once: true })
+
   approvalsStore.fetchCount()
   _approvalPollInterval = setInterval(() => approvalsStore.fetchCount(), 30_000)
 
@@ -81,6 +87,7 @@ const themes = [
   { value: 'dracula', label: 'Dracula' },
   { value: 'nord', label: 'Nord' },
   { value: 'bloodmoon', label: 'Blood Moon' },
+  { value: 'enterprise', label: 'Enterprise' },
 ]
 
 function onThemeChange(event) {
@@ -208,6 +215,31 @@ function openProfile() {
     >
       <i class="fas fa-arrow-circle-up" style="font-size:.65rem"></i>
       v{{ updateInfo.remote_version }}
+    </button>
+
+    <!-- Trial / grace / unlicensed pill -->
+    <button
+      v-if="auth.isAdmin && licenseStore.showBanner"
+      class="live-pill"
+      :style="`background:color-mix(in srgb, ${licenseStore.bannerColor} 12%, transparent);border:1px solid color-mix(in srgb, ${licenseStore.bannerColor} 35%, transparent);color:${licenseStore.bannerColor};cursor:pointer`"
+      :title="licenseStore.isUnlicensed ? 'Enterprise features disabled — click to upload a license' : 'Click to manage license'"
+      @click="router.push('/settings/license')"
+    >
+      <i class="fas fa-key" style="font-size:.6rem"></i>
+      {{ licenseStore.bannerText }}
+    </button>
+
+    <!-- Seat usage pill — admin only, shows when seat limit is configured -->
+    <button
+      v-if="auth.isAdmin && licenseStore.seats > 0"
+      class="live-pill"
+      :class="licenseStore.userCount >= licenseStore.seats ? 'conn-offline' : ''"
+      :title="`${licenseStore.userCount} of ${licenseStore.seats} seats in use — click to manage users`"
+      style="cursor:pointer"
+      @click="router.push('/settings/users')"
+    >
+      <i class="fas fa-users" style="font-size:.6rem"></i>
+      {{ licenseStore.userCount }}/{{ licenseStore.seats }} seats
     </button>
 
     <span class="live-pill" :class="`conn-${dashboardStore.connStatus}`">

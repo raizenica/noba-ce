@@ -1,10 +1,10 @@
 {
-  "name": "NOBA Command Center",
-  "short_name": "NOBA",
+  "name": "NOBA Command Center Enterprise",
+  "short_name": "NOBA EE",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#060a10",
-  "theme_color": "#00c8ff",
+  "background_color": "#07091a",
+  "theme_color": "#d4a843",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "/favicon.ico", "sizes": "48x48", "type": "image/x-icon" }

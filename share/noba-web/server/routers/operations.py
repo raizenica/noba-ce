@@ -759,6 +759,15 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
     steps: list[dict] = []
 
     try:
+        # Save current commit for rollback (shared with auto-updater)
+        head = await asyncio.to_thread(_git, repo_dir, "rev-parse", "HEAD")
+        branch_r = await asyncio.to_thread(_git, repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        prev_commit = head.stdout.strip() if head.returncode == 0 else ""
+        branch = branch_r.stdout.strip() or "main"
+        if prev_commit:
+            from ..scheduler import write_update_state
+            write_update_state(prev_commit, branch, source="manual")
+
         # Step 1: git pull
         pull = await asyncio.to_thread(_git, repo_dir, "pull", "--ff-only", "origin", timeout=60)
         steps.append({

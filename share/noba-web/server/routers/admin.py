@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from ..alerts import dispatch_notifications
 from ..config import ACTION_LOG, HISTORY_METRICS, LOG_DIR, NOBA_YAML
@@ -39,6 +39,19 @@ router = APIRouter()
 
 
 # ── /api/settings ─────────────────────────────────────────────────────────────
+@router.get("/api/branding")
+@handle_errors
+def api_branding_public():
+    """Public endpoint — returns safe branding display fields only (no auth required)."""
+    settings = read_yaml_settings()
+    return {
+        "orgName":     settings.get("brandingOrgName", ""),
+        "accentColor": settings.get("brandingAccentColor", ""),
+        "logoUrl":     settings.get("brandingLogoUrl", ""),
+        "loginBgUrl":  settings.get("brandingLoginBgUrl", ""),
+    }
+
+
 @router.get("/api/settings")
 @handle_errors
 def api_settings_get(auth=Depends(_get_auth)):
@@ -124,6 +137,37 @@ def api_audit(request: Request, auth=Depends(_require_admin)):
     to_ts = _safe_int(request.query_params.get("to", 0), 0)
     return db.get_audit(limit=limit, username_filter=user_filter, action_filter=action_filter,
                         from_ts=from_ts, to_ts=to_ts)
+
+
+# ── /api/audit/export ─────────────────────────────────────────────────────────
+@router.post("/api/audit/export")
+@handle_errors
+def api_audit_export(request: Request, auth=Depends(_require_admin)):
+    """Export full audit log as CSV (no pagination)."""
+    import csv
+    import io
+    username, _ = auth
+    rows = db.get_audit(limit=50_000)
+
+    def _generate():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["time", "username", "action", "details", "ip"])
+        yield buf.getvalue()
+        for row in rows:
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow([row["time"], row["username"], row["action"],
+                        row.get("details", ""), row.get("ip", "")])
+            yield buf.getvalue()
+
+    db.audit_log("audit_export", username,
+                 f"Exported audit log ({len(rows)} rows)", _client_ip(request))
+    return StreamingResponse(
+        _generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="noba-audit.csv"'},
+    )
 
 
 # ── /api/config/backup & /api/config/restore ─────────────────────────────────
@@ -984,3 +1028,17 @@ def api_graylog_search(request: Request, auth=Depends(_require_operator)):
     from ..integrations import get_graylog
     result = get_graylog(url, token, query, hours)
     return result or {"messages": [], "total": 0}
+
+
+# ── /api/admin/scim-token ─────────────────────────────────────────────────────
+@router.post("/api/admin/scim-token")
+@handle_errors
+def api_admin_scim_token(auth=Depends(_require_admin)):
+    """Generate a new SCIM provisioning bearer token (returned once, never stored plaintext)."""
+    import hashlib as _hashlib
+    import secrets as _secrets
+    import uuid as _uuid
+    token = _secrets.token_urlsafe(48)
+    token_hash = _hashlib.sha256(token.encode()).hexdigest()
+    db.scim_store_token(str(_uuid.uuid4()), token_hash)
+    return {"token": token, "note": "Store this token securely — it will not be shown again."}

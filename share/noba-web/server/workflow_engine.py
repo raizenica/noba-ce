@@ -109,6 +109,19 @@ class _HttpResult:
         pass
 
 
+def _sign_request_headers(secret: str | None, body: bytes) -> dict:
+    """Compute HMAC-SHA256 signature header for outbound webhooks.
+
+    Returns a dict with 'X-Noba-Signature' header, or empty dict if no secret.
+    """
+    if not secret:
+        return {}
+    import hashlib
+    import hmac as _hmac
+    sig = "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"X-Noba-Signature": sig}
+
+
 def _do_http_request(
     url: str,
     method: str = "GET",
@@ -116,17 +129,23 @@ def _do_http_request(
     body: str | bytes | None = None,
     auth: tuple[str, str] | None = None,
     timeout: float = 30,
+    signing_secret: str | None = None,
 ) -> _HttpResult:
     """Perform an HTTP request via httpx and return a Popen-compatible result."""
     import httpx
     import time as _time
+
+    merged_headers = dict(headers or {})
+    if body is not None and signing_secret:
+        raw = body.encode() if isinstance(body, str) else body
+        merged_headers.update(_sign_request_headers(signing_secret, raw))
 
     t0 = _time.monotonic()
     try:
         r = httpx.request(
             method,
             url,
-            headers=headers,
+            headers=merged_headers,
             content=body,
             auth=auth,
             timeout=timeout,

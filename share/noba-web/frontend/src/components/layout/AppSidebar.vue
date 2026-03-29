@@ -3,10 +3,14 @@ import { ref, inject } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useDashboardStore } from '../../stores/dashboard'
+import { useLicenseStore } from '../../stores/license'
+import { useSettingsStore } from '../../stores/settings'
 
 const route = useRoute()
 const authStore = useAuthStore()
 const dashboardStore = useDashboardStore()
+const settingsStore = useSettingsStore()
+const licenseStore = useLicenseStore()
 
 const sidebarCollapsed = inject('sidebarCollapsed')
 const toggleSidebar = inject('toggleSidebar')
@@ -23,6 +27,14 @@ const settingsTabs = [
   { tab: 'statuspage', label: 'Status Page', adminOnly: true },
   { tab: 'shortcuts', label: 'Shortcuts', adminOnly: false },
   { tab: 'plugins', label: 'Plugins', adminOnly: true },
+  // ── Enterprise ──────────────────────────────
+  { tab: '_enterprise', label: 'Enterprise', adminOnly: true, divider: true },
+  { tab: 'saml', label: 'SAML SSO', adminOnly: true, enterprise: true },
+  { tab: 'scim', label: 'SCIM', adminOnly: true, enterprise: true },
+  { tab: 'webauthn', label: 'WebAuthn', adminOnly: true, enterprise: true },
+  { tab: 'database', label: 'Database', adminOnly: true, enterprise: true },
+  { tab: 'branding', label: 'Branding', adminOnly: true, enterprise: true },
+  { tab: 'license',  label: 'License',  adminOnly: true },
 ]
 
 function isSettingsActive() {
@@ -43,9 +55,18 @@ function agentCounts() {
 <template>
   <aside class="app-sidebar" :class="{ 'mobile-open': !sidebarCollapsed }">
     <div class="app-sidebar-logo">
-      <div class="logo-mark" aria-hidden="true"><i class="fas fa-terminal"></i></div>
+      <div class="logo-mark" aria-hidden="true">
+        <img v-if="settingsStore.branding.logoUrl"
+             :src="settingsStore.branding.logoUrl"
+             style="width:24px;height:24px;object-fit:contain"
+             alt="Logo">
+        <i v-else class="fas fa-terminal"></i>
+      </div>
       <div class="logo-text">
-        <div class="logo-name">NOBA</div>
+        <div class="logo-name">
+          {{ settingsStore.branding.orgName || 'NOBA' }}
+          <span class="logo-edition">Enterprise</span>
+        </div>
         <div class="logo-tagline">Command Center</div>
       </div>
     </div>
@@ -130,12 +151,17 @@ function agentCounts() {
 
       <div v-show="settingsExpanded" class="sidebar-sub-items">
         <template v-for="item in settingsTabs" :key="item.tab">
+          <div
+            v-if="item.divider && authStore.isAdmin"
+            class="sidebar-sub-divider"
+          >{{ item.label }}</div>
           <router-link
-            v-if="!item.adminOnly || authStore.isAdmin"
+            v-else-if="!item.adminOnly || authStore.isAdmin"
             class="sidebar-sub-item"
-            :class="{ active: route.path === `/settings/${item.tab}` }"
-            :to="`/settings/${item.tab}`"
-          >{{ item.label }}</router-link>
+            :class="{ active: route.path === `/settings/${item.tab}`, 'enterprise-locked': item.enterprise && !licenseStore.active }"
+            :to="item.enterprise && !licenseStore.active ? '/settings/license' : `/settings/${item.tab}`"
+            :title="item.enterprise && !licenseStore.active ? 'Enterprise license required' : ''"
+          ><i v-if="item.enterprise && !licenseStore.active" class="fas fa-lock" style="font-size:.5rem;opacity:.4;margin-right:.4rem"></i>{{ item.label }}</router-link>
         </template>
       </div>
     </nav>
