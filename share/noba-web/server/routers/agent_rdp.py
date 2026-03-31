@@ -43,6 +43,11 @@ async def agent_rdp_ws(hostname: str, ws: WebSocket):
         await ws.close(code=4001, reason="Invalid or expired token")
         return
 
+    # RDP desktop viewing requires at least operator role
+    if role not in ("operator", "admin"):
+        await ws.close(code=4003, reason="Operator access required")
+        return
+
     await ws.accept()
 
     q: asyncio.Queue = asyncio.Queue(maxsize=RDP_QUEUE_MAXSIZE)

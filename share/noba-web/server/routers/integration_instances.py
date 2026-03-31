@@ -259,8 +259,8 @@ async def api_instance_truenas_vm(
 
 @router.post("/api/integrations/instances/test-connection")
 @handle_errors
-async def api_test_connection(request: Request, auth=Depends(_require_operator)):
-    """Test connectivity to an integration platform."""
+async def api_test_connection(request: Request, auth=Depends(_require_admin)):
+    """Test connectivity to an integration platform (admin-only: makes outbound requests)."""
     body = await _read_body(request)
 
     url = body.get("url", "")

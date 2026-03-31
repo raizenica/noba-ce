@@ -79,7 +79,7 @@ async function addStatusUpdate(incId) {
 async function resolveStatusIncident(incId) {
   if (!await modals.confirm('Mark this incident as resolved?')) return
   try {
-    await put(`/api/status/incidents/${incId}`, { status: 'resolved', resolved: true })
+    await post(`/api/status/incidents/${incId}/resolve`)
     await fetchIncidents()
   } catch { /* silent */ }
 }

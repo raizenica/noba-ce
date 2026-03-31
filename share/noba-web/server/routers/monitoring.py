@@ -282,7 +282,7 @@ async def api_add_status_update(incident_id: int, request: Request, auth=Depends
     return {"id": update_id, "status": "ok"}
 
 
-@router.put("/api/status/incidents/{incident_id}/resolve")
+@router.post("/api/status/incidents/{incident_id}/resolve")
 @handle_errors
 def api_resolve_status_incident(incident_id: int, request: Request, auth=Depends(_require_admin)):
     """Admin: resolve a status incident."""

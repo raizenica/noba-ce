@@ -6,6 +6,7 @@ import { useNotificationsStore } from '../stores/notifications'
 import { useIntervals } from '../composables/useIntervals'
 import { useModalsStore } from '../stores/modals'
 import AppTabBar from '../components/ui/AppTabBar.vue'
+import AppModal from '../components/ui/AppModal.vue'
 import HealOverviewBar from '../components/healing/HealOverviewBar.vue'
 import HealingOverviewTab from '../components/healing/HealingOverviewTab.vue'
 import HealingLedgerTab from '../components/healing/HealingLedgerTab.vue'
@@ -16,7 +17,10 @@ const authStore = useAuthStore()
 const store = useHealingStore()
 const notify = useNotificationsStore()
 const modals = useModalsStore()
-const { addInterval, clearAll } = useIntervals()
+const { register, clearAll } = useIntervals()
+
+const showInspectModal = ref(false)
+const inspectedRow = ref(null)
 
 // ── Tab state ─────────────────────────────────────────────────────────────────
 const activeTab = ref('overview')
@@ -82,7 +86,7 @@ function trustLevelClass(level) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 onMounted(() => {
   store.fetchAll()
-  addInterval(() => store.fetchAll(), HEALING_FETCH_ALL_INTERVAL_MS)
+  register('healing-refresh', () => store.fetchAll(), HEALING_FETCH_ALL_INTERVAL_MS)
 })
 
 onUnmounted(() => {

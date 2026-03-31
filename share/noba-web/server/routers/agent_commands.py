@@ -116,7 +116,7 @@ async def api_agent_command(hostname: str, request: Request, auth=Depends(_requi
 
 @router.get("/api/agents/{hostname}/results")
 @handle_errors
-def api_agent_results(hostname: str, auth=Depends(_get_auth)):
+def api_agent_results(hostname: str, auth=Depends(_require_operator)):
     """Get command execution results for an agent."""
     with _agent_cmd_lock:
         return _agent_cmd_results.get(hostname, [])

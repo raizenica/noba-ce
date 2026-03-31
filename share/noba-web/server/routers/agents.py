@@ -259,9 +259,7 @@ async def api_agent_report(request: Request):
     key = request.headers.get("X-Agent-Key", "")
     if not key:
         raise HTTPException(401, "Missing X-Agent-Key")
-    cfg = read_yaml_settings()
-    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
-    if not valid_keys or key not in valid_keys:
+    if not _validate_agent_key(key):
         raise HTTPException(403, "Invalid agent key")
     body = await _read_body(request)
     hostname = body.get("hostname", "unknown")[:253]

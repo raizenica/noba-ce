@@ -98,7 +98,7 @@ def api_network_connections(auth=Depends(_require_operator)):
 
 @router.get("/api/network/ports")
 @handle_errors
-def api_network_ports(auth=Depends(_get_auth)):
+def api_network_ports(auth=Depends(_require_operator)):
     """List listening ports with process info."""
     return get_listening_ports()
 
