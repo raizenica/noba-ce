@@ -5,7 +5,7 @@ import DashboardCard from './DashboardCard.vue'
 
 const settings = useSettingsStore()
 
-const DEF_BOOKMARKS = 'Router|http://192.168.1.1|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt'
+const DEF_BOOKMARKS = 'Router|http://router.local|fa-network-wired, Pi-hole|http://pi.hole/admin|fa-shield-alt'
 
 const bookmarksStr = computed(() =>
   settings.data.bookmarks || localStorage.getItem('noba-bookmarks') || DEF_BOOKMARKS

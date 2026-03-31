@@ -437,19 +437,19 @@ async def _ensure_agent_discovery(hostname: str, timeout: float = 15.0) -> str |
     return None
 
 
-@router.get("/api/export/ansible")
-@handle_errors
-async def api_export_ansible(request: Request, auth=Depends(_require_operator)):
-    """Generate an Ansible playbook from live agent data."""
-    from ..iac_export import generate_ansible
+async def _run_export_with_discovery(
+    request: Request, fmt: str, hostname: str | None, discover: bool,
+) -> PlainTextResponse:
+    """Shared logic for IaC export endpoints (all formats)."""
+    from ..iac_export import generate_ansible, generate_docker_compose, generate_shell_script
 
-    hostname = request.query_params.get("hostname") or None
-    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
+    if fmt in ("docker-compose", "shell") and not hostname:
+        raise HTTPException(400, "hostname parameter is required")
+
     warning = None
     if discover and hostname:
         warning = await _ensure_agent_discovery(hostname)
     elif discover and not hostname:
-        # Discover for all online agents
         with _agent_data_lock:
             hosts = list(_agent_data.keys())
         warnings = []
@@ -459,59 +459,71 @@ async def api_export_ansible(request: Request, auth=Depends(_require_operator)):
                 warnings.append(f"{h}: {w}")
         warning = "; ".join(warnings) if warnings else None
 
-    output = generate_ansible(
-        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
-    )
-    resp = PlainTextResponse(output, media_type="text/yaml")
+    generators = {
+        "ansible": (generate_ansible, "text/yaml"),
+        "docker-compose": (generate_docker_compose, "text/yaml"),
+        "shell": (generate_shell_script, "text/x-shellscript"),
+    }
+    gen_fn, media = generators[fmt]
+    output = gen_fn(db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname)
+    resp = PlainTextResponse(output, media_type=media)
     if warning:
         resp.headers["X-Noba-Discovery-Warning"] = warning
     return resp
+
+
+@router.get("/api/export/ansible")
+@handle_errors
+async def api_export_ansible(request: Request, auth=Depends(_get_auth)):
+    """Generate an Ansible playbook from cached agent data (read-only)."""
+    hostname = request.query_params.get("hostname") or None
+    return await _run_export_with_discovery(request, "ansible", hostname, discover=False)
+
+
+@router.post("/api/export/ansible")
+@handle_errors
+async def api_export_ansible_discover(request: Request, auth=Depends(_require_operator)):
+    """Generate an Ansible playbook, optionally running agent discovery first."""
+    body = await _read_body(request)
+    hostname = body.get("hostname") or None
+    discover = body.get("discover", False)
+    return await _run_export_with_discovery(request, "ansible", hostname, discover=bool(discover))
 
 
 @router.get("/api/export/docker-compose")
 @handle_errors
-async def api_export_docker_compose(request: Request, auth=Depends(_require_operator)):
-    """Generate a docker-compose.yml from live agent container data."""
-    from ..iac_export import generate_docker_compose
-
+async def api_export_docker_compose(request: Request, auth=Depends(_get_auth)):
+    """Generate a docker-compose.yml from cached agent container data (read-only)."""
     hostname = request.query_params.get("hostname") or None
-    if not hostname:
-        raise HTTPException(400, "hostname parameter is required")
-    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
-    if discover:
-        warning = await _ensure_agent_discovery(hostname)
-    else:
-        warning = None
-    output = generate_docker_compose(
-        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
-    )
-    resp = PlainTextResponse(output, media_type="text/yaml")
-    if warning:
-        resp.headers["X-Noba-Discovery-Warning"] = warning
-    return resp
+    return await _run_export_with_discovery(request, "docker-compose", hostname, discover=False)
+
+
+@router.post("/api/export/docker-compose")
+@handle_errors
+async def api_export_docker_compose_discover(request: Request, auth=Depends(_require_operator)):
+    """Generate a docker-compose.yml, optionally running agent discovery first."""
+    body = await _read_body(request)
+    hostname = body.get("hostname") or None
+    discover = body.get("discover", False)
+    return await _run_export_with_discovery(request, "docker-compose", hostname, discover=bool(discover))
 
 
 @router.get("/api/export/shell")
 @handle_errors
-async def api_export_shell(request: Request, auth=Depends(_require_operator)):
-    """Generate a bash setup script from live agent data."""
-    from ..iac_export import generate_shell_script
-
+async def api_export_shell(request: Request, auth=Depends(_get_auth)):
+    """Generate a bash setup script from cached agent data (read-only)."""
     hostname = request.query_params.get("hostname") or None
-    if not hostname:
-        raise HTTPException(400, "hostname parameter is required")
-    discover = request.query_params.get("discover", "").lower() in ("1", "true", "yes")
-    if discover:
-        warning = await _ensure_agent_discovery(hostname)
-    else:
-        warning = None
-    output = generate_shell_script(
-        db, _agent_data, _agent_data_lock, _AGENT_MAX_AGE, hostname,
-    )
-    resp = PlainTextResponse(output, media_type="text/x-shellscript")
-    if warning:
-        resp.headers["X-Noba-Discovery-Warning"] = warning
-    return resp
+    return await _run_export_with_discovery(request, "shell", hostname, discover=False)
+
+
+@router.post("/api/export/shell")
+@handle_errors
+async def api_export_shell_discover(request: Request, auth=Depends(_require_operator)):
+    """Generate a bash setup script, optionally running agent discovery first."""
+    body = await _read_body(request)
+    hostname = body.get("hostname") or None
+    discover = body.get("discover", False)
+    return await _run_export_with_discovery(request, "shell", hostname, discover=bool(discover))
 
 
 # ── Backup Verification (Feature 4) ───────────────────────────────────────
@@ -655,7 +667,7 @@ async def api_update_check(auth=Depends(_require_operator)):
             import httpx as _httpx
             r = await asyncio.to_thread(
                 _httpx.get,
-                "https://api.github.com/repos/raizenica/noba/releases/latest",
+                "https://api.github.com/repos/raizenica/noba-ce/releases/latest",
                 timeout=10,
             )
             if r.status_code == 200:
@@ -668,11 +680,11 @@ async def api_update_check(auth=Depends(_require_operator)):
             "current_version": VERSION,
             "remote_version": latest or VERSION,
             "docker": True,
-            "docker_image": "ghcr.io/raizenica/noba",
+            "docker_image": "ghcr.io/raizenica/noba-ce",
             "docker_instructions": [
-                "docker pull ghcr.io/raizenica/noba:latest",
+                "docker pull ghcr.io/raizenica/noba-ce:latest",
                 "docker stop noba && docker rm noba",
-                "docker run -d --name noba -p 8080:8080 -v noba-data:/app/config ghcr.io/raizenica/noba:latest",
+                "docker run -d --name noba -p 8080:8080 -v noba-data:/app/config ghcr.io/raizenica/noba-ce:latest",
             ],
         }
 

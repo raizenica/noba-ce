@@ -538,26 +538,26 @@ class TestStatusIncidentResolve:
 
     def test_no_auth_returns_401(self, client, admin_headers):
         inc_id = _create_incident(client, admin_headers, "No Auth Resolve")
-        resp = client.put(f"/api/status/incidents/{inc_id}/resolve")
+        resp = client.post(f"/api/status/incidents/{inc_id}/resolve")
         assert resp.status_code == 401
 
     def test_viewer_returns_403(self, client, admin_headers, viewer_headers):
         inc_id = _create_incident(client, admin_headers, "Viewer Resolve")
-        resp = client.put(
+        resp = client.post(
             f"/api/status/incidents/{inc_id}/resolve", headers=viewer_headers
         )
         assert resp.status_code == 403
 
     def test_operator_returns_403(self, client, admin_headers, operator_headers):
         inc_id = _create_incident(client, admin_headers, "Operator Resolve")
-        resp = client.put(
+        resp = client.post(
             f"/api/status/incidents/{inc_id}/resolve", headers=operator_headers
         )
         assert resp.status_code == 403
 
     def test_admin_can_resolve(self, client, admin_headers):
         inc_id = _create_incident(client, admin_headers, "To Resolve")
-        resp = client.put(
+        resp = client.post(
             f"/api/status/incidents/{inc_id}/resolve", headers=admin_headers
         )
         assert resp.status_code == 200
@@ -566,7 +566,7 @@ class TestStatusIncidentResolve:
     def test_nonexistent_incident_returns_200_or_404(self, client, admin_headers):
         # The DB layer does not check rowcount on UPDATE so resolving a
         # nonexistent incident returns True, causing the route to return 200.
-        resp = client.put(
+        resp = client.post(
             "/api/status/incidents/999999/resolve", headers=admin_headers
         )
         assert resp.status_code in (200, 404)

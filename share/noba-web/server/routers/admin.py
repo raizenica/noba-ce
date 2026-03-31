@@ -730,7 +730,7 @@ def api_bandwidth_report(request: Request, auth=Depends(_get_auth)):
             "tx_bps": round(tx["value"]),
         })
 
-    from ..metrics import _fmt_bytes  # noqa: F811
+    from ..metrics import _fmt_bytes
     return {
         "range_hours": range_h,
         "total_rx": _fmt_bytes(total_rx),
@@ -837,7 +837,7 @@ def api_grafana_template(auth=Depends(_get_auth)):
 # ── /api/plugins/available & install ──────────────────────────────────────────
 @router.get("/api/plugins/available")
 @handle_errors
-def api_plugins_available(auth=Depends(_require_admin)):
+def api_plugins_available(auth=Depends(_get_auth)):
     cfg = read_yaml_settings()
     catalog_url = cfg.get("pluginCatalogUrl", "")
     return plugin_manager.get_available(catalog_url)
@@ -845,7 +845,7 @@ def api_plugins_available(auth=Depends(_require_admin)):
 
 @router.get("/api/plugins/bundled")
 @handle_errors
-def api_plugins_bundled(auth=Depends(_require_admin)):
+def api_plugins_bundled(auth=Depends(_get_auth)):
     """List bundled catalog plugins shipped with NOBA."""
     return plugin_manager.get_bundled_catalog()
 

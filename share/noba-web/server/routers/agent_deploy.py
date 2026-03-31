@@ -84,9 +84,7 @@ def api_agent_update(request: Request) -> FileResponse:
     key = request.headers.get("X-Agent-Key", "")
     if not key:
         raise HTTPException(401, "Missing X-Agent-Key")
-    cfg = _agents_mod.read_yaml_settings()
-    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
-    if not valid_keys or key not in valid_keys:
+    if not _agents_mod._validate_agent_key(key):
         raise HTTPException(403, "Invalid agent key")
     agent_path = _WEB_DIR.parent / "noba-agent.pyz"
     if not agent_path.exists():
@@ -101,9 +99,7 @@ def api_agent_install_script(request: Request) -> Response:
     key = request.headers.get("X-Agent-Key", "") or request.query_params.get("key", "")
     if not key:
         raise HTTPException(401, "Missing agent key")
-    cfg = _agents_mod.read_yaml_settings()
-    valid_keys = [k.strip() for k in cfg.get("agentKeys", "").split(",") if k.strip()]
-    if not valid_keys or key not in valid_keys:
+    if not _agents_mod._validate_agent_key(key):
         raise HTTPException(403, "Invalid agent key")
     host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", "localhost:8080"))
     scheme = request.headers.get("X-Forwarded-Proto", "http")

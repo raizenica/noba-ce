@@ -55,7 +55,7 @@ def _query_agent(hostname: str, target: str) -> dict | None:
         cmd_id = str(uuid.uuid4())[:8]
         cmd = {
             "id": cmd_id,
-            "command": "check_service",
+            "type": "check_service",
             "params": {"service": target},
         }
         with _agent_cmd_lock:

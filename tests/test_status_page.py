@@ -320,7 +320,7 @@ class TestStatusPageAPI:
         assert resp.status_code == 200
 
         # Resolve
-        resp = self.client.put(f"/api/status/incidents/{inc_id}/resolve", headers=headers)
+        resp = self.client.post(f"/api/status/incidents/{inc_id}/resolve", headers=headers)
         assert resp.status_code == 200
 
         # Verify via public endpoint

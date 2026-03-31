@@ -193,11 +193,9 @@ class TestNetworkPorts:
         resp = client.get("/api/network/ports")
         assert resp.status_code == 401
 
-    def test_viewer_returns_200(self, client, viewer_headers):
-        with patch("server.routers.infrastructure.get_listening_ports",
-                   return_value=[]):
-            resp = client.get("/api/network/ports", headers=viewer_headers)
-        assert resp.status_code == 200
+    def test_viewer_returns_403(self, client, viewer_headers):
+        resp = client.get("/api/network/ports", headers=viewer_headers)
+        assert resp.status_code == 403
 
     def test_returns_port_list(self, client, operator_headers):
         fake = [{"port": 22, "proto": "tcp", "pid": 1234, "process": "sshd"}]
