@@ -12,7 +12,6 @@ const authStore = useAuthStore()
 const notifStore = useNotificationsStore()
 
 const historyExpanded = ref(false)
-const timers = ref({})
 const now = ref(Date.now())
 
 let clockInterval = null

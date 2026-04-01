@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { LOG_AUTO_REFRESH_MS } from '../../constants'
 
@@ -34,10 +34,6 @@ function toggleLogAutoRefresh() {
   if (logAutoRefresh.value) {
     _logTimer = setInterval(fetchLog, LOG_AUTO_REFRESH_MS)
   }
-}
-
-function nextTick() {
-  return new Promise(r => setTimeout(r, 0))
 }
 
 onMounted(() => {

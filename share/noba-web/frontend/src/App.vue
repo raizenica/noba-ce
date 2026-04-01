@@ -112,13 +112,20 @@ watch(sidebarCollapsed, (val) => {
     settings.savePreferences().catch(() => {})
   }
 })
+
+// ── Theme persistence ─────────────────────────────────────────────────────────
+const _lsTheme = localStorage.getItem('noba-theme') || 'default'
+const activeTheme = computed(() =>
+  settings.preferences?.theme || settings.preferences?.preferences?.theme || _lsTheme
+)
+watch(activeTheme, (t) => { localStorage.setItem('noba-theme', t) })
 </script>
 
 <template>
   <div
     class="app-layout"
     :class="{ 'sidebar-collapsed': sidebarCollapsed, 'no-sidebar': !auth.authenticated }"
-    :data-theme="settings.preferences.theme || 'default'"
+    :data-theme="activeTheme"
   >
     <!-- Standalone routes (e.g. RDP viewer) — no chrome -->
     <template v-if="isStandalone && auth.authenticated">

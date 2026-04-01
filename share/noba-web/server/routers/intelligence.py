@@ -426,7 +426,7 @@ async def api_ai_chat(request: Request, auth=Depends(_require_operator)):
         raise
     except Exception as e:
         logger.error("AI chat error: %s", e)
-        raise HTTPException(502, f"LLM request failed: {e}")
+        raise HTTPException(502, "LLM request failed") from None
 
 
 @router.post("/api/ai/analyze-alert/{alert_id}")
@@ -465,7 +465,7 @@ async def api_ai_analyze_alert(alert_id: int, auth=Depends(_require_operator)):
         raise
     except Exception as e:
         logger.error("AI analyze-alert error: %s", e)
-        raise HTTPException(502, f"LLM request failed: {e}")
+        raise HTTPException(502, "LLM request failed") from None
 
 
 @router.post("/api/ai/analyze-logs")
@@ -497,7 +497,7 @@ async def api_ai_analyze_logs(request: Request, auth=Depends(_require_operator))
         raise
     except Exception as e:
         logger.error("AI analyze-logs error: %s", e)
-        raise HTTPException(502, f"LLM request failed: {e}")
+        raise HTTPException(502, "LLM request failed") from None
 
 
 @router.post("/api/ai/summarize-incident/{incident_id}")
@@ -536,7 +536,7 @@ async def api_ai_summarize_incident(incident_id: int, auth=Depends(_require_oper
         raise
     except Exception as e:
         logger.error("AI summarize-incident error: %s", e)
-        raise HTTPException(502, f"LLM request failed: {e}")
+        raise HTTPException(502, "LLM request failed") from None
 
 
 # ── Prediction endpoints ──────────────────────────────────────────────────────
@@ -569,4 +569,4 @@ async def api_ai_test(auth=Depends(_require_admin)):
         raise
     except Exception as e:
         logger.error("AI test error: %s", e)
-        raise HTTPException(502, f"LLM connection test failed: {e}")
+        raise HTTPException(502, "LLM connection test failed") from None

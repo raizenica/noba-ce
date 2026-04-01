@@ -1,5 +1,5 @@
 <script setup>
-const props = defineProps({
+defineProps({
   status: String, // 'queued' | 'running' | 'done' | 'failed' | 'disabled' | 'pending' | 'cancelled' | 'timeout'
 })
 

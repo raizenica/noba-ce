@@ -44,7 +44,7 @@ async function testNotification() {
   testing.value = true
   testResult.value = null
   try {
-    await post('/api/admin/test-notifications')
+    await post('/api/notifications/test')
     testResult.value = { ok: true, msg: 'Test notification sent!' }
   } catch (e) {
     testResult.value = { ok: false, msg: 'Failed — check your credentials.' }

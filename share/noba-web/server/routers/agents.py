@@ -38,6 +38,8 @@ logger = logging.getLogger("noba")
 _ws_logger = logging.getLogger("noba.agent.ws")
 
 _WEB_DIR = Path(__file__).resolve().parent.parent.parent  # share/noba-web/
+_HOSTNAME_RE = __import__("re").compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+_HOSTNAME_WS_RE = __import__("re").compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$')
 
 router = APIRouter(tags=["agents"])
 
@@ -263,6 +265,8 @@ async def api_agent_report(request: Request):
         raise HTTPException(403, "Invalid agent key")
     body = await _read_body(request)
     hostname = body.get("hostname", "unknown")[:253]
+    if not _HOSTNAME_RE.match(hostname):
+        raise HTTPException(400, "Invalid hostname")
     body["_received"] = time.time()
     body["_ip"] = _client_ip(request)
 
@@ -379,8 +383,8 @@ async def agent_websocket(ws: WebSocket):
             await ws.close(code=4002, reason="Expected identify message")
             return
         hostname = ident.get("hostname", "")
-        if not hostname:
-            await ws.close(code=4002, reason="No hostname")
+        if not hostname or not _HOSTNAME_WS_RE.match(hostname):
+            await ws.close(code=4002, reason="Invalid or missing hostname")
             return
 
         with _agent_ws_lock:

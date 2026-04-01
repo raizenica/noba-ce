@@ -1,5 +1,5 @@
 <script setup>
-const props = defineProps({
+defineProps({
   automation: Object,
   stat: Object,        // from autoStats[automation.id] — run counts
   selected: Boolean,

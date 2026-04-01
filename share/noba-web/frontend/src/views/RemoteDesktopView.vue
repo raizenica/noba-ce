@@ -81,7 +81,8 @@ async function connect() {
   }
 
   ws.onmessage = async (e) => {
-    const msg = JSON.parse(e.data)
+    let msg
+    try { msg = JSON.parse(e.data) } catch { return }
 
     if (msg.type === 'rdp_frame') {
       frameW.value = msg.w

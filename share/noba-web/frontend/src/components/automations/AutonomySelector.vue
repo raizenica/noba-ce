@@ -1,5 +1,5 @@
 <script setup>
-const model = defineModel({ default: 'execute' })
+const model = defineModel({ type: String, default: 'execute' })
 const levels = [
   { value: 'execute',  label: 'Execute',  desc: 'Run immediately',        icon: 'fa-bolt',  color: 'var(--success)' },
   { value: 'approve',  label: 'Approve',  desc: 'Queue for approval',     icon: 'fa-clock', color: 'var(--warning)' },

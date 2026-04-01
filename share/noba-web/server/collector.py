@@ -318,10 +318,10 @@ def collect_stats(qs: dict) -> dict:
             return res
         except ConfigError as e:
             logger.error("Config error in %s: %s", name or "integration", e)
-            return {"status": "unauthorized", "error": str(e)}
+            return {"status": "unauthorized", "error": "Configuration error"}
         except (TransientError, Exception) as e:
             logger.warning("Transient error in %s: %s", name or "integration", e)
-            return {"status": "offline", "error": str(e)}
+            return {"status": "offline", "error": "Connection failed"}
 
     def _cached_get(fut, cache_key, name=None, default=None, ttl=30):
         """Get a future result with optional cache layer."""

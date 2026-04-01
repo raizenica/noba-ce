@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import subprocess
 
@@ -13,6 +14,8 @@ from ..deps import (
 )
 from ..metrics import get_rclone_remotes
 from ..yaml_config import read_yaml_settings
+
+logger = logging.getLogger("noba")
 
 router = APIRouter()
 
@@ -36,7 +39,7 @@ def api_camera_snapshot(cam: str, auth=Depends(_get_auth)):
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(502, "Failed to fetch snapshot")
+        raise HTTPException(502, "Failed to fetch snapshot") from None
 
 
 # ── /api/cameras ──────────────────────────────────────────────────────────
@@ -142,7 +145,8 @@ async def api_hass_proxy(domain: str, service: str, request: Request, auth=Depen
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"HA service call failed: {e}")
+        logger.error("HA service call failed: %s", e)
+        raise HTTPException(502, "HA service call failed") from None
 
 
 @router.get("/api/hass/entities")
@@ -202,7 +206,8 @@ async def api_hass_toggle(entity_id: str, request: Request, auth=Depends(_requir
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"HA toggle failed: {e}")
+        logger.error("HA toggle failed: %s", e)
+        raise HTTPException(502, "HA toggle failed") from None
 
 
 @router.post("/api/hass/scene/{entity_id:path}")
@@ -225,7 +230,8 @@ async def api_hass_scene(entity_id: str, request: Request, auth=Depends(_require
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"Scene activation failed: {e}")
+        logger.error("Scene activation failed: %s", e)
+        raise HTTPException(502, "Scene activation failed") from None
 
 
 # ── /api/pihole/toggle ───────────────────────────────────────────────────────
@@ -257,7 +263,8 @@ async def api_pihole_toggle(request: Request, auth=Depends(_require_operator)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"Pi-hole toggle failed: {e}")
+        logger.error("Pi-hole toggle failed: %s", e)
+        raise HTTPException(502, "Pi-hole toggle failed") from None
 
 
 # ── /api/game-servers ─────────────────────────────────────────────────────────
@@ -332,9 +339,9 @@ async def api_cloud_remote_create(request: Request, auth=Depends(_require_admin)
         db.audit_log("cloud_remote_create", username, f"Created remote '{name}' ({remote_type})", _client_ip(request))
         return {"status": "ok"}
     except subprocess.TimeoutExpired:
-        raise HTTPException(504, "Command timed out")
+        raise HTTPException(504, "Command timed out") from None
     except FileNotFoundError:
-        raise HTTPException(424, "rclone not found")
+        raise HTTPException(424, "rclone not found") from None
 
 
 @router.delete("/api/cloud-remotes/{name}")
@@ -351,14 +358,13 @@ def api_cloud_remote_delete(name: str, request: Request, auth=Depends(_require_a
         db.audit_log("cloud_remote_delete", username, f"Deleted remote '{name}'", _client_ip(request))
         return {"status": "ok"}
     except FileNotFoundError:
-        raise HTTPException(424, "rclone not found")
+        raise HTTPException(424, "rclone not found") from None
 
 
 # ── /api/cloud-test ───────────────────────────────────────────────────────────
 @router.post("/api/cloud-test")
 @handle_errors
 async def api_cloud_test(request: Request, auth=Depends(_require_operator)):
-    import logging as _logging
     username, _ = auth
     ip   = _client_ip(request)
     body = await _read_body(request)
@@ -379,14 +385,14 @@ async def api_cloud_test(request: Request, auth=Depends(_require_operator)):
         return {"success": True}
     except subprocess.TimeoutExpired:
         db.audit_log("cloud_test", username, f"Remote {remote} timeout", ip)
-        raise HTTPException(504, "Connection timed out (15s)")
+        raise HTTPException(504, "Connection timed out (15s)") from None
     except FileNotFoundError:
-        raise HTTPException(424, "rclone not found on this system")
+        raise HTTPException(424, "rclone not found on this system") from None
     except HTTPException:
         raise
     except Exception as e:
-        _logging.getLogger("noba").error("Cloud test error: %s", e)
-        raise HTTPException(500, "Cloud test error")
+        logger.error("Cloud test error: %s", e)
+        raise HTTPException(500, "Cloud test error") from None
 
 
 # ── /api/influxdb/query ──────────────────────────────────────────────────────

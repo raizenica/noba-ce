@@ -1,10 +1,18 @@
 """Tests for the new auth features (TOTP, IP whitelist, API key auth, per-user rate limit)."""
 from __future__ import annotations
 
+import pytest
+
 
 class TestTotpHelpers:
     def test_generate_totp_secret(self):
         from server.auth import generate_totp_secret
+        try:
+            import pyotp  # noqa: F401
+        except ImportError:
+            with pytest.raises(RuntimeError, match="pyotp"):
+                generate_totp_secret()
+            return
         secret = generate_totp_secret()
         assert isinstance(secret, str)
         assert len(secret) > 10
