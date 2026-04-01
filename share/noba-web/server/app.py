@@ -4,12 +4,12 @@ from __future__ import annotations
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .collector import bg_collector, get_shutdown_flag
@@ -210,36 +210,30 @@ async def lifespan(app: FastAPI):
     _transfer_cleanup_task = _asyncio.create_task(_cleanup_transfers())
     logger.info("Noba v%s started (%d plugins)", VERSION, plugin_manager.count)
     yield
+    # Signal collector threads FIRST to prevent port-bind on restart
+    get_shutdown_flag().set()
+    # Close HTTP client early
+    with suppress(Exception):
+        from .integrations import _client as _http_client
+        _http_client.close()
     _cleanup_task.cancel()
     _transfer_cleanup_task.cancel()
     for component in [rss_watcher, endpoint_checker, drift_checker, fs_watcher, scheduler]:
-        try:
+        with suppress(Exception):
             component.stop()
-        except Exception:
-            pass
     job_runner.shutdown()
     plugin_manager.stop()
-    get_shutdown_flag().set()
     db.audit_log("system_stop", "system", "Server stopping")
-    try:
-        from .integrations import _client as _http_client
-        _http_client.close()
-    except Exception:
-        pass
     # Close all agent WebSocket connections
     from .agent_store import _agent_websockets, _agent_ws_lock
     with _agent_ws_lock:
         ws_list = list(_agent_websockets.items())
         _agent_websockets.clear()
     for _ws_hostname, ws_conn in ws_list:
-        try:
+        with suppress(Exception):
             await ws_conn.close(code=1001, reason="Server shutting down")
-        except Exception:
-            pass
-    try:
+    with suppress(Exception):
         os.unlink(PID_FILE)
-    except Exception:
-        pass
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -252,6 +246,19 @@ app = FastAPI(
     docs_url="/api/docs" if _dev_mode else None,
     redoc_url="/api/redoc" if _dev_mode else None,
 )
+
+
+@app.exception_handler(500)
+async def _handle_500(request: Request, exc: Exception):
+    logging.getLogger("noba").error("Unhandled 500: %s %s — %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+@app.exception_handler(422)
+async def _handle_422(request: Request, exc: Exception):
+    logging.getLogger("noba").warning("Validation error: %s %s — %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=422, content={"detail": "Validation error"})
+
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _cors_origins = os.environ.get("NOBA_CORS_ORIGINS", "").split(",")
@@ -360,7 +367,6 @@ async def health():
 @app.get("/{rest:path}")
 async def spa_fallback(rest: str = ""):
     if rest.startswith("api/"):
-        from fastapi import HTTPException
         raise HTTPException(404, "API route not found")
     # index.html must never be cached: it contains hashed asset URLs and must
     # always be fetched fresh so browsers pick up new deployments immediately.

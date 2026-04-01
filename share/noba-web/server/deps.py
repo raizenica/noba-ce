@@ -34,7 +34,7 @@ def _int_param(request: Request, name: str, default: int, lo: int, hi: int) -> i
     try:
         v = int(request.query_params.get(name, str(default)))
     except (ValueError, TypeError):
-        raise HTTPException(400, f"Invalid {name} parameter")
+        raise HTTPException(400, f"Invalid {name} parameter") from None
     return max(lo, min(hi, v))
 
 
@@ -44,18 +44,18 @@ def _client_ip(request: Request) -> str:
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
             return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "0.0.0.0"
+    return request.client.host if request.client else "unknown"
 
 
 async def _read_body(request: Request) -> dict:
     """Read JSON request body with MAX_BODY_BYTES size check."""
     raw = await request.body()
     if len(raw) > MAX_BODY_BYTES:
-        raise HTTPException(413, "Request body too large")
+        raise HTTPException(413, "Request body too large") from None
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        raise HTTPException(400, "Invalid JSON")
+        raise HTTPException(400, "Invalid JSON") from None
 
 
 def _run_cmd(cmd: list, timeout: float = 3) -> str:
@@ -85,7 +85,7 @@ def handle_errors(func):
                 raise
             except Exception:
                 _log.exception("Unhandled error in %s", func.__name__)
-                raise HTTPException(status_code=500, detail="Internal server error")
+                raise HTTPException(status_code=500, detail="Internal server error") from None
         return _async_wrapper
     else:
         @functools.wraps(func)
@@ -96,7 +96,7 @@ def handle_errors(func):
                 raise
             except Exception:
                 _log.exception("Unhandled error in %s", func.__name__)
-                raise HTTPException(status_code=500, detail="Internal server error")
+                raise HTTPException(status_code=500, detail="Internal server error") from None
         return _sync_wrapper
 
 
