@@ -48,7 +48,7 @@ async def api_container_control(request: Request, auth=Depends(_require_operator
         except Exception as e:
             logger.error("Container control error: %s", e)
             db.audit_log("container_control", username, f"{ct_action} {ct_name} error: {e}", ip)
-            raise HTTPException(500, "Container control error")
+            raise HTTPException(500, "Container control error") from None
     raise HTTPException(404, "No container runtime found")
 
 
@@ -70,7 +70,7 @@ async def api_container_logs(name: str, request: Request, auth=Depends(_require_
         except FileNotFoundError:
             continue
         except subprocess.TimeoutExpired:
-            raise HTTPException(504, "Log fetch timed out")
+            raise HTTPException(504, "Log fetch timed out") from None
     raise HTTPException(404, "No container runtime found")
 
 
@@ -148,7 +148,7 @@ async def api_container_stats(auth=Depends(_get_auth)):
         except FileNotFoundError:
             continue
         except subprocess.TimeoutExpired:
-            raise HTTPException(504, "Stats fetch timed out")
+            raise HTTPException(504, "Stats fetch timed out") from None
     return []
 
 
@@ -213,7 +213,7 @@ async def api_compose_action(project: str, action: str, request: Request, auth=D
         db.audit_log("compose", username, f"{action} {project} -> {ok}", _client_ip(request))
         return {"success": ok, "output": r.stdout[-500:] if r.stdout else r.stderr[-500:]}
     except subprocess.TimeoutExpired:
-        raise HTTPException(504, "Command timed out")
+        raise HTTPException(504, "Command timed out") from None
 
 
 # ── /api/truenas/vm ───────────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ async def api_truenas_vm(request: Request, auth=Depends(_require_operator)):
     try:
         vm_id = int(vm_id)
     except (TypeError, ValueError):
-        raise HTTPException(400, "Invalid VM ID")
+        raise HTTPException(400, "Invalid VM ID") from None
     if vm_id < 0 or action not in ALLOWED_ACTIONS:
         raise HTTPException(400, "Invalid request")
     cfg = read_yaml_settings()
@@ -250,4 +250,4 @@ async def api_truenas_vm(request: Request, auth=Depends(_require_operator)):
     except Exception as e:
         logger.error("VM action failed: %s", e)
         db.audit_log("vm_action", username, f"VM {vm_id} {action} failed: {e}", ip)
-        raise HTTPException(502, "VM action failed")
+        raise HTTPException(502, "VM action failed") from None

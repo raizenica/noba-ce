@@ -159,14 +159,14 @@ def api_journal(request: Request, auth=Depends(_require_operator)):
         try:
             _re.compile(grep_pattern[:100])
         except _re.error:
-            raise HTTPException(400, "Invalid regex pattern")
+            raise HTTPException(400, "Invalid regex pattern") from None
         cmd += ["-g", grep_pattern[:100]]
 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         return PlainTextResponse(r.stdout[-65536:] or "No entries.")
     except subprocess.TimeoutExpired:
-        raise HTTPException(504, "Journal query timed out")
+        raise HTTPException(504, "Journal query timed out") from None
     except FileNotFoundError:
         return PlainTextResponse("journalctl not available")
 
@@ -835,7 +835,7 @@ async def api_update_apply(request: Request, auth=Depends(_require_admin)):
         }
 
     except subprocess.TimeoutExpired:
-        raise HTTPException(500, "Update step timed out")
+        raise HTTPException(500, "Update step timed out") from None
     except Exception as exc:
-        logger.exception("Update apply failed: %s", exc)
-        raise HTTPException(500, f"Update failed: {exc}")
+        logger.error("System update failed: %s", exc)
+        raise HTTPException(500, "Update failed — check server logs") from None
