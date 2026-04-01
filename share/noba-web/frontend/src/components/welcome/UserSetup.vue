@@ -32,7 +32,7 @@ async function addUser() {
       role: role.value,
     })
     emit('done')
-  } catch (e) {
+  } catch {
     error.value = 'Failed to create user. Username may already exist.'
   } finally {
     saving.value = false

@@ -8,7 +8,7 @@ import WorkflowRawEditor from './workflow/WorkflowRawEditor.vue'
 const props = defineProps({
   modelValue: { type: Object, default: () => ({ nodes: [], edges: [], entry: '' }) },
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'close'])
 
 // ── Local state ─────────────────────────────────────────────────────────────
 const nodes = ref([]);         const edges = ref([]);         const entry = ref('')

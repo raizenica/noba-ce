@@ -1,6 +1,5 @@
 <script setup>
 import { ref } from 'vue'
-import { useAuthStore } from '../stores/auth'
 import { useApprovalsStore } from '../stores/approvals'
 
 import AutomationListTab from '../components/automations/AutomationListTab.vue'
@@ -9,7 +8,6 @@ import MaintenanceWindows from '../components/automations/MaintenanceWindows.vue
 import AuditTrailTab     from '../components/automations/AuditTrailTab.vue'
 import PlaybookLibrary   from '../components/automations/PlaybookLibrary.vue'
 
-const authStore      = useAuthStore()
 const approvalsStore = useApprovalsStore()
 
 const activeTab = ref('automations')

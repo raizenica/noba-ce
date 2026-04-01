@@ -126,6 +126,7 @@ const gridRef = ref(null)
 
 // Masonry observer kept at component scope so onUnmounted can clean it up
 let _masonryObserver = null
+let _masonryChildObserver = null
 
 function initMasonry() {
   if (_masonryObserver) _masonryObserver.disconnect()
@@ -144,6 +145,21 @@ function initMasonry() {
     const grid = gridRef.value
     if (grid) grid.querySelectorAll('.card').forEach(c => _masonryObserver.observe(c))
   }))
+
+  // Watch for new cards added by SSE data
+  const grid = document.querySelector('.grid')
+  if (grid) {
+    if (_masonryChildObserver) _masonryChildObserver.disconnect()
+    _masonryChildObserver = new MutationObserver(() => {
+      requestAnimationFrame(() => {
+        grid.querySelectorAll('.card').forEach(card => {
+          if (!_masonryObserver) return
+          _masonryObserver.observe(card)
+        })
+      })
+    })
+    _masonryChildObserver.observe(grid, { childList: true })
+  }
 }
 
 // ── Card visibility helper ────────────────────────────────────────────────────
@@ -247,6 +263,7 @@ watch(() => activeInstances.value.map(i => i.id).join(','), () => {
 onUnmounted(() => {
   if (gridRef.value?._sortable) gridRef.value._sortable.destroy()
   if (_masonryObserver) { _masonryObserver.disconnect(); _masonryObserver = null }
+  if (_masonryChildObserver) { _masonryChildObserver.disconnect(); _masonryChildObserver = null }
 })
 </script>
 

@@ -1,10 +1,8 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { useDashboardStore } from '../stores/dashboard'
 
 const dashboardStore = useDashboardStore()
-const router = useRouter()
 
 const agents = computed(() => dashboardStore.live.agents || [])
 
