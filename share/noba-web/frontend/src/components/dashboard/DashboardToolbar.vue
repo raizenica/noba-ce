@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useApi } from '../../composables/useApi'
 import { useSettingsStore } from '../../stores/settings'
 import { useModalsStore } from '../../stores/modals'
@@ -61,6 +61,8 @@ async function deleteDashboard(id) {
     if (savedDashboards.value.length === 0) showManage.value = false
   } catch { /* silent */ }
 }
+
+onMounted(() => { fetchDashboards() })
 
 defineExpose({ fetchDashboards })
 </script>

@@ -54,7 +54,7 @@ const threadRef        = ref(null)
 const userList = ref([])
 async function fetchUserList() {
   try {
-    const data = await get('/api/users')
+    const data = await get('/api/admin/users')
     userList.value = Array.isArray(data) ? data : []
   } catch { /* silent */ }
 }

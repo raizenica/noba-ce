@@ -17,7 +17,7 @@ async function runScript(scriptName, args = '') {
   runningScript.value = true
   scriptOutput.value  = ''
   try {
-    const res = await post('/api/run-script', { script: scriptName, args })
+    const res = await post('/api/run', { script: scriptName, args })
     scriptOutput.value = res?.output || res?.result || 'Done.'
   } catch (e) {
     scriptOutput.value = 'Error: ' + e.message

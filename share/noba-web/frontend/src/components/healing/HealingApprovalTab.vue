@@ -38,7 +38,7 @@ function fmtTs(ts) {
               :key="row.id"
               class="border-b table-row-hover" style="transition:background .15s"
             >
-              <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.requested_at) }}</td>
+              <td class="td-body" style="color:var(--text-muted);white-space:nowrap">{{ fmtTs(row.created_at) }}</td>
               <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.automation_id || row.rule_id || '\u2013' }}</td>
               <td class="td-body" style="font-family:monospace;font-size:12px">{{ row.target || '\u2013' }}</td>
               <td class="td-body">

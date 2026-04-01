@@ -10,7 +10,7 @@ const syncLoading = ref(false)
 async function fetchSyncStatus() {
   syncLoading.value = true
   try {
-    const data = await get('/api/site-sync/status')
+    const data = await get('/api/sites/sync-status')
     syncStatus.value = data
   } catch { syncStatus.value = null }
   finally { syncLoading.value = false }
