@@ -11,7 +11,7 @@ if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     echo "⚠ Running as root is not recommended. Use a regular user with sudo."
 fi
 
-CAN_SUDO=true
+export CAN_SUDO=true
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     if ! command -v sudo &>/dev/null || ! sudo -n true 2>/dev/null; then
         CAN_SUDO=false
