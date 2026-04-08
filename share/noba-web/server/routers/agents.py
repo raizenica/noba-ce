@@ -251,30 +251,36 @@ def _check_auto_update(hostname: str, body: dict, pending: list) -> None:
         server_agent_path = _WEB_DIR.parent / "noba-agent.pyz"
         server_version = None
         if server_agent_path.exists():
-            with zipfile.ZipFile(server_agent_path) as zf:
-                with zf.open("__main__.py") as f:
-                    for raw in f:
-                        line = raw.decode("utf-8", errors="replace")
-                        if line.startswith("VERSION"):
-                            server_version = line.split("=", 1)[1].strip().strip('"').strip("'")
-                            break
-        if server_version and server_version != agent_version:
-            if not any(c.get("type") == "update_agent" for c in pending):
-                pending.append({
-                    "id": f"auto-update-{int(time.time())}",
-                    "type": "update_agent",
-                    "params": {},
-                    "queued_by": "auto-update",
-                    "queued_at": int(time.time()),
-                })
-                logger.info(
-                    "Auto-update queued for %s: %s -> %s",
-                    hostname, agent_version, server_version,
-                )
+            # Combined nested context manager — single with-statement
+            # closes both the zipfile and the inner stream on any exit path.
+            with zipfile.ZipFile(server_agent_path) as zf, zf.open("__main__.py") as f:
+                for raw in f:
+                    line = raw.decode("utf-8", errors="replace")
+                    if line.startswith("VERSION"):
+                        server_version = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        if (
+            server_version
+            and server_version != agent_version
+            and not any(c.get("type") == "update_agent" for c in pending)
+        ):
+            pending.append({
+                "id": f"auto-update-{int(time.time())}",
+                "type": "update_agent",
+                "params": {},
+                "queued_by": "auto-update",
+                "queued_at": int(time.time()),
+            })
+            logger.info(
+                "Auto-update queued for %s: %s -> %s",
+                hostname, agent_version, server_version,
+            )
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        # Auto-update enqueue is best-effort — log so operators can notice
+        # persistent failures but don't block agent check-in on it.
+        logger.debug("Auto-update enqueue failed for %s: %s", hostname, exc)
 
 
 # ── Agent endpoints ───────────────────────────────────────────────────────────
