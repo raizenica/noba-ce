@@ -10,7 +10,13 @@ import time
 import httpx
 
 from ..config import VERSION
-from .base import _client, _http_get
+from .base import _http_get, get_category_client
+
+# CF-9: dedicated per-category httpx pool so a slow Pi-hole doesn't starve
+# other integrations. The legacy module-level `_client` name is preserved so
+# that existing tests continue to patch `server.integrations.pihole._client`.
+_CATEGORY = "dns"
+_client = get_category_client(_CATEGORY)
 
 # ── Pi-hole v6 session cache ────────────────────────────────────────────────
 _pihole_sessions: dict[str, tuple[str, float]] = {}

@@ -174,6 +174,10 @@ async def compute_health_score(db, agent_store_data: dict, bg_stats: dict | None
         sla_recs: list[str] = []
         for rid in rule_ids[:20]:
             sla = db.get_sla(rid, window_hours=720)  # 30 days
+            if sla is None:
+                # Honesty contract: unknown SLA is not an argument for
+                # the uptime category — silently skip.
+                continue
             sla_values.append(sla)
             if sla < 99.0:
                 sla_recs.append(f"Rule '{rid}' SLA is {sla:.1f}% (target 99.9%)")
@@ -359,41 +363,55 @@ def _score_to_grade(score: float) -> str:
     return "F"
 
 
-def _calc_uptime_score(db_instance, monitor_id: int, hours: int = 720) -> float:
-    """Uptime percentage from check history → 0-100 score."""
+def _calc_uptime_score(db_instance, monitor_id: int, hours: int = 720) -> float | None:
+    """Uptime percentage from check history → 0-100 score, or None if unknown.
+
+    Honesty contract: a failed DB lookup or no-data-yet monitor must NOT
+    inherit a free 100/100 — the only honest answer is "unknown", returned
+    as ``None`` and filtered out by the caller.
+    """
     try:
         pct = db_instance.get_endpoint_uptime(monitor_id, hours=hours)
-        return min(100.0, pct)  # Already 0-100
-    except Exception:
-        return 100.0  # No data = assume OK
+    except Exception as exc:
+        logger.debug("uptime lookup failed for monitor %s: %s", monitor_id, exc)
+        return None
+    if pct is None:
+        return None
+    return min(100.0, float(pct))
 
 
-def _calc_latency_score(db_instance, monitor_id: int, hours: int = 720) -> float:
-    """Lower latency = higher score. 0ms=100, 1000ms+=0."""
+def _calc_latency_score(db_instance, monitor_id: int, hours: int = 720) -> float | None:
+    """Lower latency = higher score. 0ms=100, 1000ms+=0. None if unknown."""
     try:
         avg_ms = db_instance.get_endpoint_avg_latency(monitor_id, hours=hours)
-        if avg_ms is None:
-            return 100.0
-        return max(0.0, min(100.0, 100.0 - (avg_ms / 10.0)))  # 0ms=100, 1000ms=0
-    except Exception:
-        return 100.0
+    except Exception as exc:
+        logger.debug("latency lookup failed for monitor %s: %s", monitor_id, exc)
+        return None
+    if avg_ms is None:
+        return None
+    return max(0.0, min(100.0, 100.0 - (avg_ms / 10.0)))  # 0ms=100, 1000ms=0
 
 
-def _calc_error_rate_score(db_instance, monitor_id: int, hours: int = 720) -> float:
-    """Inverse of error rate. 0% errors=100, 100% errors=0."""
+def _calc_error_rate_score(db_instance, monitor_id: int, hours: int = 720) -> float | None:
+    """Inverse of error rate. 0% errors=100, 100% errors=0. None if unknown."""
     try:
         uptime = db_instance.get_endpoint_uptime(monitor_id, hours=hours)
-        return min(100.0, uptime)  # Uptime IS the inverse of error rate
-    except Exception:
-        return 100.0
+    except Exception as exc:
+        logger.debug("error-rate lookup failed for monitor %s: %s", monitor_id, exc)
+        return None
+    if uptime is None:
+        return None
+    return min(100.0, float(uptime))  # Uptime IS the inverse of error rate
 
 
-def _calc_headroom_score(monitor: dict) -> float:
-    """Response time headroom vs configured timeout."""
+def _calc_headroom_score(monitor: dict) -> float | None:
+    """Response time headroom vs configured timeout. None if never probed."""
     timeout_ms = (monitor.get("timeout") or 10) * 1000
-    last_ms = monitor.get("last_response_ms") or 0
     if timeout_ms <= 0:
-        return 100.0
+        return None
+    last_ms = monitor.get("last_response_ms")
+    if last_ms is None:
+        return None
     ratio = last_ms / timeout_ms
     return max(0.0, min(100.0, (1.0 - ratio) * 100.0))
 
@@ -405,16 +423,44 @@ def compute_service_health_scores(db_instance) -> dict:
     """
     import statistics as _statistics
 
+    # Base component weights — must sum to 1.0.
+    _WEIGHTS = {"uptime": 0.40, "latency": 0.25, "error_rate": 0.20, "headroom": 0.15}
+
     monitors = db_instance.get_endpoint_monitors(enabled_only=True)
     services = []
     for m in monitors:
         mid = m["id"]
-        uptime_score = _calc_uptime_score(db_instance, mid)
-        latency_score = _calc_latency_score(db_instance, mid)
-        error_score = _calc_error_rate_score(db_instance, mid)
-        headroom_score = _calc_headroom_score(m)
+        components = {
+            "uptime": _calc_uptime_score(db_instance, mid),
+            "latency": _calc_latency_score(db_instance, mid),
+            "error_rate": _calc_error_rate_score(db_instance, mid),
+            "headroom": _calc_headroom_score(m),
+        }
 
-        composite = uptime_score * 0.40 + latency_score * 0.25 + error_score * 0.20 + headroom_score * 0.15
+        # Honesty contract: any ALL-unknown monitor is emitted as "unknown" —
+        # we never paper over a total data gap with a fake 100/100. But a
+        # PARTIAL gap (e.g. latency unknown because there are no successful
+        # probes to compute from) is scored against the components we DO
+        # have, with weights renormalised to sum to 1 over that subset. This
+        # is the honest middle ground: a service that's demonstrably down
+        # still receives a bad composite even if its successful-probe
+        # latency is mathematically undefined.
+        known = {k: v for k, v in components.items() if v is not None}
+        if not known:
+            services.append(
+                {
+                    "name": m["name"],
+                    "url": m.get("url", ""),
+                    "composite_score": None,
+                    "breakdown": {k: None for k in components},
+                    "grade": "N/A",
+                    "status": "unknown",
+                },
+            )
+            continue
+
+        weight_sum = sum(_WEIGHTS[k] for k in known)
+        composite = sum(known[k] * (_WEIGHTS[k] / weight_sum) for k in known)
 
         services.append(
             {
@@ -422,19 +468,36 @@ def compute_service_health_scores(db_instance) -> dict:
                 "url": m.get("url", ""),
                 "composite_score": round(composite, 1),
                 "breakdown": {
-                    "uptime": round(uptime_score, 1),
-                    "latency": round(latency_score, 1),
-                    "error_rate": round(error_score, 1),
-                    "headroom": round(headroom_score, 1),
+                    k: (round(v, 1) if v is not None else None)
+                    for k, v in components.items()
                 },
                 "grade": _score_to_grade(composite),
-            }
+                "status": "ok" if len(known) == len(components) else "partial",
+            },
         )
 
-    services.sort(key=lambda s: s["composite_score"])
-    overall = round(_statistics.mean(s["composite_score"] for s in services), 1) if services else 100.0
+    # Sort real scores ahead of unknown ones so operators see the worst real
+    # services first and the unknowns clustered at the end (rather than
+    # crashing the sort on None). Unknowns are assigned +inf composite.
+    services.sort(
+        key=lambda s: (
+            s["composite_score"] if s["composite_score"] is not None else float("inf")
+        ),
+    )
+
+    # Aggregate: only real (known) scores count towards the overall. Empty
+    # or all-unknown monitor set → overall is None / "N/A" per honesty
+    # contract — not an undeserved 100/100.
+    real_scores = [s["composite_score"] for s in services if s["composite_score"] is not None]
+    if real_scores:
+        overall = round(_statistics.mean(real_scores), 1)
+        grade = _score_to_grade(overall)
+    else:
+        overall = None
+        grade = "N/A"
     return {
         "overall": overall,
-        "grade": _score_to_grade(overall),
+        "grade": grade,
         "services": services,
+        "unknown_count": sum(1 for s in services if s["composite_score"] is None),
     }

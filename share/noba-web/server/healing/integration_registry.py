@@ -59,69 +59,113 @@ def register_handler(operation: str, platform: str, config: dict) -> None:
 
 # ── Category registrations ──────────────────────────────────────────
 
-# Handler configs are declarative: {method, endpoint, auth}
-# Actual execution happens in the executor (Phase 2+).
-# "exec" method means run via agent command, not HTTP API.
-# "unsupported" method means the operation has no real endpoint on this
-# platform — catalog UI should hide or mark it accordingly.
+# Handler configs are declarative: {method, endpoint, auth} or
+# {method: "exec", command} for CLI shell-outs, or
+# {method: "unsupported", reason} for cells that have no real endpoint or
+# CLI path on a given platform. The UI catalog renders category/platform
+# capability from this table; the dispatcher executes "exec" cells directly,
+# HTTP cells via the shared integration layer, and elides "unsupported"
+# cells entirely (they are never surfaced to heal pipelines).
 #
-# CF-10 (Phase B 2026-04-08): the `nas` category contains multiple fictional
-# REST paths verified against vendor docs — notably Synology `/webapi/SYNO.*`
-# and QNAP `/cgi-bin/*` endpoints that the original author invented. Only the
-# `nas_cache_clear` operation has been rewritten here (ARC has no user-flush
-# API — fixed to OS page-cache drop). The remaining Synology/QNAP/Unraid REST
-# paths in this category are UNVERIFIED and should be audited against live
-# vendor docs before any Phase 4b dispatch layer wires them up. TrueNAS REST
-# `/api/v2.0` is also frozen since 24.10, slated for removal in 25.10.
+# Honesty contract: NO cell in this table may reference an endpoint or CLI
+# command that was not verified against live vendor documentation or
+# working on a real instance. If a cell's real-world existence is unknown,
+# mark it `"method": "unsupported", "reason": "unverified"` instead of
+# leaving a guess in place. Phase B research findings 2026-04-08 removed
+# ~40 invented cells from this table; any regression must cite a real
+# source.
+#
+# CF-10 (Phase B 2026-04-08): 22 of the original 40 NAS cells were fictional.
+# Verified against vendor docs + Phase B research agents a56597d65e6c /
+# a69f42ae1970:
+#
+# * TrueNAS REST `/api/v2.0` is frozen since 24.10 and REMOVED in 25.10
+#   "Goldeye". `/api/v2.0/pool/id/.../repair`, `/zfs/snapshot`, and the
+#   snapshot rollback path don't exist on current TrueNAS — new code must
+#   use JSON-RPC 2.0 over WebSocket `/api/current`. CE has a working
+#   `truenas_ws.py` collector; the dispatch path here delegates to its
+#   WebSocket client or execs native ZFS commands.
+# * Synology `/webapi/SYNO.*` namespaces are internal / undocumented. The
+#   original author invented 8 of 8 NAS cells against endpoints that have
+#   no mention in the DSM 7.2 Developer Guide. Every cell is replaced with
+#   `"method": "unsupported"` plus a reason flag — operators can still
+#   dispatch via an agent SSH exec fallback outside this catalog.
+# * QNAP `/cgi-bin/*` cells (8 of 8) are internal / undocumented for the
+#   same reason.
+# * OMV RPC service names `SnapMgmt`, `ReplicationMgmt`, `FileSystemMgmt.
+#   repair`, `FileSystemMgmt.scrub`, and the nonexistent
+#   `QuotaMgmt.enforceQuota` method name were verified absent from OMV 7
+#   source. Corrected to real methods or marked `unsupported`.
+# * Unraid: no CVE program, paid tier since 2025 — flagged UNVERIFIED.
+#   `quotaon -a` does not provide per-user/share quota enforcement on
+#   Unraid's user-share layer, so it's marked `unsupported`.
+#
+# Error-parsing convention: never grep message text. Key off integer/POSIX
+# codes: TrueNAS `error.data.errno`, Synology `error.code`, QNAP `status`,
+# OMV `error.code`, Unraid GraphQL `errors[].extensions.code`.
 
 _register_category("nas", {
     "nas_pool_repair": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/pool/id/{pool}/repair", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Storage.Volume/v1?method=repair", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/disk/disk_manage.cgi?func=repair", "auth": "session"},
-        "omv": {"method": "rpc", "service": "FileSystemMgmt", "method_name": "repair", "auth": "session"},
+        # TrueNAS: `/pool/id/{pool}/repair` doesn't exist on any v2.0 build.
+        # Real operation is ZFS-native pool replace/attach via the
+        # WebSocket JSON-RPC API. CE's truenas_ws collector handles the
+        # live path; dispatcher falls back to SSH exec on older boxes.
+        "truenas": {"method": "exec", "command": "zpool scrub -s {pool} && zpool clear {pool}", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Storage.Volume is internal, undocumented in DSM 7.2 Developer Guide)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented (no public disk_manage.cgi)"},
+        # OMV: no `FileSystemMgmt.repair` RPC method in OMV 7 source.
+        "omv": {"method": "unsupported", "reason": "FileSystemMgmt.repair does not exist in OMV 7"},
         "unraid": {"method": "exec", "command": "mdcmd check", "auth": "local"},
     },
     "nas_scrub": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/pool/id/{pool}/scrub", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Storage.Volume/v1?method=scrub", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/disk/disk_manage.cgi?func=scrub", "auth": "session"},
-        "omv": {"method": "rpc", "service": "FileSystemMgmt", "method_name": "scrub", "auth": "session"},
+        "truenas": {"method": "exec", "command": "zpool scrub {pool}", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Storage.Volume is internal)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented"},
+        "omv": {"method": "unsupported", "reason": "FileSystemMgmt.scrub does not exist in OMV 7"},
         "unraid": {"method": "exec", "command": "btrfs scrub start /mnt/disk{n}", "auth": "local"},
     },
     "nas_replication_sync": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/replication/id/{id}/run", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.ReplicationService.Task/v1?method=trigger_run", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/replication/replication.cgi?func=run", "auth": "session"},
-        "omv": {"method": "rpc", "service": "ReplicationMgmt", "method_name": "execute", "auth": "session"},
+        # TrueNAS: `/replication/id/{id}/run` WAS real on v2.0 but frozen
+        # in 24.10. Safer path is the CLI-equivalent `midclt call
+        # replication.run {id}` which exists on both REST and WebSocket
+        # builds.
+        "truenas": {"method": "exec", "command": "midclt call replication.run {id}", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.ReplicationService.Task is internal)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented (no public replication.cgi)"},
+        "omv": {"method": "unsupported", "reason": "ReplicationMgmt RPC service does not exist in OMV 7"},
         "unraid": {"method": "exec", "command": "rsync -av /mnt/user/ /mnt/backup/", "auth": "local"},
     },
     "nas_snapshot_create": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/zfs/snapshot", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Core.Share.Snapshot/v1?method=create", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/snapshot/snapshot.cgi?func=create", "auth": "session"},
-        "omv": {"method": "rpc", "service": "SnapMgmt", "method_name": "createSnapshot", "auth": "session"},
+        # TrueNAS: REST /zfs/snapshot removed in 25.10. Use JSON-RPC via
+        # midclt for on-box dispatch, or `zfs snapshot` directly.
+        "truenas": {"method": "exec", "command": "midclt call zfs.snapshot.create '{{\"dataset\": \"{dataset}\", \"name\": \"{name}\"}}'", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Core.Share.Snapshot is internal)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented (no public snapshot.cgi)"},
+        "omv": {"method": "unsupported", "reason": "SnapMgmt RPC service does not exist in OMV 7 (btrfs-only via exec)"},
         "unraid": {"method": "exec", "command": "btrfs subvolume snapshot /mnt/user /mnt/snapshots/snap-$(date +%s)", "auth": "local"},
     },
     "nas_snapshot_rollback": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/zfs/snapshot/id/{id}/rollback", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Core.Share.Snapshot/v1?method=clone", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/snapshot/snapshot.cgi?func=rollback", "auth": "session"},
-        "omv": {"method": "rpc", "service": "SnapMgmt", "method_name": "rollbackSnapshot", "auth": "session"},
+        # TrueNAS: REST rollback endpoint removed in 25.10.
+        "truenas": {"method": "exec", "command": "midclt call zfs.snapshot.rollback {snapshot_id}", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Core.Share.Snapshot is internal)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented"},
+        "omv": {"method": "unsupported", "reason": "SnapMgmt RPC service does not exist in OMV 7"},
         "unraid": {"method": "exec", "command": "btrfs subvolume snapshot /mnt/snapshots/{snap} /mnt/user", "auth": "local"},
     },
     "nas_share_restart": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/service/restart", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Core.Service/v1?method=restart", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/services/services.cgi?func=restart&name=smbd", "auth": "session"},
+        # TrueNAS: `/api/v2.0/service/restart` requires a service id body —
+        # exec via `service smbd restart` is more portable across REST/WS.
+        "truenas": {"method": "exec", "command": "service smbd restart", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Core.Service is internal — use SSH `synoservice --restart smbd`)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented (use SSH `/etc/init.d/smb.sh restart`)"},
         "omv": {"method": "exec", "command": "systemctl restart smbd nmbd", "auth": "local"},
         "unraid": {"method": "exec", "command": "/etc/rc.d/rc.samba restart", "auth": "local"},
     },
-    # CF-10 (Phase B 2026-04-08): ZFS ARC has NO user-flush API. The REST
-    # endpoints on TrueNAS/Synology/QNAP for cache flush are fictional —
-    # dropping the OS page cache via /proc/sys/vm/drop_caches is the only
-    # honest cross-platform approach. On TrueNAS, VFS caches are drained the
-    # same way since the ARC lives in kernel memory too.
+    # ZFS ARC has NO user-flush API. REST endpoints for cache flush on
+    # TrueNAS/Synology/QNAP are fictional. Dropping the OS page cache via
+    # /proc/sys/vm/drop_caches is the only honest cross-platform path; on
+    # TrueNAS, VFS caches drain the same way because the ARC lives in
+    # kernel memory too.
     "nas_cache_clear": {
         "truenas": {"method": "exec", "command": "echo 3 > /proc/sys/vm/drop_caches", "auth": "local"},
         "synology": {"method": "exec", "command": "echo 3 > /proc/sys/vm/drop_caches", "auth": "local"},
@@ -130,11 +174,16 @@ _register_category("nas", {
         "unraid": {"method": "exec", "command": "echo 3 > /proc/sys/vm/drop_caches", "auth": "local"},
     },
     "nas_quota_enforce": {
-        "truenas": {"method": "POST", "endpoint": "/api/v2.0/pool/dataset/id/{id}/quota", "auth": "bearer"},
-        "synology": {"method": "POST", "endpoint": "/webapi/SYNO.Core.QuotaStatus/v1?method=set", "auth": "session"},
-        "qnap": {"method": "POST", "endpoint": "/cgi-bin/disk/quota.cgi?func=enforce", "auth": "session"},
-        "omv": {"method": "rpc", "service": "QuotaMgmt", "method_name": "enforceQuota", "auth": "session"},
-        "unraid": {"method": "exec", "command": "quotaon -a", "auth": "local"},
+        # TrueNAS: documented as PUT on /api/v2.0/pool/dataset/id/{id}
+        # with a quota field in the body (NOT a POST to a /quota
+        # sub-route). Still frozen in 25.10 — exec fallback via midclt.
+        "truenas": {"method": "exec", "command": "midclt call pool.dataset.update {id} '{{\"quota\":{quota}}}'", "auth": "local"},
+        "synology": {"method": "unsupported", "reason": "no-public-api (SYNO.Core.QuotaStatus is internal)"},
+        "qnap": {"method": "unsupported", "reason": "internal-cgi-undocumented"},
+        # OMV: Quota RPC service exists with real methods (set / get /
+        # delete / setByTypeName etc.) — `enforceQuota` was invented.
+        "omv": {"method": "rpc", "service": "Quota", "method_name": "set", "auth": "session"},
+        "unraid": {"method": "unsupported", "reason": "Unraid user-share layer has no native per-user/share quota enforcement API"},
     },
 })
 

@@ -448,8 +448,11 @@ def api_pmx_node_vms(node: str, auth=Depends(_get_auth)):
                 })
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            # Per-node failure is non-fatal — continue with other nodes so
+            # a single down node doesn't blank the whole dashboard. Log for
+            # operators rather than silently dropping the error.
+            logger.debug("Proxmox node VM fetch failed: %s", exc)
     return results
 
 

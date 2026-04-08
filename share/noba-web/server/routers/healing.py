@@ -430,8 +430,13 @@ async def api_chaos_run(request: Request, auth=Depends(_require_admin)):
 @router.get("/api/healing/health")
 @handle_errors
 def api_healing_health(auth=Depends(_get_auth)):
-    """Return component health summary from the watchdog."""
+    """Return component health summary from the watchdog.
 
+    Honesty contract: if the watchdog isn't initialised we return
+    ``degraded: None`` + ``status: "unknown"`` — NOT a fake ``degraded: False``.
+    The frontend treats ``null`` as a third state ("we don't know") and
+    surfaces it in the UI, rather than incorrectly reporting "all good".
+    """
     try:
         from ..healing import _watchdog
         if _watchdog is not None:
@@ -439,5 +444,8 @@ def api_healing_health(auth=Depends(_get_auth)):
     except (ImportError, AttributeError):
         pass
 
-    # Default healthy response when no watchdog is initialized
-    return {"degraded": False}
+    return {
+        "degraded": None,
+        "status": "unknown",
+        "reason": "watchdog not initialised",
+    }

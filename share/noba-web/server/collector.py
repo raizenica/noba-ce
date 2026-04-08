@@ -570,7 +570,15 @@ def collect_stats(qs: dict) -> dict:
             _raw_ac = _inst.get("auth_config", "{}")
             try:
                 _ac = _json.loads(_raw_ac) if isinstance(_raw_ac, str) else (_raw_ac or {})
-            except Exception:
+            except Exception as _ac_exc:
+                # Honesty contract: broken auth_config is an operator-fixable
+                # problem, not silently survivable. Log so the instance shows
+                # up in journald; the fetcher will then likely return a
+                # 401/403 and surface in the UI as "offline".
+                logger.warning(
+                    "Managed instance %s: auth_config JSON parse failed: %s",
+                    _inst.get("id"), _ac_exc,
+                )
                 _ac = {}
             if _url:
                 _inst_futs[_inst["id"]] = _pool.submit(_fetcher, _url, _ac)

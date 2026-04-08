@@ -61,7 +61,8 @@ async def api_recovery_tailscale(request: Request, auth=Depends(_require_operato
         return {"status": "ok" if result.returncode == 0 else "error",
                 "output": result.stdout[:500], "error": result.stderr[:500]}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        logger.error("tailscale-reconnect failed: %s", e)
+        return {"status": "error", "error": "Operation failed"}
 
 
 @router.post("/api/recovery/dns-flush")
@@ -82,7 +83,8 @@ async def api_recovery_dns(request: Request, auth=Depends(_require_operator)):
         return {"status": "ok" if result.returncode == 0 else "error",
                 "output": result.stdout[:500], "error": result.stderr[:500]}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        logger.error("dns-flush failed: %s", e)
+        return {"status": "error", "error": "Operation failed"}
 
 
 @router.post("/api/recovery/service-restart")
@@ -104,7 +106,8 @@ async def api_recovery_service(request: Request, auth=Depends(_require_operator)
         return {"status": "ok" if result.returncode == 0 else "error",
                 "service": service, "output": result.stdout[:500]}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        logger.error("service-restart %s failed: %s", service, e)
+        return {"status": "error", "error": "Operation failed"}
 
 
 # ── /api/sites/sync-status ───────────────────────────────────────────────────

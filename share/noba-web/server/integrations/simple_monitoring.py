@@ -9,14 +9,16 @@ import re
 
 import httpx
 
-try:
-    from . import simple
-    _http_get = simple._http_get
-    _client = simple._client
-except ImportError:
-    from .base import ConfigError, TransientError, _client, _http_get
-    # If simple not available, use base directly (shouldn't happen in tests)
-from .base import ConfigError, TransientError
+from .base import ConfigError, TransientError, _http_get, get_category_client
+
+# CF-9: dedicated per-category pool so a slow monitoring target (Grafana
+# behind a bad datasource, Graylog doing a 30s scroll query, Kuma under load)
+# can't starve dns/nas/hypervisor collectors. `_client` is the module-level
+# name tests patch; it's bound to the monitoring pool.
+_client = get_category_client("monitoring")
+
+# Shelly energy meters are smart_home, not monitoring — isolated separately.
+_smart_home_client = get_category_client("smart_home")
 
 logger = logging.getLogger("noba")
 
@@ -55,7 +57,7 @@ def get_scrutiny(url: str) -> dict | None:
         return None
     try:
         base = url.rstrip("/")
-        data = _http_get(f"{base}/api/summary", timeout=10)
+        data = _http_get(f"{base}/api/summary", timeout=10, category="monitoring")
         summary = data.get("data", {}).get("summary", {})
         if not summary:
             return None
@@ -118,7 +120,7 @@ def get_scrutiny_intelligence(url: str) -> list[dict] | None:
         return None
     base = url.rstrip("/")
     try:
-        summary_data = _http_get(f"{base}/api/summary", timeout=10)
+        summary_data = _http_get(f"{base}/api/summary", timeout=10, category="monitoring")
         summary = summary_data.get("data", {}).get("summary", {})
         if not summary:
             return None
@@ -134,7 +136,7 @@ def get_scrutiny_intelligence(url: str) -> list[dict] | None:
             growth_rate = 0.0
             estimated = ""
             try:
-                detail = _http_get(f"{base}/api/device/{wwn}/details", timeout=8)
+                detail = _http_get(f"{base}/api/device/{wwn}/details", timeout=8, category="monitoring")
                 results = detail.get("data", {}).get("smart_results", [])
                 if len(results) >= 2:
                     # Check reallocated sectors (attr 5) trend
@@ -193,7 +195,7 @@ def get_speedtest(url: str):
         return None
     try:
         base = url.rstrip("/")
-        data = _http_get(f"{base}/api/speedtest/latest")
+        data = _http_get(f"{base}/api/speedtest/latest", category="monitoring")
         if not data or not data.get("data"):
             return None
         r = data["data"]
@@ -220,8 +222,8 @@ def get_frigate(url: str) -> dict | None:
         return None
     base = url.rstrip("/")
     try:
-        stats = _http_get(f"{base}/api/stats", timeout=6)
-        config = _http_get(f"{base}/api/config", timeout=6)
+        stats = _http_get(f"{base}/api/stats", timeout=6, category="monitoring")
+        config = _http_get(f"{base}/api/config", timeout=6, category="monitoring")
         cameras = []
         cam_configs = config.get("cameras", {})
         for name, cfg in cam_configs.items():
@@ -464,7 +466,7 @@ def get_energy_shelly(urls: list[str]) -> list[dict]:
         base = (url if url.startswith("http") else "http://" + url).rstrip("/")
         try:
             # Shelly Gen2 API
-            data = _http_get(f"{base}/rpc/Switch.GetStatus?id=0", timeout=3)
+            data = _http_get(f"{base}/rpc/Switch.GetStatus?id=0", timeout=3, category="smart_home")
             results.append({
                 "name": name,
                 "power_w": round(data.get("apower", 0), 1),
@@ -477,7 +479,7 @@ def get_energy_shelly(urls: list[str]) -> list[dict]:
         except (httpx.HTTPError, KeyError, ValueError):
             try:
                 # Shelly Gen1 API fallback
-                data = _http_get(f"{base}/status", timeout=3)
+                data = _http_get(f"{base}/status", timeout=3, category="smart_home")
                 meter = data.get("meters", [{}])[0] if data.get("meters") else {}
                 relay = data.get("relays", [{}])[0] if data.get("relays") else {}
                 results.append({

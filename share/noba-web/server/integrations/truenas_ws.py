@@ -202,16 +202,16 @@ def _get_truenas_rest(url: str, key: str) -> dict | None:
     base = url.rstrip("/")
     result = {"apps": [], "alerts": [], "vms": [], "status": "offline"}
     try:
-        for app in _http_get(f"{base}/api/v2.0/app", hdrs):
+        for app in _http_get(f"{base}/api/v2.0/app", hdrs, category="nas"):
             result["apps"].append({"name": app.get("name", "?"), "state": app.get("state", "?")})
-        for alert in _http_get(f"{base}/api/v2.0/alert/list", hdrs):
+        for alert in _http_get(f"{base}/api/v2.0/alert/list", hdrs, category="nas"):
             if alert.get("level") in ("WARNING", "CRITICAL") and not alert.get("dismissed"):
                 result["alerts"].append({
                     "level": alert.get("level"),
                     "text": alert.get("formatted", "Unknown Alert"),
                 })
         try:
-            for vm in _http_get(f"{base}/api/v2.0/vm", hdrs):
+            for vm in _http_get(f"{base}/api/v2.0/vm", hdrs, category="nas"):
                 result["vms"].append({
                     "id": vm.get("id"),
                     "name": vm.get("name", "?"),
@@ -220,8 +220,9 @@ def _get_truenas_rest(url: str, key: str) -> dict | None:
         except (httpx.HTTPError, KeyError, ValueError) as e:
             logger.warning("TrueNAS VM fetch (REST fallback): %s", e)
         result["status"] = "online"
-    except (httpx.HTTPError, KeyError, ValueError):
-        pass
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.debug("TrueNAS REST fallback failed: %s", exc)
+        result["error"] = "Connection failed"
     return result
 
 
